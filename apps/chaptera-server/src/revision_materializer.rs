@@ -19,7 +19,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     blob_store::BlobStoreService,
-    source_baseline::{derive_authoring_state_identity, derive_history_revision_identities},
+    product_replay_worker::IsolatedProductReplayProducer,
+    source_baseline::{
+        derive_authoring_state_identity, derive_history_revision_identities,
+        derive_import_baseline_identities,
+    },
     sqlite_store::{
         RevisionEdge, SqliteRevisionStore, decode_canonical_event, encode_canonical_event,
     },
@@ -273,6 +277,7 @@ pub struct ExactRevisionMaterializer {
     source_loader: Arc<dyn ExactSourceLoader>,
     revision_store: SqliteRevisionStore,
     editor: Arc<dyn EditorReplayEngine>,
+    isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
 impl ExactRevisionMaterializer {
@@ -287,7 +292,14 @@ impl ExactRevisionMaterializer {
             source_loader,
             revision_store,
             editor,
+            isolated_replay: None,
         }
+    }
+
+    /// The configured production server always supplies this before serving.
+    /// Existing injected mock materializers retain an in-process test mode.
+    pub fn set_isolated_replay(&mut self, producer: IsolatedProductReplayProducer) {
+        self.isolated_replay = Some(producer);
     }
 
     pub async fn materialize(
@@ -334,14 +346,18 @@ impl ExactRevisionMaterializer {
         }
 
         let mut current_project = self
-            .editor
-            .baseline_project(&source_bytes, &source.source_sha256)?;
+            .baseline_project_authoritative(&source_bytes, &source)
+            .await?;
         require_project_source(&current_project, &source.source_sha256)?;
         if !current_project.assets.is_empty() {
             return Err(RevisionMaterializerError::new(
                 "editor_asset_replay_unsupported",
                 "baseline project contains asset metadata without a materialization asset resolver",
             ));
+        }
+
+        if self.isolated_replay.is_some() {
+            require_isolated_baseline_binding(&source, &current_project)?;
         }
 
         let edges = self
@@ -357,7 +373,9 @@ impl ExactRevisionMaterializer {
 
         let mut authoring_root_hash = None;
         for edge in &edges {
-            current_project = self.replay_edge(&source_bytes, &source, current_project, edge)?;
+            current_project = self
+                .replay_edge(&source_bytes, &source, current_project, edge)
+                .await?;
             authoring_root_hash = edge.authoring_root_hash.clone();
         }
 
@@ -389,7 +407,51 @@ impl ExactRevisionMaterializer {
         })
     }
 
-    fn replay_edge(
+    async fn baseline_project_authoritative(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        if let Some(worker) = &self.isolated_replay {
+            worker
+                .baseline_project(&source.document_id, &source.source_sha256, source_bytes)
+                .await
+                .map_err(|error| RevisionMaterializerError::new(error.code, error.message))
+        } else {
+            self.editor
+                .baseline_project(source_bytes, &source.source_sha256)
+        }
+    }
+
+    /// All canonical project replay in the configured Product service is
+    /// performed by a fresh isolated worker. The host retains durable
+    /// RevisionStream identity checks and applies no PUB parser itself.
+    async fn replay_project_authoritative(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+        project: &EditorProject,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        if let Some(worker) = &self.isolated_replay {
+            let expected_hash = project_sha256(project)?;
+            worker
+                .project_authoring_graph(
+                    &source.document_id,
+                    &source.source_sha256,
+                    source_bytes,
+                    project,
+                    &expected_hash,
+                )
+                .await
+                .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+            Ok(project.clone())
+        } else {
+            self.editor
+                .replay_project(source_bytes, &source.source_sha256, project)
+        }
+    }
+
+    async fn replay_edge(
         &self,
         source_bytes: &[u8],
         source: &AuthorizedDocumentSource,
@@ -403,7 +465,9 @@ impl ExactRevisionMaterializer {
             ));
         }
         if edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION {
-            return self.replay_undo_edge_v2(source_bytes, source, current_project, edge);
+            return self
+                .replay_history_edge_v2(source_bytes, source, current_project, edge)
+                .await;
         }
         if edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION {
             return Err(RevisionMaterializerError::new(
@@ -444,9 +508,9 @@ impl ExactRevisionMaterializer {
         }
 
         let candidate = append_event_operation(current_project, event.operation)?;
-        let replayed =
-            self.editor
-                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        let replayed = self
+            .replay_project_authoritative(source_bytes, source, &candidate)
+            .await?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
@@ -471,7 +535,7 @@ impl ExactRevisionMaterializer {
         Ok(replayed)
     }
 
-    fn replay_undo_edge_v2(
+    async fn replay_history_edge_v2(
         &self,
         source_bytes: &[u8],
         source: &AuthorizedDocumentSource,
@@ -513,10 +577,21 @@ impl ExactRevisionMaterializer {
             ));
         }
 
-        let candidate = undo_event_operation(current_project, &event.operation)?;
-        let replayed =
-            self.editor
-                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        // The history event is immutable, source-bound and predecessor-hash bound.
+        // Redo applies only the exact operation carried by a prior Undo.
+        let candidate = match event.transition_kind.as_str() {
+            "undo" => undo_event_operation(current_project, &event.operation)?,
+            "redo" => append_event_operation(current_project, event.operation.clone())?,
+            _ => {
+                return Err(RevisionMaterializerError::new(
+                    "unsupported_history_transition",
+                    "durable history supports bounded undo and redo only",
+                ));
+            }
+        };
+        let replayed = self
+            .replay_project_authoritative(source_bytes, source, &candidate)
+            .await?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
@@ -635,7 +710,7 @@ pub fn cloud_revision_project(project: &EditorProject) -> EditorProject {
     projected
 }
 
-fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
+pub(crate) fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
     [
         EDITOR_PROJECT_VERSION_V0_11,
         EDITOR_PROJECT_VERSION_V0_12,
@@ -778,7 +853,7 @@ fn canonical_json_bytes<T: Serialize>(
     })
 }
 
-fn append_event_operation(
+pub(crate) fn append_event_operation(
     mut project: EditorProject,
     operation: EditOperation,
 ) -> Result<EditorProject, RevisionMaterializerError> {
@@ -793,7 +868,7 @@ fn append_event_operation(
     Ok(cloud_revision_project(&project))
 }
 
-fn undo_event_operation(
+pub(crate) fn undo_event_operation(
     mut project: EditorProject,
     operation: &EditOperation,
 ) -> Result<EditorProject, RevisionMaterializerError> {
@@ -832,10 +907,10 @@ fn validate_history_event_fields(
             ),
         ));
     }
-    if event.transition_kind != "undo" {
+    if !matches!(event.transition_kind.as_str(), "undo" | "redo") {
         return Err(RevisionMaterializerError::new(
             "unsupported_history_transition",
-            "materialization V2 currently admits durable undo only",
+            "materialization V2 admits bounded durable undo and redo only",
         ));
     }
     if !matches!(event.operation, EditOperation::MoveNode { .. }) {
@@ -974,9 +1049,70 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+fn require_isolated_baseline_binding(
+    source: &AuthorizedDocumentSource,
+    project: &EditorProject,
+) -> Result<(), RevisionMaterializerError> {
+    // A self-consistent receipt can still be malicious: bind its canonical
+    // baseline project to the immutable upload's *previously authorized*
+    // RevisionStream identity without parsing PUB in the host.
+    let baseline = derive_import_baseline_identities(
+        &source.document_id,
+        &source.source_sha256,
+        &project.schema_version,
+        project,
+    )
+    .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+    if baseline.service_revision_id != source.baseline_revision_id {
+        return Err(RevisionMaterializerError::new(
+            "isolated_baseline_identity_mismatch",
+            "isolated baseline does not match durable SourceAuthority identity",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod replay_identity_tests {
     use super::*;
+
+    #[test]
+    fn isolated_baseline_must_match_durable_import_revision_even_if_hashes_are_consistent() {
+        let source_sha256 = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": source_sha256,
+            "operations": []
+        }))
+        .unwrap();
+        let identity = derive_import_baseline_identities(
+            "document-baseline",
+            source_sha256,
+            &project.schema_version,
+            &project,
+        )
+        .unwrap();
+        let mut source = AuthorizedDocumentSource {
+            tenant_id: "tenant-a".into(),
+            document_id: "document-baseline".into(),
+            binding_id: "binding-a".into(),
+            source_sha256: source_sha256.into(),
+            byte_len: 42,
+            baseline_revision_id: identity.service_revision_id,
+            baseline_cursor: 0,
+        };
+        require_isolated_baseline_binding(&source, &project).unwrap();
+
+        // A malicious response could recompute its own project/graph hashes.
+        // Only the durable import receipt decides the allowed baseline.
+        source.baseline_revision_id = format!("sha256:{}", "0".repeat(64));
+        assert_eq!(
+            require_isolated_baseline_binding(&source, &project)
+                .unwrap_err()
+                .code,
+            "isolated_baseline_identity_mismatch"
+        );
+    }
 
     #[test]
     fn durable_undo_rejects_empty_project_history() {

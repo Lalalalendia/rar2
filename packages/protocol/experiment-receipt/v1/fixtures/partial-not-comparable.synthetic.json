@@ -1,0 +1,75 @@
+{
+  "receipt_version": "chaptera.experiment-receipt.v1",
+  "task_id": "PUB-T-847",
+  "run_id": "synthetic-partial-001",
+  "producer": {
+    "name": "chaptera.synthetic-experiment-producer",
+    "version": "v1"
+  },
+  "system": {
+    "name": "chaptera-authoring-core",
+    "version": "v0.1"
+  },
+  "build": {
+    "repository": "Lalalalendia/rar2",
+    "revision": "85db0eb7890a6be8f3806b1f33f30a2a67786c39"
+  },
+  "environment": {
+    "os": "ubuntu-24.04",
+    "architecture": "x86_64",
+    "runtime": "python-3.12",
+    "fingerprint_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "source_identity": {
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 1024,
+    "logical_fixture_id": "synthetic-partial-v1"
+  },
+  "output_identity": {
+    "status": "unavailable",
+    "reason": "operation stopped before output serialization"
+  },
+  "operation": {
+    "kind": "InsertInlineShape",
+    "parameters": {
+      "story_offset": 12
+    }
+  },
+  "semantic_observations": {
+    "before": {
+      "status": "known",
+      "value": {
+        "story_offset": 12
+      }
+    },
+    "after": {
+      "status": "unknown",
+      "reason": "operation did not reach the observation stage"
+    },
+    "reopen": {
+      "status": "unavailable",
+      "reason": "no output was available to reopen"
+    }
+  },
+  "changed_artifact_summary": {
+    "status": "unknown",
+    "reason": "no output artifact was produced"
+  },
+  "evidence_refs": [],
+  "lifecycle_disposition": {
+    "status": "partial",
+    "reason": "synthetic early-stop control"
+  },
+  "evidence_scope": [
+    "contract-shape"
+  ],
+  "authority_ceiling": "synthetic_contract",
+  "non_claims": [
+    "The partial run is not comparable.",
+    "No mutation result is claimed."
+  ],
+  "privacy": {
+    "source_free": true,
+    "private_content_serialized": false
+  }
+}

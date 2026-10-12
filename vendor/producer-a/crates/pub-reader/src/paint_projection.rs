@@ -120,6 +120,57 @@ pub(super) fn has_bounded_grouped_solid_rectangle(
     })
 }
 
+/// The PAGE-owned LOGO lane may admit a solid rectangle whose color comes
+/// from the document palette or an unambiguous DGG layer. This is stricter
+/// than the general grouped lane: the shape itself must explicitly opt into
+/// filling and opt out of its outline. An unproven normative color, ambiguity,
+/// non-solid fill or unsupported opacity cannot create an opaque page node.
+pub(super) fn has_bounded_logo_effective_solid_rectangle(
+    shape: &pub_escher::SpContainerObservation,
+    effective: &PubEffectiveShapePaintSource,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(OFFICEART_SHAPE_TYPE_RECTANGLE)
+        || !admits_normative_2d_paint_defaults(shape)
+    {
+        return false;
+    }
+    // The effective solid RGB paint adapter does not currently carry alpha.
+    if shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| matches!(property.property_id(), 0x0182 | 0x0184))
+    {
+        return false;
+    }
+    let fill = &effective.fill;
+    matches!(fill.solid.as_ref(), Some(solid) if solid.value)
+        && matches!(
+            fill.visible.as_ref(),
+            Some(visible)
+                if visible.value
+                    && visible.authority == PubEffectivePaintAuthority::ShapeLocal
+                    && visible.source.is_some()
+        )
+        && matches!(
+            fill.color_rgb.as_ref(),
+            Some(color)
+                if matches!(
+                    color.authority,
+                    PubEffectivePaintAuthority::ShapeLocal
+                        | PubEffectivePaintAuthority::DrawingGroupPrimary
+                        | PubEffectivePaintAuthority::DrawingGroupTertiary
+                ) && color.source.is_some()
+        )
+        && matches!(
+            effective.line.visible.as_ref(),
+            Some(line)
+                if !line.value
+                    && line.authority == PubEffectivePaintAuthority::ShapeLocal
+                    && line.source.is_some()
+        )
+}
+
 pub(super) fn has_default_line_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(OFFICEART_SHAPE_TYPE_LINE)
 }
@@ -787,6 +838,122 @@ mod grouped_solid_rectangle_tests {
             .properties
             .push(property(OFFICE_ART_FILL_TYPE, 0));
         assert!(has_bounded_grouped_solid_rectangle(&explicit_solid));
+    }
+
+    fn logo_effective_fill(
+        color_authority: PubEffectivePaintAuthority,
+    ) -> PubEffectiveShapePaintSource {
+        PubEffectiveShapePaintSource {
+            fill: PubEffectiveFillSource {
+                solid: Some(PubEffectivePaintValue {
+                    value: true,
+                    authority: PubEffectivePaintAuthority::NormativeDefault,
+                    source: None,
+                }),
+                visible: Some(PubEffectivePaintValue {
+                    value: true,
+                    authority: PubEffectivePaintAuthority::ShapeLocal,
+                    source: Some(span()),
+                }),
+                color_rgb: Some(PubEffectivePaintValue {
+                    value: [0, 0, 0],
+                    authority: color_authority,
+                    source: Some(span()),
+                }),
+            },
+            line: PubEffectiveLineSource {
+                visible: Some(PubEffectivePaintValue {
+                    value: false,
+                    authority: PubEffectivePaintAuthority::ShapeLocal,
+                    source: Some(span()),
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn logo_effective_rect_requires_true_local_visibility_and_grounded_color() {
+        let rect = source_rectangle();
+        let mut dgg = logo_effective_fill(PubEffectivePaintAuthority::DrawingGroupPrimary);
+        assert!(has_bounded_logo_effective_solid_rectangle(&rect, &dgg));
+        dgg.fill.color_rgb.as_mut().unwrap().value = [255, 255, 255];
+        assert!(has_bounded_logo_effective_solid_rectangle(&rect, &dgg));
+
+        let local = logo_effective_fill(PubEffectivePaintAuthority::ShapeLocal);
+        assert!(has_bounded_logo_effective_solid_rectangle(&rect, &local));
+
+        let mut hidden = local.clone();
+        hidden.fill.visible.as_mut().unwrap().value = false;
+        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &hidden));
+
+        let mut no_local_fill = local.clone();
+        no_local_fill.fill.visible.as_mut().unwrap().authority =
+            PubEffectivePaintAuthority::NormativeDefault;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_local_fill
+        ));
+
+        let mut unknown_color = local.clone();
+        unknown_color.fill.color_rgb = None;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &unknown_color
+        ));
+
+        let mut normative_color = local.clone();
+        normative_color.fill.color_rgb.as_mut().unwrap().authority =
+            PubEffectivePaintAuthority::NormativeDefault;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &normative_color
+        ));
+
+        let mut no_color_source = local.clone();
+        no_color_source.fill.color_rgb.as_mut().unwrap().source = None;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_color_source
+        ));
+
+        let mut gradient = local.clone();
+        gradient.fill.solid.as_mut().unwrap().value = false;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect, &gradient
+        ));
+
+        let mut line = local.clone();
+        line.line.visible.as_mut().unwrap().value = true;
+        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &line));
+
+        let mut no_local_line = local.clone();
+        no_local_line.line.visible.as_mut().unwrap().authority =
+            PubEffectivePaintAuthority::NormativeDefault;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_local_line
+        ));
+
+        let mut ellipse = rect.clone();
+        ellipse.fsp.as_mut().unwrap().shape_type = OFFICEART_SHAPE_TYPE_ELLIPSE;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &ellipse, &local
+        ));
+
+        let mut opacity = rect.clone();
+        opacity.fopts[0]
+            .properties
+            .push(property(0x0182, 0x0000_8000));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &opacity, &local
+        ));
+
+        let mut connector = rect.clone();
+        connector.fsp.as_mut().unwrap().flags |= OFFICEART_FSP_CONNECTOR_BIT;
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &connector, &local
+        ));
     }
 
     #[test]

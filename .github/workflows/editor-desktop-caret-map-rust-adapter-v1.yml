@@ -6,6 +6,7 @@ on:
       - "Cargo.toml"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "services/editor-api/resolved_text_caret_map_v1.py"
+      - "services/editor-api/test_internal_caret_authority_v1.py"
       - ".github/workflows/editor-desktop-caret-map-rust-adapter-v1.yml"
   workflow_dispatch:
 
@@ -13,16 +14,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
         with:
+          toolchain: "1.94.1"
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt --manifest-path crates/chaptera-text-caret-map-adapter/Cargo.toml -- --check
@@ -34,6 +37,25 @@ jobs:
         run: cargo test --manifest-path crates/chaptera-text-caret-map-adapter/Cargo.toml
       - name: Canonical Python caret-map tests
         run: python services/editor-api/test_resolved_text_caret_map_v1.py
+      - name: Format pinned shaping + GDEF authority
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-layout -- --check
+      - name: Check pinned shaping + GDEF authority
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-layout --all-targets
+      - name: Lint pinned shaping + GDEF authority
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-layout --all-targets -- -D warnings
+      - name: Test real GSUB/GDEF internal caret authority
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-layout internal_caret -- --nocapture
+      - name: Emit pinned fi authority receipt
+        run: |
+          mkdir -p target/internal-caret
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-layout --example internal_caret_receipt \
+            | tee target/internal-caret/receipt.json
+      - name: Verify canonical GDEF caret-map integration
+        env:
+          INTERNAL_CARET_RECEIPT: ../../target/internal-caret/receipt.json
+        working-directory: services/editor-api
+        run: python -m unittest -v test_internal_caret_authority_v1 test_resolved_text_caret_map_v1
       - name: Cross-language golden conformance
         shell: bash
         run: |
@@ -185,7 +207,10 @@ jobs:
 
           def canonical_result(call):
               try:
-                  return {"ok": json.loads(json.dumps(asdict(call())))}
+                  value = asdict(call())
+                  if value.get("authority_source") is None:
+                      value.pop("authority_source", None)
+                  return {"ok": json.loads(json.dumps(value))}
               except ResolvedTextCaretMapError as error:
                   return {"error_code": error.code}
 
@@ -329,3 +354,8 @@ jobs:
                   raise SystemExit(1)
               print(name, "PASS")
           PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: layout-internal-caret-authority-${{ github.run_id }}
+          path: target/internal-caret/receipt.json
+          if-no-files-found: error

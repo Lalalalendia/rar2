@@ -7,6 +7,7 @@
   <div>
     <strong>Chaptera Editor</strong>
     <span id="document" class="muted"></span>
+    <a class="project-home-link" href="/editor">Проекты</a>
     <a class="new-publication" href="/editor/new">Новая публикация</a>
   </div>
   <div id="status" class="status" role="status">Opening…</div>
@@ -15,6 +16,12 @@
   <aside class="notice">
     <strong>Bounded editor</strong>
     <span>Direct page objects can be moved. Projected and nested visual content stays read-only.</span>
+    <div class="history-actions" role="group" aria-label="Document history">
+      <button id="undo-action" type="button" title="Undo last MoveNode (Ctrl/Cmd+Z)">Undo</button>
+      <button id="redo-action" type="button" title="Redo an immediate MoveNode Undo (Ctrl/Cmd+Shift+Z or Ctrl+Y)">Redo</button>
+      <button id="reconcile-action" type="button" hidden title="Recheck the exact server revision after an uncertain save or Undo/Redo">Recheck revision</button>
+    </div>
+    <span class="history-note">Only one immediate MoveNode Redo is supported; other history actions are rejected without changing the document.</span>
     <span id="fidelity"></span>
   </aside>
   <section id="canvas-wrap" aria-label="Publication canvas">

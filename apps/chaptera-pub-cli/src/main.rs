@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
+use chaptera_suite_handoff::AdmittedSource;
 use clap::{Parser, Subcommand};
 use pub_model::Sha256Digest;
 use sha2::{Digest, Sha256};
-use std::{fs, io::Cursor, path::PathBuf};
+use std::{io::Cursor, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "pub", version, about = "Bounded Chaptera Publisher utilities")]
@@ -34,18 +35,21 @@ fn source_sha256(bytes: &[u8]) -> Sha256Digest {
 }
 
 fn extract_assets(file: PathBuf, output: PathBuf, json: bool) -> Result<()> {
-    let bytes =
-        fs::read(&file).with_context(|| format!("read Publisher source {}", file.display()))?;
-    let source_hash = source_sha256(&bytes);
-    let source =
-        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
-            .context("build mature-0x2C source graph")?;
-    let bundle =
-        pub_reader::build_mature_0x2c_asset_export_bundle_from_bytes(&bytes, &source.graph)
-            .context("build exact asset export bundle")?;
+    let admitted = AdmittedSource::open(&file).map_err(anyhow::Error::msg)?;
+    let bytes = admitted.bytes();
+    let source_hash = source_sha256(bytes);
+    let source = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
+        .context("build mature-0x2C source graph")?;
+    let bundle = pub_reader::build_mature_0x2c_asset_export_bundle_from_bytes(bytes, &source.graph)
+        .context("build exact asset export bundle")?;
 
-    pub_reader::write_pub_asset_export_bundle(&bundle, &output)
-        .with_context(|| format!("write exact asset bundle to {}", output.display()))?;
+    pub_reader::write_pub_asset_export_bundle(&bundle, &output, |path, bytes| {
+        admitted
+            .commit_derived_output(path, bytes)
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    })
+    .with_context(|| format!("write exact asset bundle to {}", output.display()))?;
 
     if json {
         let manifest = pub_reader::pub_asset_manifest_json(&bundle.manifest)

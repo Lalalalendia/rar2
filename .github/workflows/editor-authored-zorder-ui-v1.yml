@@ -1,0 +1,50 @@
+name: Editor Authored Zorder UI V1
+
+on:
+  pull_request:
+    paths:
+      - 'apps/chaptera-desktop/src/authored_arrange.rs'
+      - 'apps/chaptera-desktop/src/authored_arrange_gui_tests.rs'
+      - '.github/workflows/editor-authored-zorder-ui-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  desktop-arrange:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt
+      - name: Confirm source formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+      - name: Check Desktop Editor and Reader-only builds
+        run: |
+          cargo check -p chaptera-desktop --all-targets
+          cargo check -p chaptera-desktop --features reader-only --all-targets
+      - name: Acquire exact public Apache POI Publisher control
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl --fail --location --silent --show-error \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header 'Accept: application/vnd.github.raw+json' \
+            'https://api.github.com/repos/apache/poi/contents/test-data/publisher/SampleNewsletter.pub?ref=942d95d85b15d0dfdb3bc9ba1b4f273f277757c8' \
+            --output "$fixture"
+          test "$(sha256sum "$fixture" | cut -d' ' -f1)" = '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf'
+          test "$(wc -c < "$fixture" | tr -d ' ')" = '291840'
+          echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
+      - name: Prove actual egui selected Arrange commands and project durability
+        run: cargo test -p chaptera-desktop gui_authored_arrange_v1 -- --ignored --nocapture

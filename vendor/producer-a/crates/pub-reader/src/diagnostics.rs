@@ -5,6 +5,18 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum PubBridgeDiagnostic {
+    MissingRawType {
+        seq_num: u32,
+        source: RawSpan,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_seq_num: Option<u32>,
+    },
+    MissingChunkOffset {
+        seq_num: u32,
+        source: RawSpan,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_seq_num: Option<u32>,
+    },
     PageListSpecialEntry {
         handle: u32,
         raw_type: u16,

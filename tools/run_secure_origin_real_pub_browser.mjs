@@ -257,6 +257,161 @@ try {
   }
   const initialPaint = await verifyEditorPaint(current, "initial open");
 
+  const sourceNeutralBoundary = await page.evaluate(async id => {
+    const forbiddenKeys = new Set([
+      "source_bytes", "raw_source_bytes", "physical_upload_ref",
+      "object_version", "object_etag", "durable_binding_id", "binding_id",
+      "object_locator", "provider_key", "opaque_url", "presigned_url",
+      "download_handle", "local_path", "filesystem_path",
+    ]);
+    const forbiddenStrings = ["SampleNewsletter.pub", "TruncatedNewsletter.pub"];
+    const violations = [];
+    const visit = (value, path) => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, path + "[" + index + "]"));
+        return;
+      }
+      if (!value || typeof value !== "object") {
+        if (typeof value === "string" &&
+            forbiddenStrings.some(canary => value.includes(canary))) {
+          violations.push(path + ":source-filename");
+        }
+        return;
+      }
+      for (const [key, nested] of Object.entries(value)) {
+        const next = path ? path + "." + key : key;
+        if (forbiddenKeys.has(key)) violations.push(next);
+        visit(nested, next);
+      }
+    };
+    const payloads = {};
+    for (const [name, path] of [
+      ["current", "/v1/documents/" + encodeURIComponent(id) + "/current"],
+      ["scene", "/v1/reader/documents/" + encodeURIComponent(id) + "/scene"],
+    ]) {
+      const response = await fetch(path, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(name + " source-neutral probe HTTP " + response.status);
+      payloads[name] = await response.json();
+      visit(payloads[name], name);
+    }
+    return {
+      violations,
+      current_protocol: payloads.current?.protocol_version ?? null,
+      scene_protocol: payloads.scene?.protocol_version ?? null,
+    };
+  }, documentId);
+  if (sourceNeutralBoundary.violations.length ||
+      sourceNeutralBoundary.current_protocol !== "chaptera.current-document.v1" ||
+      sourceNeutralBoundary.scene_protocol !== "chaptera.reader-scene.v1") {
+    throw new Error("browser payload crossed raw/provider source boundary: " +
+      JSON.stringify(sourceNeutralBoundary));
+  }
+
+  // A returning user must be able to rediscover the just-created durable
+  // project from the real Project Home without retaining the document URL.
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(id => {
+    const status = document.querySelector("#status");
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return status?.textContent?.startsWith("Проектов:") && !!card;
+  }, documentId, { timeout: 30000 });
+  const homeReceipt = await page.evaluate(id => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return {
+      path: location.pathname,
+      document_id: card?.dataset.documentId ?? null,
+      project_id: card?.dataset.projectId ?? null,
+      name: card?.querySelector("h2")?.textContent ?? null,
+      status: document.querySelector("#status")?.textContent ?? null,
+    };
+  }, documentId);
+  if (homeReceipt.path !== "/editor" || homeReceipt.document_id !== documentId ||
+      !homeReceipt.project_id || homeReceipt.name !== "SampleNewsletter.pub") {
+    // The authenticated Project Home may display the owner's uploaded filename,
+    // but the retained security evidence must never copy that filename.
+    throw new Error("Project Home did not preserve the authorized imported project label");
+  }
+  const safeHomeReceipt = {
+    path: homeReceipt.path,
+    document_id: homeReceipt.document_id,
+    project_id: homeReceipt.project_id,
+    uploaded_label_verified: true,
+    status: homeReceipt.status,
+  };
+  // Real UI rename, not a direct API request. The result must be confirmed
+  // by the exact server receipt, a fresh durable catalog and a browser reload.
+  const renamedTitle = "Chaptera " + hash.slice(0, 12);
+  const homeCard = page.locator(
+    '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"]'
+  );
+  await homeCard.locator('[data-action="rename-project"]').click();
+  await homeCard.locator('[data-action="rename-input"]').fill(renamedTitle);
+  const renameResponsePromise = page.waitForResponse(response => {
+    if (response.request().method() !== "POST") return false;
+    return decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/projects/" + homeReceipt.project_id + "/rename";
+  }, { timeout: 30000 });
+  await homeCard.locator('[data-action="save-rename"]').click();
+  const renameResponse = await renameResponsePromise;
+  if (renameResponse.status() !== 200) {
+    // Emit only a bounded machine error code. Never log the project title or
+    // any raw Product/SQLite diagnostics into retained CI browser logs.
+    const denied = await renameResponse.json().catch(() => null);
+    const code = typeof denied?.error === "string" &&
+      /^[a-z0-9_:-]{1,96}$/.test(denied.error) ? denied.error : "unknown";
+    throw new Error("real project rename HTTP failed: " + renameResponse.status() +
+      " code=" + code);
+  }
+  if (renameResponse.headers()["cache-control"] !== "no-store") {
+    throw new Error("project rename receipt response lacked private no-store policy");
+  }
+  const renamed = await renameResponse.json();
+  if (renamed.protocol_version !== "chaptera.project-rename-receipt.v1" ||
+      renamed.receipt?.project_id !== homeReceipt.project_id ||
+      renamed.receipt?.name !== renamedTitle ||
+      !Number.isSafeInteger(renamed.receipt?.metadata_version)) {
+    throw new Error("project rename returned an unbound receipt");
+  }
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+
+  const homeOpen = page.locator(
+    '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"] [data-action="open-project"]'
+  );
+  await Promise.all([
+    page.waitForURL(url =>
+      decodeURIComponent(url.pathname) === "/editor/doc/" + documentId,
+    { timeout: 30000, waitUntil: "domcontentloaded" }),
+    homeOpen.click(),
+  ]);
+  const homeOpened = await currentDocumentReceipt(documentId);
+  if (homeOpened.status !== 200 || homeOpened.document_id !== documentId ||
+      homeOpened.revision_id !== current.revision_id) {
+    throw new Error("Project Home reopened a different durable revision: " +
+      JSON.stringify({ homeOpened, expected: current.revision_id }));
+  }
+  const homeOpenedPaint = await verifyEditorPaint(homeOpened, "project home reopen");
+
   // An actual page reload (no synthetic product snapshot) must retain the
   // authoritative imported service revision. Server restart is a later gate.
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -286,6 +441,32 @@ try {
   if (!moveTarget || moveTarget.revision_id !== reopened.revision_id) {
     throw new Error("real imported PUB exposes no stable direct MoveNode target");
   }
+  // Hold the real MoveNode HTTP request at the network boundary. A user may
+  // press Undo before an ACK; the browser must not send a stale history edge.
+  const moveCommitPath = "/v1/documents/" + documentId + "/commit";
+  const historyPath = "/v1/documents/" + documentId + "/history";
+  const accidentalHistoryPosts = [];
+  page.on("request", request => {
+    if (request.method() === "POST" &&
+        decodeURIComponent(new URL(request.url()).pathname) === historyPath) {
+      accidentalHistoryPosts.push(1);
+    }
+  });
+  let releaseMoveCommit;
+  let commitIntercepted;
+  const commitEnteredGate = new Promise(resolve => { commitIntercepted = resolve; });
+  const commitGate = new Promise(resolve => { releaseMoveCommit = resolve; });
+  let interceptedCommits = 0;
+  const holdCommit = async route => {
+    if (route.request().method() === "POST" &&
+        decodeURIComponent(new URL(route.request().url()).pathname) === moveCommitPath) {
+      interceptedCommits += 1;
+      commitIntercepted();
+      await commitGate;
+    }
+    await route.continue();
+  };
+  await page.route("**/v1/documents/*/commit", holdCommit);
   const commitResponsePromise = page.waitForResponse(response => {
     if (response.request().method() !== "POST") return false;
     const path = decodeURIComponent(new URL(response.url()).pathname);
@@ -295,7 +476,35 @@ try {
   await page.mouse.down({ button: "left" });
   await page.mouse.move(moveTarget.end.x, moveTarget.end.y, { steps: 4 });
   await page.mouse.up({ button: "left" });
+  await commitEnteredGate;
+  let blockedHistoryDuringSave = false;
+  try {
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      const undo = document.querySelector("#undo-action");
+      const redo = document.querySelector("#redo-action");
+      return status?.classList.contains("pending") &&
+        undo?.disabled === true && redo?.disabled === true;
+    }, null, { timeout: 15000 });
+    await page.keyboard.press("Control+z");
+    const held = await page.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent ?? null,
+      pending: document.querySelector("#status")?.classList.contains("pending") ?? false,
+      undo_disabled: document.querySelector("#undo-action")?.disabled ?? false,
+      redo_disabled: document.querySelector("#redo-action")?.disabled ?? false,
+    }));
+    blockedHistoryDuringSave = held.pending &&
+      held.status?.includes("Save still pending") &&
+      held.undo_disabled && held.redo_disabled &&
+      accidentalHistoryPosts.length === 0 && interceptedCommits === 1;
+    if (!blockedHistoryDuringSave) {
+      throw new Error("pending MoveNode allowed a stale Undo or falsely reported durable history");
+    }
+  } finally {
+    releaseMoveCommit();
+  }
   const commitResponse = await commitResponsePromise;
+  await page.unroute("**/v1/documents/*/commit", holdCommit);
   const accepted = await commitResponse.json().catch(() => null);
   if (commitResponse.status() !== 200 ||
       accepted?.protocol_version !== "chaptera.commit-accepted.v1" ||
@@ -307,6 +516,13 @@ try {
       JSON.stringify({ status: commitResponse.status(), accepted, moveTarget }));
   }
 
+  if (!blockedHistoryDuringSave || accidentalHistoryPosts.length !== 0) {
+    throw new Error("pending MoveNode sent history before authoritative save reconciliation");
+  }
+  await page.waitForFunction(() =>
+    document.querySelector("#undo-action")?.disabled === false &&
+    document.querySelector("#redo-action")?.disabled === false, null,
+    { timeout: 30000 });
   const movedCurrent = await currentDocumentReceipt(documentId);
   if (movedCurrent.status !== 200 || movedCurrent.document_id !== documentId ||
       movedCurrent.revision_id !== accepted.revision_id) {
@@ -346,6 +562,572 @@ try {
     attempts: [{ node_id: moveTarget.node_id, status: commitResponse.status(), code: null }],
   };
 
+  // Physical hostile-source control: a truncated copy of the real Publisher
+  // fixture must traverse the authenticated upload path, fail validation, and
+  // never create a second Project/genesis.
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const projectsBeforeMalformed = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id"))
+      .filter(Boolean)
+      .sort());
+  const createCallsBeforeMalformed = calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+
+  const oversizedAdmission = await page.evaluate(async () => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const session = await sessionResponse.json().catch(() => null);
+    if (!sessionResponse.ok || !session?.csrf_token) {
+      throw new Error("oversized admission probe could not obtain CSRF");
+    }
+    const workspaceResponse = await fetch("/v1/workspaces/personal", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: "{}",
+    });
+    const workspace = await workspaceResponse.json().catch(() => null);
+    if (!workspaceResponse.ok || !workspace?.workspace_id) {
+      throw new Error("oversized admission probe could not resolve workspace");
+    }
+    const response = await fetch("/v1/uploads", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify({
+        workspace_id: workspace.workspace_id,
+        purpose: "pub_source",
+        expected_byte_len: 1099511627776,
+        declared_content_type: "application/x-mspublisher",
+        idempotency_key: "b02-oversized-upload-admission",
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      error: body?.error ?? null,
+      upload_disclosed: !!body?.upload,
+      transport_disclosed: !!body?.transport,
+    };
+  });
+  if (oversizedAdmission.status !== 413 ||
+      oversizedAdmission.error !== "upload_size_rejected" ||
+      oversizedAdmission.upload_disclosed ||
+      oversizedAdmission.transport_disclosed) {
+    throw new Error("oversized upload was not rejected before object admission: " +
+      JSON.stringify(oversizedAdmission));
+  }
+
+  await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+  null, { timeout: 30000 });
+  const truncated = raw.subarray(0, Math.min(raw.length, 4096));
+  if (truncated.length >= raw.length) {
+    throw new Error("real Publisher fixture is too small for truncated hostile control");
+  }
+  await page.locator("#pub-file").setInputFiles({
+    name: "TruncatedNewsletter.pub",
+    mimeType: "application/x-mspublisher",
+    buffer: truncated,
+  });
+  await page.waitForFunction(() => {
+    const code = document.querySelector("#error")?.textContent ?? "";
+    return code.length > 0;
+  }, null, { timeout: 120000 });
+  const malformedUi = await page.evaluate(() => ({
+    path: location.pathname,
+    status: document.querySelector("#status")?.textContent ?? "",
+    error_code: document.querySelector("#error")?.textContent ?? "",
+  }));
+  if (malformedUi.path !== "/editor/new" ||
+      malformedUi.status !== "Needs attention" ||
+      !/^[a-z0-9_:-]{1,96}$/.test(malformedUi.error_code)) {
+    throw new Error("truncated PUB did not fail closed at file-entry boundary: " +
+      JSON.stringify(malformedUi));
+  }
+  const createCallsAfterMalformed = calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+  if (createCallsAfterMalformed !== createCallsBeforeMalformed) {
+    throw new Error("truncated PUB reached durable Project creation");
+  }
+
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const projectsAfterMalformed = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id"))
+      .filter(Boolean)
+      .sort());
+  if (JSON.stringify(projectsAfterMalformed) !== JSON.stringify(projectsBeforeMalformed)) {
+    throw new Error("truncated PUB changed durable Project catalog: " +
+      JSON.stringify({ projectsBeforeMalformed, projectsAfterMalformed }));
+  }
+  const malformedSource = {
+    claim: true,
+    byte_len: truncated.length,
+    error_code: malformedUi.error_code,
+    project_create_calls_delta:
+      createCallsAfterMalformed - createCallsBeforeMalformed,
+    catalog_unchanged: true,
+    raw_parser_diagnostic_disclosed: false,
+  };
+
+  // The truncated fixture above proved one real CFB rejection. Expand that
+  // existing B02 browser path into deterministic hostile-header controls:
+  // each nonempty source must physically reach authenticated ingress, fail
+  // before Product genesis, and leave the original project/scene intact.
+  const corruptCopy = (offset, bytes) => {
+    const altered = Buffer.from(raw);
+    for (let index = 0; index < bytes.length; index += 1) {
+      altered[offset + index] = bytes[index];
+    }
+    return altered;
+  };
+  const hostileCfbFixtures = [
+    { kind: "magic_only", buffer: Buffer.from(raw.subarray(0, 8)) },
+    { kind: "header_prefix_128", buffer: Buffer.from(raw.subarray(0, 128)) },
+    { kind: "header_prefix_511", buffer: Buffer.from(raw.subarray(0, 511)) },
+    { kind: "invalid_signature", buffer: corruptCopy(0, [0x00]) },
+    { kind: "invalid_byte_order", buffer: corruptCopy(28, [0x00, 0x00]) },
+    { kind: "invalid_sector_shift", buffer: corruptCopy(30, [0x00, 0x00]) },
+    { kind: "missing_directory_sector", buffer: corruptCopy(48, [0xfe, 0xff, 0xff, 0xff]) },
+  ];
+  const sourceAdmissionCount = () => calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/uploads").length;
+  const sourceContentCount = () => calls.filter(call =>
+    call.method === "PUT" && call.path.endsWith("/content")).length;
+  const durableProjectCreateCount = () => calls.filter(call =>
+    call.method === "POST" && call.path === "/v1/projects/from-upload").length;
+  const hostileCfbResults = [];
+  for (const hostile of hostileCfbFixtures) {
+    if (hostile.buffer.length === 0 || hostile.buffer.length >= raw.length + 1) {
+      throw new Error("hostile CFB fixture generator violated size bounds");
+    }
+    await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() =>
+      document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+    null, { timeout: 30000 });
+    const admissionBefore = sourceAdmissionCount();
+    const contentBefore = sourceContentCount();
+    const durableBefore = durableProjectCreateCount();
+    await page.locator("#pub-file").setInputFiles({
+      name: "TruncatedNewsletter.pub",
+      mimeType: "application/x-mspublisher",
+      buffer: hostile.buffer,
+    });
+    await page.waitForFunction(() =>
+      (document.querySelector("#error")?.textContent ?? "").length > 0,
+    null, { timeout: 45000 });
+    const failed = await page.evaluate(() => ({
+      path: location.pathname,
+      status: document.querySelector("#status")?.textContent ?? "",
+      code: document.querySelector("#error")?.textContent ?? "",
+    }));
+    if (failed.path !== "/editor/new" || failed.status !== "Needs attention" ||
+        !/^[a-z0-9_:-]{1,96}$/.test(failed.code)) {
+      throw new Error("hostile CFB did not fail with a bounded typed UI error: " + hostile.kind);
+    }
+    if (sourceAdmissionCount() !== admissionBefore + 1 ||
+        sourceContentCount() !== contentBefore + 1 ||
+        durableProjectCreateCount() !== durableBefore) {
+      throw new Error("hostile CFB did not traverse exact ingress or reached Project genesis: " +
+        hostile.kind);
+    }
+    hostileCfbResults.push({
+      kind: hostile.kind,
+      byte_len: hostile.buffer.length,
+      error_code: failed.code,
+      passed: true,
+    });
+  }
+  await page.goto(origin + "/editor", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.startsWith("Проектов:"),
+  null, { timeout: 30000 });
+  const finalProjects = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-document-id]")]
+      .map(card => card.getAttribute("data-document-id")).filter(Boolean).sort());
+  if (JSON.stringify(finalProjects) !== JSON.stringify(projectsBeforeMalformed)) {
+    throw new Error("hostile CFB attempts changed durable Project catalog");
+  }
+  const afterHostile = await currentDocumentReceipt(documentId);
+  if (afterHostile.status !== 200 || afterHostile.revision_id !== edited.revision_id) {
+    throw new Error("hostile CFB attempts damaged already accepted canonical revision");
+  }
+  const hostileCfbMatrix = {
+    claim: true,
+    tested_count: hostileCfbResults.length + 1,
+    additional_cases: hostileCfbResults,
+    same_project_catalog: true,
+    original_revision_unchanged: true,
+  };
+
+
+  // ACK-unknown negative, physically independent of the already-accepted
+  // original document. A second authenticated import of the SAME pinned real
+  // PUB ensures the downstream restart/export receipts remain untouched.
+  await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+  null, { timeout: 30000 });
+  await page.locator("#pub-file").setInputFiles({
+    name: "AckLossControl.pub",
+    mimeType: "application/x-mspublisher",
+    buffer: raw,
+  });
+  await page.waitForURL(url =>
+    /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
+  { timeout: 105000, waitUntil: "domcontentloaded" });
+  const ackLossDoc = decodeURIComponent(new URL(page.url()).pathname)
+    .replace("/editor/doc/", "");
+  if (!ackLossDoc || ackLossDoc === documentId) {
+    throw new Error("lost-ACK probe did not create an independent physical PUB project");
+  }
+  const ackLossBefore = await currentDocumentReceipt(ackLossDoc);
+  if (ackLossBefore.status !== 200 || !ackLossBefore.revision_id) {
+    throw new Error("lost-ACK control PUB lacks an authoritative baseline revision");
+  }
+  await verifyEditorPaint(ackLossBefore, "independent ACK-loss control open");
+  const ackLossTarget = await chooseRealMoveTarget(ackLossDoc);
+  if (!ackLossTarget || ackLossTarget.revision_id !== ackLossBefore.revision_id) {
+    throw new Error("lost-ACK control PUB lacks a stable physical pointer target");
+  }
+  const ackLossCommitPath = "/v1/documents/" + ackLossDoc + "/commit";
+  const ackLossHistoryPath = "/v1/documents/" + ackLossDoc + "/history";
+  const countRequests = (method, path) => calls.filter(call =>
+    call.method === method && decodeURIComponent(call.path) === path).length;
+  const initialHistory = countRequests("POST", ackLossHistoryPath);
+  const initialCommits = countRequests("POST", ackLossCommitPath);
+  let authoritativeAck = null;
+  let interceptedAckCount = 0;
+  const dropCommittedAck = async route => {
+    if (route.request().method() !== "POST" ||
+        decodeURIComponent(new URL(route.request().url()).pathname) !== ackLossCommitPath) {
+      await route.continue();
+      return;
+    }
+    interceptedAckCount += 1;
+    // Chromium maps edge.test -> loopback, but Playwright's Node-side
+    // route.fetch does NOT inherit Chromium's host-resolver rules.
+    // Preserve the original Caddy virtual host while connecting via the
+    // published local HTTPS endpoint. Never print the original request or
+    // upstream transport exception: it contains auth cookies and CSRF.
+    const original = new URL(route.request().url());
+    const upstreamAddress = new URL(original);
+    upstreamAddress.hostname = "127.0.0.1";
+    let upstream;
+    try {
+      upstream = await route.fetch({
+        url: upstreamAddress.toString(),
+        headers: { ...route.request().headers(), host: original.host },
+        timeout: 45000,
+      });
+    } catch {
+      await route.abort("failed").catch(() => {});
+      throw new Error("ACK-loss proxy failed before service acceptance (redacted)");
+    }
+    const result = await upstream.json().catch(() => null);
+    if (upstream.status() !== 200 ||
+        result?.protocol_version !== "chaptera.commit-accepted.v1" ||
+        result.document_id !== ackLossDoc ||
+        result.base_revision_id !== ackLossBefore.revision_id ||
+        !result.revision_id ||
+        result.revision_id === ackLossBefore.revision_id ||
+        !result.client_operation_id) {
+      throw new Error("ACK-loss control did not first obtain a real durable MoveNode 200");
+    }
+    authoritativeAck = {
+      revision_id: result.revision_id,
+      operation_id: result.client_operation_id,
+      status: upstream.status(),
+    };
+    // The server has fully committed and returned 200 to our proxy. The
+    // browser receives NO response, exactly the ACK-unknown transport case.
+    await route.abort("failed");
+  };
+  await page.route("**/v1/documents/*/commit", dropCommittedAck);
+  await page.mouse.move(ackLossTarget.start.x, ackLossTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(ackLossTarget.end.x, ackLossTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#status");
+    const retry = document.querySelector("#reconcile-action");
+    return status?.textContent?.includes("Save outcome unknown") &&
+      status?.classList.contains("error") &&
+      document.querySelector("#undo-action")?.disabled === true &&
+      document.querySelector("#redo-action")?.disabled === true &&
+      retry?.hidden === false && retry?.disabled === false;
+  }, null, { timeout: 30000 });
+  await page.unroute("**/v1/documents/*/commit", dropCommittedAck);
+  if (!authoritativeAck || interceptedAckCount !== 1 ||
+      countRequests("POST", ackLossCommitPath) !== initialCommits + 1) {
+    throw new Error("ACK-loss test did not observe exactly one server-accepted MoveNode");
+  }
+
+  // Neither keyboard history nor a second pointer gesture may escape the
+  // uncertain-save fence or silently use the stale pre-commit revision.
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+Shift+z");
+  await page.keyboard.press("Control+y");
+  await page.mouse.move(ackLossTarget.start.x, ackLossTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(ackLossTarget.end.x, ackLossTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  if (countRequests("POST", ackLossHistoryPath) !== initialHistory ||
+      countRequests("POST", ackLossCommitPath) !== initialCommits + 1) {
+    throw new Error("unconfirmed save emitted a stale history or duplicate MoveNode POST");
+  }
+
+  // The first explicitly requested GET /current fails: no stale success,
+  // no unlock and no mutation, even though the server has durably advanced.
+  let abortedCurrentReads = 0;
+  const denyCurrent = async route => {
+    if (decodeURIComponent(new URL(route.request().url()).pathname) ===
+        "/v1/documents/" + ackLossDoc + "/current") {
+      abortedCurrentReads += 1;
+      await route.abort("failed");
+    } else {
+      await route.continue();
+    }
+  };
+  await page.route("**/v1/documents/*/current", denyCurrent);
+  const failingRecheck = page.waitForRequest(request =>
+    request.method() === "GET" &&
+    decodeURIComponent(new URL(request.url()).pathname) ===
+      "/v1/documents/" + ackLossDoc + "/current",
+  { timeout: 30000 });
+  await page.locator("#reconcile-action").click();
+  await failingRecheck;
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Save outcome unknown") &&
+    document.querySelector("#reconcile-action")?.disabled === false &&
+    document.querySelector("#undo-action")?.disabled === true &&
+    document.querySelector("#redo-action")?.disabled === true,
+  null, { timeout: 30000 });
+  await page.unroute("**/v1/documents/*/current", denyCurrent);
+  if (abortedCurrentReads < 1 ||
+      countRequests("POST", ackLossHistoryPath) !== initialHistory) {
+    throw new Error("failed authoritative recheck unlocked or mutated an unknown save");
+  }
+
+  // Only a fresh authenticated matching /current AND Reader Scene with a
+  // different revision can reconcile. The UI deliberately does not claim
+  // that the lost original HTTP ACK was observed.
+  await page.locator("#reconcile-action").click();
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#status");
+    return status?.textContent?.includes("Server revision synchronized") &&
+      document.querySelector("#reconcile-action")?.hidden === true &&
+      document.querySelector("#undo-action")?.disabled === false &&
+      document.querySelector("#redo-action")?.disabled === false;
+  }, null, { timeout: 30000 });
+  const ackLossCurrent = await currentDocumentReceipt(ackLossDoc);
+  const ackLossNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+  if (ackLossCurrent.status !== 200 ||
+      ackLossCurrent.revision_id !== authoritativeAck.revision_id ||
+      ackLossNode.revision_id !== authoritativeAck.revision_id ||
+      !ackLossNode.bounds ||
+      (ackLossNode.bounds.x === ackLossTarget.before_bounds.x &&
+       ackLossNode.bounds.y === ackLossTarget.before_bounds.y) ||
+      countRequests("POST", ackLossHistoryPath) !== initialHistory) {
+    throw new Error("real lost-ACK reconciliation did not recover exact server revision/geometry");
+  }
+  const lostCommitAckEvidence = {
+    claim: true,
+    independent_real_pub: true,
+    server_accepted_before_browser_ack_loss: true,
+    accepted_commit_status: authoritativeAck.status,
+    original_operation_id_preserved: true,
+    history_mutations_while_unknown: 0,
+    duplicate_move_mutations_while_unknown: 0,
+    failed_refetch_kept_editing_locked: true,
+    explicit_current_and_reader_reconciled: true,
+    fabricated_original_ack: false,
+  };
+
+
+  // Undo/Redo ACK-unknown physical controls reuse the independent real PUB
+  // already mutated by the accepted MoveNode above. The server performs each
+  // durable history mutation, while Playwright suppresses ONLY the HTTP ACK.
+  // No synthetic history POST or injected editor state is allowed.
+  const lostHistoryAckEvidence = [];
+  for (const kind of ["undo", "redo"]) {
+    const beforeHistory = await currentDocumentReceipt(ackLossDoc);
+    const beforeHistoryNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+    const historyPostsBefore = countRequests("POST", ackLossHistoryPath);
+    const movePostsBefore = countRequests("POST", ackLossCommitPath);
+    if (beforeHistory.status !== 200 ||
+        beforeHistory.revision_id !== beforeHistoryNode.revision_id) {
+      throw new Error(kind + " ACK-loss baseline was not a source-exact current revision");
+    }
+
+    let acceptedHistory = null;
+    let proxiedHistoryPosts = 0;
+    const dropDurableHistoryAck = async route => {
+      if (route.request().method() !== "POST" ||
+          decodeURIComponent(new URL(route.request().url()).pathname) !== ackLossHistoryPath) {
+        await route.continue();
+        return;
+      }
+      proxiedHistoryPosts += 1;
+      const request = route.request().postDataJSON();
+      if (request?.command?.kind !== kind ||
+          request.document_id !== ackLossDoc ||
+          request.source_hash !== hash ||
+          request.base_revision_id !== beforeHistory.revision_id ||
+          !request.client_operation_id) {
+        throw new Error(kind + " ACK-loss test did not send the expected canonical intent");
+      }
+      // Node-side route.fetch does not inherit Chromium's edge.test resolver.
+      // Preserve Caddy's virtual host and the authenticated original headers.
+      const original = new URL(route.request().url());
+      const upstreamAddress = new URL(original);
+      upstreamAddress.hostname = "127.0.0.1";
+      let upstream;
+      try {
+        upstream = await route.fetch({
+          url: upstreamAddress.toString(),
+          headers: { ...route.request().headers(), host: original.host },
+          timeout: 45000,
+        });
+      } catch {
+        await route.abort("failed").catch(() => {});
+        throw new Error(kind + " ACK-loss proxy failed before authority acceptance (redacted)");
+      }
+      const result = await upstream.json().catch(() => null);
+      if (upstream.status() !== 200 ||
+          result?.protocol_version !== "chaptera.history-transition-accepted.v1" ||
+          result.document_id !== ackLossDoc ||
+          result.source_hash !== hash ||
+          result.base_revision_id !== beforeHistory.revision_id ||
+          result.transition_kind !== kind ||
+          result.client_operation_id !== request.client_operation_id ||
+          !result.revision_id ||
+          result.revision_id === beforeHistory.revision_id) {
+        throw new Error(kind + " ACK-loss control did not observe one real durable 200");
+      }
+      acceptedHistory = {
+        revision_id: result.revision_id,
+        operation_id: result.client_operation_id,
+      };
+      // HTTP 200 was returned to the proxy, never to the browser.
+      await route.abort("failed");
+    };
+    await page.route("**/v1/documents/*/history", dropDurableHistoryAck);
+    await page.locator("#" + kind + "-action").click();
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      const recheck = document.querySelector("#reconcile-action");
+      return status?.textContent?.includes("Undo/Redo outcome unknown") &&
+        status.classList.contains("error") &&
+        document.querySelector("#undo-action")?.disabled === true &&
+        document.querySelector("#redo-action")?.disabled === true &&
+        recheck?.hidden === false && recheck?.disabled === false;
+    }, null, { timeout: 30000 });
+    await page.unroute("**/v1/documents/*/history", dropDurableHistoryAck);
+    if (!acceptedHistory || proxiedHistoryPosts !== 1 ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1) {
+      throw new Error(kind + " ACK-loss test produced missing/duplicate durable history");
+    }
+
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+Shift+z");
+    await page.keyboard.press("Control+y");
+    const blockedTarget = await chooseRealMoveTarget(ackLossDoc);
+    if (blockedTarget) {
+      await page.mouse.move(blockedTarget.start.x, blockedTarget.start.y);
+      await page.mouse.down({ button: "left" });
+      await page.mouse.move(blockedTarget.end.x, blockedTarget.end.y, { steps: 4 });
+      await page.mouse.up({ button: "left" });
+    }
+    if (countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1 ||
+        countRequests("POST", ackLossCommitPath) !== movePostsBefore) {
+      throw new Error(kind + " unknown outcome leaked another mutation POST");
+    }
+
+    // An unavailable /current cannot release the history-unknown fence.
+    let failedCurrentRechecks = 0;
+    const denyHistoryCurrent = async route => {
+      if (decodeURIComponent(new URL(route.request().url()).pathname) ===
+          "/v1/documents/" + ackLossDoc + "/current") {
+        failedCurrentRechecks += 1;
+        await route.abort("failed");
+      } else {
+        await route.continue();
+      }
+    };
+    await page.route("**/v1/documents/*/current", denyHistoryCurrent);
+    const attemptedRecheck = page.waitForRequest(request =>
+      request.method() === "GET" &&
+      decodeURIComponent(new URL(request.url()).pathname) ===
+        "/v1/documents/" + ackLossDoc + "/current",
+    { timeout: 30000 });
+    await page.locator("#reconcile-action").click();
+    await attemptedRecheck;
+    await page.waitForFunction(() =>
+      document.querySelector("#status")?.textContent?.includes("Undo/Redo outcome unknown") &&
+      document.querySelector("#reconcile-action")?.disabled === false &&
+      document.querySelector("#undo-action")?.disabled === true &&
+      document.querySelector("#redo-action")?.disabled === true,
+    null, { timeout: 30000 });
+    await page.unroute("**/v1/documents/*/current", denyHistoryCurrent);
+    if (!failedCurrentRechecks ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1) {
+      throw new Error(kind + " failed recheck was not fail-closed");
+    }
+
+    await page.locator("#reconcile-action").click();
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      return status?.textContent?.includes("Server history synchronized") &&
+        document.querySelector("#reconcile-action")?.hidden === true &&
+        document.querySelector("#undo-action")?.disabled === false &&
+        document.querySelector("#redo-action")?.disabled === false;
+    }, null, { timeout: 30000 });
+    const recoveredCurrent = await currentDocumentReceipt(ackLossDoc);
+    const recoveredNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+    const expectedBounds = kind === "undo"
+      ? ackLossTarget.before_bounds : ackLossNode.bounds;
+    if (recoveredCurrent.status !== 200 ||
+        recoveredCurrent.revision_id !== acceptedHistory.revision_id ||
+        recoveredNode.revision_id !== acceptedHistory.revision_id ||
+        recoveredNode.bounds?.x !== expectedBounds.x ||
+        recoveredNode.bounds?.y !== expectedBounds.y ||
+        (recoveredNode.bounds?.x === beforeHistoryNode.bounds?.x &&
+         recoveredNode.bounds?.y === beforeHistoryNode.bounds?.y) ||
+        countRequests("POST", ackLossHistoryPath) !== historyPostsBefore + 1 ||
+        countRequests("POST", ackLossCommitPath) !== movePostsBefore) {
+      throw new Error(kind + " lost ACK did not recover the exact new history geometry");
+    }
+    lostHistoryAckEvidence.push({
+      kind,
+      genuine_server_accepted_200_before_browser_ack_loss: true,
+      exact_client_operation_preserved: true,
+      no_duplicate_history_or_move_posts: true,
+      failed_recheck_kept_mutations_locked: true,
+      exact_current_and_reader_reconciled: true,
+      original_ack_claim: false,
+    });
+  }
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -381,12 +1163,30 @@ try {
     real_project_genesis_and_page_reload: true,
     reader_scene_reached_browser_paint: true,
     real_browser_pointer_move_node: true,
+    browser_source_neutral_boundary_claim: true,
+    browser_source_neutral_boundary: sourceNeutralBoundary,
+    oversized_upload_admission_claim: true,
+    oversized_upload_admission: oversizedAdmission,
     initial_editor_paint: initialPaint,
+    project_home_catalog_claim: true,
+    project_rename_claim: true,
+    project_rename: { project_id: homeReceipt.project_id, metadata_version: renamed.receipt.metadata_version, catalog_verified_after_reload: true },
+    project_home: safeHomeReceipt,
+    project_home_editor_paint: homeOpenedPaint,
     reloaded_editor_paint: reopenedPaint,
     moved_editor_paint: movedPaint,
     edited_editor_paint: editedPaint,
+    pending_move_history_fence_claim: true,
+    lost_commit_ack_fence_claim: true,
+    lost_commit_ack_fence: lostCommitAckEvidence,
+    lost_history_ack_fence_claim: true,
+    lost_history_ack_fence: lostHistoryAckEvidence,
     real_move_commit: true,
     move_commit: moveCommit,
+    malformed_source_rejection_claim: true,
+    malformed_source_rejection: malformedSource,
+    hostile_cfb_matrix_claim: true,
+    hostile_cfb_matrix: hostileCfbMatrix,
     server_restart_reopen_claim: false,
     storage_provider: "filesystem",
     s3_claim: false,
@@ -399,6 +1199,13 @@ try {
     steps: calls.map(call => call.method + " " + call.path),
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
   };
+  // Keep customer/source-derived labels out of persisted acceptance telemetry.
+  // The authenticated owner can see the title, but CI receipts must not echo it.
+  const retained = JSON.stringify(receipt);
+  if (retained.includes("SampleNewsletter.pub") ||
+      retained.includes("TruncatedNewsletter.pub")) {
+    throw new Error("source filename leaked into acceptance telemetry");
+  }
   await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n");
   process.stdout.write(JSON.stringify(receipt) + "\n");
 } finally {

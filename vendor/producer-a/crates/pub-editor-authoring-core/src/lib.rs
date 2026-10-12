@@ -7,6 +7,7 @@ mod append_blank_page_v1;
 mod authored_page_identity_v1;
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
+mod authored_stack_set_reorder_v1;
 mod create_line_runtime_v1;
 mod create_shape_runtime_v1;
 mod create_table_runtime_v1;
@@ -39,6 +40,11 @@ pub use authored_stack_runtime_v1::{
     apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
     page_order_state_id_v1, plan_page_order_transition_v1, plan_reorder_authored_stack_v1,
     qualified_page_order_v1,
+};
+pub use authored_stack_set_reorder_v1::{
+    AUTHORED_STACK_SET_REORDER_PROTOCOL_V1, AuthoredStackSetReorderErrorV1,
+    AuthoredStackSetReorderTransitionV1, apply_authored_stack_set_reorder_forward_v1,
+    apply_authored_stack_set_reorder_inverse_v1, plan_reorder_authored_stack_set_v1,
 };
 pub use create_line_runtime_v1::{
     AuthoredLineRuntimeV1, CreateLineRuntimeValidationError, LineGeometryV1, PointEmuV1,

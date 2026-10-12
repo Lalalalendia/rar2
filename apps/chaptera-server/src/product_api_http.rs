@@ -6,8 +6,9 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -19,7 +20,9 @@ use chaptera_cdm_model::{
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
-use pub_editor::{EditOperation, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
+use pub_editor::{
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::{Deserialize, Serialize};
@@ -31,21 +34,33 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+        ProductReplayWorkerError,
+    },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
-        BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
-        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorRevisionEventV1,
+        BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
+        EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
+        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, decode_editor_revision_event_v1,
-        encode_editor_revision_event_v1, project_sha256,
+        RevisionMaterializerError, append_event_operation, decode_editor_history_event_v1,
+        decode_editor_revision_event_v1, encode_editor_history_event_v1,
+        encode_editor_revision_event_v1, project_sha256, undo_event_operation,
     },
+    safe_preview_scene::{WorkerSafePreviewSamplesV1, collect_worker_preview_samples},
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
-    source_baseline::{SourceBaselineError, derive_commit_revision_identities},
+    source_baseline::{
+        SourceBaselineError, SourceBaselineProducerConfig, derive_authoring_state_identity,
+        derive_commit_revision_identities, derive_history_revision_identities,
+    },
     sqlite_store::{RevisionEdge, RevisionIdentityBinding, SqliteRevisionStore},
 };
 
 pub const COMMIT_REQUEST_V1: &str = "chaptera.commit-request.v1";
 pub const COMMIT_ACCEPTED_V1: &str = "chaptera.commit-accepted.v1";
+pub const HISTORY_TRANSITION_INTENT_V1: &str = "chaptera.history-transition-intent.v1";
+pub const HISTORY_TRANSITION_ACCEPTED_V1: &str = "chaptera.history-transition-accepted.v1";
 pub const CURRENT_DOCUMENT_V1: &str = "chaptera.current-document.v1";
 
 #[derive(Clone)]
@@ -56,6 +71,7 @@ pub struct ProductApiHttpState {
     revisions: SqliteRevisionStore,
     committer: SqliteAuthorizedRevisionCommitter,
     materializer: Arc<ExactRevisionMaterializer>,
+    isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
 impl ProductApiHttpState {
@@ -90,11 +106,49 @@ impl ProductApiHttpState {
             revisions,
             committer,
             materializer,
+            isolated_replay: None,
         })
+    }
+
+    /// Production must configure this at startup; tests using an injected
+    /// in-process source loader retain their existing isolated test scope.
+    pub fn with_isolated_replay(
+        mut self,
+        config: SourceBaselineProducerConfig,
+    ) -> Result<Self, ProductReplayWorkerError> {
+        let worker = IsolatedProductReplayProducer::new(config)?;
+        let materializer =
+            Arc::get_mut(&mut self.materializer).ok_or(ProductReplayWorkerError {
+                code: "product_replay_config_invalid",
+                message: "production materializer is shared before sandbox wiring",
+            })?;
+        // Fail closed: no host PUB parsing is permitted while canonical
+        // baselines or historical revisions are being materialized.
+        materializer.set_isolated_replay(worker.clone());
+        self.isolated_replay = Some(worker);
+        Ok(self)
     }
 }
 
+/// Production route composition must never permit the injected test-only
+/// in-process PUB parser fallback. Fail at router construction, not after a
+/// customer document request reaches any handler.
 pub fn router(state: ProductApiHttpState) -> Router {
+    assert!(
+        state.isolated_replay.is_some(),
+        "Product API requires an isolated PUB replay worker before HTTP routing"
+    );
+    product_router_routes(state)
+}
+
+#[cfg(test)]
+fn unisolated_unit_test_router(state: ProductApiHttpState) -> Router {
+    // Existing manually seeded test states deliberately exercise canonical
+    // non-sandbox control semantics. This helper does not exist in releases.
+    product_router_routes(state)
+}
+
+fn product_router_routes(state: ProductApiHttpState) -> Router {
     Router::new()
         .route("/v1/documents/{document_id}/current", get(current_document))
         .route(
@@ -102,7 +156,20 @@ pub fn router(state: ProductApiHttpState) -> Router {
             get(reader_scene),
         )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
+        .route(
+            "/v1/documents/{document_id}/history",
+            post(commit_history_transition),
+        )
         .with_state(state)
+        .layer(middleware::from_fn(private_document_response))
+}
+
+async fn private_document_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +203,41 @@ struct MoveNodeToV1 {
     node_id: String,
     x_emu: i64,
     y_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryTransitionRequestV1 {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: HistoryTransitionCommandV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryTransitionCommandV1 {
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryTransitionAcceptedResponse {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    state_id: String,
+    client_operation_id: String,
+    transition_kind: String,
+    canonical_operation: EditOperation,
+    project_schema_version: String,
+    canonical_revision_schema_version: String,
+    canonical_authoring_revision_id: String,
+    replayed: bool,
+    scene_refresh: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,28 +301,43 @@ async fn current_document(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
-        ProductApiError::internal(
-            "source_hash_invalid",
-            "durable source authority contains an invalid SHA-256 identity",
-        )
-    })?;
-    let mut session =
-        open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+    let authoring_graph = if let Some(worker) = &state.isolated_replay {
+        worker
+            .project_authoring_graph(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+            )
+            .await
+            .map_err(|error| ProductApiError::internal(error.code, error.message))?
+    } else {
+        // Test-only legacy producer when the HTTP state is manually injected.
+        // Configured production routes always use the isolated replay worker.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
             ProductApiError::internal(
-                "editor_source_unsupported",
-                format!("canonical editor could not open durable source: {error}"),
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-    session
-        .apply_project(&materialized.receipt.project)
-        .map_err(|error| {
-            ProductApiError::internal(
-                "editor_replay_failed",
-                format!("canonical editor could not replay exact current revision: {error}"),
-            )
-        })?;
-    let authoring_graph = session.graph().clone();
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    format!("canonical editor could not open durable source: {error}"),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    format!("canonical editor could not replay exact current revision: {error}"),
+                )
+            })?;
+        session.graph().clone()
+    };
     let receipt = materialized.receipt;
 
     Ok(Json(CurrentDocumentResponse {
@@ -241,7 +358,7 @@ async fn reader_scene(
     Path(document_id): Path<String>,
     headers: HeaderMap,
     jar: CookieJar,
-) -> Result<Json<ReaderSceneV1>, ProductApiError> {
+) -> Result<Json<serde_json::Value>, ProductApiError> {
     let principal = state
         .auth
         .authenticate_read_request(&headers, &jar)
@@ -274,44 +391,102 @@ async fn reader_scene(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let mut bundle = open_pub_bundle(
-        &materialized.source_bytes,
-        viewer_geometry_environment_v0_1(),
-    )
-    .map_err(|error| {
-        ProductApiError::unprocessable(
-            "reader_scene_open_failed",
-            format!("source-neutral Viewer could not open durable PUB source: {error}"),
-        )
-    })?;
+    if let Some(worker) = &state.isolated_replay {
+        // The authorized source/revision is selected by the server, not by
+        // a browser-supplied worker path or revision. No in-process fallback.
+        let scene = worker
+            .project_reader_scene(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+                &IsolatedReaderSceneIntentV1 {
+                    revision_id: head.revision_id.clone(),
+                    baseline_revision_id: source.baseline_revision_id.clone(),
+                },
+            )
+            .await
+            .map_err(|error| ProductApiError::internal(error.code, error.message))?;
+        return Ok(Json(scene));
+    }
 
-    if head.revision_id != source.baseline_revision_id {
-        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
+    // Injected test-only Product API state uses the canonical projection
+    // without launching a Linux worker. Production always configures one.
+    let scene = project_reader_scene_from_exact_source(
+        document_id,
+        source.source_sha256,
+        head.revision_id,
+        &source.baseline_revision_id,
+        &materialized.source_bytes,
+        &materialized.receipt.project,
+    )?;
+    Ok(Json(serde_json::to_value(scene).map_err(|_| {
+        ProductApiError::internal(
+            "reader_scene_projection_failed",
+            "Reader scene could not be serialized",
+        )
+    })?))
+}
+
+fn project_reader_scene_from_exact_source(
+    document_id: String,
+    source_sha256: String,
+    revision_id: String,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+) -> Result<ReaderSceneV1, ProductApiError> {
+    project_reader_scene_with_worker_samples(
+        document_id,
+        source_sha256,
+        revision_id,
+        baseline_revision_id,
+        source_bytes,
+        project,
+        None,
+    )
+}
+
+fn project_reader_scene_with_worker_samples(
+    document_id: String,
+    source_sha256: String,
+    revision_id: String,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+    preview_samples: Option<&mut Vec<WorkerSafePreviewSamplesV1>>,
+) -> Result<ReaderSceneV1, ProductApiError> {
+    let mut bundle =
+        open_pub_bundle(source_bytes, viewer_geometry_environment_v0_1()).map_err(|_| {
+            ProductApiError::unprocessable(
+                "reader_scene_open_failed",
+                "source-neutral Viewer could not open this PUB source",
+            )
+        })?;
+
+    if revision_id != baseline_revision_id {
+        let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
             ProductApiError::internal(
                 "source_hash_invalid",
                 "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_source_unsupported",
-                    format!(
-                        "canonical editor could not open durable source for scene replay: {error}"
-                    ),
-                )
-            })?;
-        session
-            .apply_project(&materialized.receipt.project)
-            .map_err(|error| {
-                ProductApiError::internal(
-                    "reader_scene_editor_replay_failed",
-                    format!("canonical editor could not replay exact scene revision: {error}"),
-                )
-            })?;
+        let mut session = open_mature_0x2c_editor(source_bytes, source_hash).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_source_unsupported",
+                format!("canonical editor could not open durable source for scene replay: {error}"),
+            )
+        })?;
+        session.apply_project(project).map_err(|error| {
+            ProductApiError::internal(
+                "reader_scene_editor_replay_failed",
+                format!("canonical editor could not replay exact scene revision: {error}"),
+            )
+        })?;
 
         let mut moved_node_ids = Vec::new();
-        for operation in &materialized.receipt.project.operations {
+        for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
                 _ => {
@@ -383,8 +558,8 @@ async fn reader_scene(
 
     let scene = from_viewer_geometry(
         document_id,
-        source.source_sha256,
-        head.revision_id,
+        source_sha256,
+        revision_id,
         &bundle.geometry,
         &bundle.source_page_paint_orders,
     )
@@ -395,7 +570,57 @@ async fn reader_scene(
         )
     })?;
 
-    Ok(Json(scene))
+    // Only the syscall-confined worker may decode immutable PUB image bytes.
+    // The server receives decoded samples, not original PNG/JPEG containers.
+    if let Some(preview_samples) = preview_samples {
+        let image_sources = bundle.geometry.images.iter().filter_map(|image| {
+            let resource_id = serde_json::to_value(image.resource_id)
+                .ok()?
+                .as_str()?
+                .to_owned();
+            Some((resource_id, image.mime.as_str(), image.bytes.as_slice()))
+        });
+        let decorative_sources = bundle
+            .geometry
+            .decorative_border_resources
+            .iter()
+            .filter_map(|image| {
+                let resource_id = serde_json::to_value(image.resource_id)
+                    .ok()?
+                    .as_str()?
+                    .to_owned();
+                Some((resource_id, image.mime.as_str(), image.bytes.as_slice()))
+            });
+        *preview_samples = collect_worker_preview_samples(image_sources.chain(decorative_sources));
+    }
+
+    Ok(scene)
+}
+
+/// Called only inside the already confined product worker after post-read
+/// filesystem seccomp is installed. This retains exactly the same Viewer
+/// scene projection as the injected Product HTTP tests.
+pub(crate) fn render_reader_scene_in_isolated_worker(
+    document_id: &str,
+    source_sha256: &str,
+    revision_id: &str,
+    baseline_revision_id: &str,
+    source_bytes: &[u8],
+    project: &EditorProject,
+) -> Result<(serde_json::Value, Vec<WorkerSafePreviewSamplesV1>), &'static str> {
+    let mut preview_samples = Vec::new();
+    let scene = project_reader_scene_with_worker_samples(
+        document_id.to_owned(),
+        source_sha256.to_owned(),
+        revision_id.to_owned(),
+        baseline_revision_id,
+        source_bytes,
+        project,
+        Some(&mut preview_samples),
+    )
+    .map_err(|_| "reader_scene_projection_failed")?;
+    let value = serde_json::to_value(scene).map_err(|_| "reader_scene_projection_failed")?;
+    Ok((value, preview_samples))
 }
 
 async fn commit_move_node(
@@ -417,13 +642,6 @@ async fn commit_move_node(
         .resolve_by_document_id(&document_id)
         .await
         .map_err(ProductApiError::Source)?;
-    if request.source_hash != source.source_sha256 {
-        return Err(ProductApiError::bad_request(
-            "source_hash_mismatch",
-            "commit request source_hash differs from durable source authority",
-        ));
-    }
-
     let request_hash = request_hash(&request)?;
     let now = now_ms()?;
 
@@ -443,6 +661,14 @@ async fn commit_move_node(
         return accepted_from_receipt(&state, &source, existing, true).await;
     }
 
+    // Check current geometry authorization before source identity comparison.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "commit request source_hash differs from durable source authority",
+        ));
+    }
+
     let head = current_head(&state.revisions, &source).await?;
     if request.base_revision_id != head.revision_id {
         return Err(ProductApiError::conflict(
@@ -457,55 +683,84 @@ async fn commit_move_node(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
-        ProductApiError::internal(
-            "source_hash_invalid",
-            "durable source authority contains an invalid SHA-256 identity",
-        )
-    })?;
-    let mut session =
-        open_mature_0x2c_editor(&materialized.source_bytes, source_hash).map_err(|error| {
+    let (operation, resulting_project) = if let Some(worker) = &state.isolated_replay {
+        // Production executes canonical PUB replay and mutation inside the
+        // sandbox. AuthN/AuthZ, exact revision head and durable SQLite commit
+        // remain authoritative in this main server process.
+        worker
+            .move_node_to(
+                &document_id,
+                &source.source_sha256,
+                &materialized.source_bytes,
+                &materialized.receipt.project,
+                &materialized.receipt.project_sha256,
+                &IsolatedMoveNodeIntentV1 {
+                    node_id: request.command.node_id.clone(),
+                    x_emu: request.command.x_emu,
+                    y_emu: request.command.y_emu,
+                },
+            )
+            .await
+            .map_err(|error| match error.code {
+                "product_move_node_invalid" | "product_move_node_rejected" => {
+                    ProductApiError::bad_request(error.code, error.message)
+                }
+                _ => ProductApiError::internal(error.code, error.message),
+            })?
+    } else {
+        // The in-process path remains only for manually injected unit tests.
+        let source_hash = Sha256Digest::from_str(&source.source_sha256).map_err(|_| {
             ProductApiError::internal(
-                "editor_source_unsupported",
-                format!("canonical editor could not open durable source: {error}"),
+                "source_hash_invalid",
+                "durable source authority contains an invalid SHA-256 identity",
             )
         })?;
-    session
-        .apply_project(&materialized.receipt.project)
-        .map_err(|error| {
-            ProductApiError::internal(
-                "editor_replay_failed",
-                format!("canonical editor could not replay exact base revision: {error}"),
-            )
-        })?;
-
-    let node_id: NodeId =
-        serde_json::from_value(serde_json::Value::String(request.command.node_id.clone()))
-            .map_err(|_| {
-                ProductApiError::bad_request("node_id_invalid", "node_id is not canonical")
+        let mut session = open_mature_0x2c_editor(&materialized.source_bytes, source_hash)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_source_unsupported",
+                    format!("canonical editor could not open durable source: {error}"),
+                )
+            })?;
+        session
+            .apply_project(&materialized.receipt.project)
+            .map_err(|error| {
+                ProductApiError::internal(
+                    "editor_replay_failed",
+                    format!("canonical editor could not replay exact base revision: {error}"),
+                )
             })?;
 
-    let operation = session
-        .move_node_to(
-            node_id,
-            LengthEmu::new(request.command.x_emu),
-            LengthEmu::new(request.command.y_emu),
-        )
-        .map_err(|error| {
-            ProductApiError::bad_request(
-                "move_node_rejected",
-                format!("canonical MoveNode rejected the intent: {error}"),
-            )
-        })?;
-    if !matches!(operation, EditOperation::MoveNode { .. }) {
-        return Err(ProductApiError::internal(
-            "move_node_operation_invalid",
-            "canonical editor returned a non-MoveNode operation",
-        ));
-    }
+        let node_id: NodeId =
+            serde_json::from_value(serde_json::Value::String(request.command.node_id.clone()))
+                .map_err(|_| {
+                    ProductApiError::bad_request("node_id_invalid", "node_id is not canonical")
+                })?;
 
-    let resulting_project =
-        crate::revision_materializer::cloud_revision_project(&session.project());
+        let operation = session
+            .move_node_to(
+                node_id,
+                LengthEmu::new(request.command.x_emu),
+                LengthEmu::new(request.command.y_emu),
+            )
+            .map_err(|error| {
+                ProductApiError::bad_request(
+                    "move_node_rejected",
+                    format!("canonical MoveNode rejected the intent: {error}"),
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::internal(
+                "move_node_operation_invalid",
+                "canonical editor returned a non-MoveNode operation",
+            ));
+        }
+
+        let resulting_project =
+            crate::revision_materializer::cloud_revision_project(&session.project());
+        (operation, resulting_project)
+    };
+
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
@@ -592,6 +847,228 @@ async fn commit_move_node(
     accepted_from_receipt(&state, &source, committed, false).await
 }
 
+async fn commit_history_transition(
+    State(state): State<ProductApiHttpState>,
+    Path(document_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<HistoryTransitionRequestV1>,
+) -> Result<Json<HistoryTransitionAcceptedResponse>, ProductApiError> {
+    validate_history_request(&request, &document_id)?;
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(ProductApiError::Auth)?;
+    let source = state
+        .source
+        .resolve_by_document_id(&document_id)
+        .await
+        .map_err(ProductApiError::Source)?;
+    let request_hash = request_hash(&request)?;
+    let now = now_ms()?;
+
+    if let Some(existing) = state
+        .committer
+        .reconcile_geometry_revision(
+            &source.tenant_id,
+            &document_id,
+            &principal.principal_id,
+            &request.client_operation_id,
+            &request_hash,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?
+    {
+        return accepted_history_from_receipt(&state, &source, existing, true).await;
+    }
+
+    // Reconcile through the authoritative committer first, so a foreign
+    // principal cannot learn the document source identity from this endpoint.
+    if request.source_hash != source.source_sha256 {
+        return Err(ProductApiError::bad_request(
+            "source_hash_mismatch",
+            "history request source_hash differs from durable source authority",
+        ));
+    }
+
+    let head = current_head(&state.revisions, &source).await?;
+    if request.base_revision_id != head.revision_id {
+        return Err(ProductApiError::conflict(
+            "stale_revision",
+            "base_revision_id is no longer the current RevisionStream head",
+        ));
+    }
+
+    let materialized = state
+        .materializer
+        .materialize_state(&source.tenant_id, &document_id, &head.revision_id)
+        .await
+        .map_err(ProductApiError::Materializer)?;
+    let base_state = derive_authoring_state_identity(
+        &document_id,
+        &source.source_sha256,
+        &materialized.receipt.project.schema_version,
+        &materialized.receipt.project,
+    )
+    .map_err(ProductApiError::Baseline)?;
+
+    // The source and predecessor project have already been validated by the
+    // isolated worker. Never reopen a PUB in the Axum HTTP process.
+    //
+    // One-step Redo is only allowed immediately after an Undo history edge.
+    // We reconstruct the exact canonical operation from that immutable edge;
+    // no browser-supplied inverse command or ephemeral redo stack is trusted.
+    let transition_kind = request.command.kind.as_str();
+    let (operation, resulting_project) = if transition_kind == "undo" {
+        let operation = materialized
+            .receipt
+            .project
+            .operations
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "undo_rejected",
+                    "the current revision has no undoable canonical operation",
+                )
+            })?;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "undo_operation_unsupported",
+                "bounded history admits Undo only for the latest MoveNode",
+            ));
+        }
+        let resulting_project =
+            undo_event_operation(materialized.receipt.project.clone(), &operation)
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    } else {
+        let edges = state
+            .revisions
+            .load_document_edges(&document_id)
+            .await
+            .map_err(ProductApiError::Store)?;
+        let last = edges
+            .last()
+            .filter(|edge| {
+                edge.child_revision == head.revision_id
+                    && edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION
+            })
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "redo_unavailable",
+                    "redo requires an immediately preceding canonical Undo transition",
+                )
+            })?;
+        let undone = decode_editor_history_event_v1(last).map_err(ProductApiError::Materializer)?;
+        if undone.transition_kind != "undo" || undone.source_sha256 != source.source_sha256 {
+            return Err(ProductApiError::conflict(
+                "redo_unavailable",
+                "redo requires a source-bound immediately preceding Undo transition",
+            ));
+        }
+        let operation = undone.operation;
+        if !matches!(operation, EditOperation::MoveNode { .. }) {
+            return Err(ProductApiError::conflict(
+                "redo_operation_unsupported",
+                "bounded Redo admits only the immediately preceding MoveNode",
+            ));
+        }
+        let resulting_project =
+            append_event_operation(materialized.receipt.project.clone(), operation.clone())
+                .map_err(ProductApiError::Materializer)?;
+        (operation, resulting_project)
+    };
+    let before_project_sha256 = materialized.receipt.project_sha256.clone();
+    let after_project_sha256 =
+        project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
+    let identities = derive_history_revision_identities(
+        &document_id,
+        &source.source_sha256,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &head.revision_id,
+        &base_state.state_id,
+        transition_kind,
+    )
+    .map_err(ProductApiError::Baseline)?;
+
+    let parent_canonical: AuthoringRevisionIdV1 = materialized
+        .receipt
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+            ProductApiError::internal(
+                "canonical_parent_revision_invalid",
+                "materialized parent canonical revision identity is invalid",
+            )
+        })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "canonical_child_revision_failed",
+                    "canonical Undo child AuthoringRevisionId derivation failed",
+                )
+            })?
+            .to_string();
+
+    let event = EditorHistoryEventV1 {
+        schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: source.source_sha256.clone(),
+        transition_kind: transition_kind.to_owned(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        base_state_id: base_state.state_id,
+        resulting_state_id: identities.state_id.clone(),
+        authoring_root_hash: None,
+        operation: operation.clone(),
+    };
+    let canonical_event =
+        encode_editor_history_event_v1(&event).map_err(ProductApiError::Materializer)?;
+    let child_cursor = head.cursor.checked_add(1).ok_or_else(|| {
+        ProductApiError::internal("revision_cursor_overflow", "revision cursor overflow")
+    })?;
+
+    let edge = RevisionEdge {
+        document_id: document_id.clone(),
+        parent_revision: head.revision_id.clone(),
+        parent_cursor: head.cursor,
+        operation_id: request.client_operation_id.clone(),
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: now,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: document_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: now,
+    };
+    let committed = state
+        .committer
+        .commit_geometry_revision(
+            &source.tenant_id,
+            &principal.principal_id,
+            edge,
+            binding,
+            now,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?;
+
+    accepted_history_from_receipt(&state, &source, committed, false).await
+}
+
 async fn current_head(
     revisions: &SqliteRevisionStore,
     source: &crate::revision_materializer::AuthorizedDocumentSource,
@@ -664,6 +1141,89 @@ async fn accepted_from_receipt(
     }))
 }
 
+async fn accepted_history_from_receipt(
+    state: &ProductApiHttpState,
+    source: &crate::revision_materializer::AuthorizedDocumentSource,
+    receipt: crate::authz_runtime::AuthorizedRevisionCommitReceipt,
+    replayed_hint: bool,
+) -> Result<Json<HistoryTransitionAcceptedResponse>, ProductApiError> {
+    let event =
+        decode_editor_history_event_v1(&receipt.edge).map_err(ProductApiError::Materializer)?;
+    let child = state
+        .materializer
+        .materialize(
+            &source.tenant_id,
+            &receipt.edge.document_id,
+            &receipt.edge.child_revision,
+        )
+        .await
+        .map_err(ProductApiError::Materializer)?;
+    let identities = derive_history_revision_identities(
+        &receipt.edge.document_id,
+        &event.source_sha256,
+        &child.project.schema_version,
+        &child.project,
+        &receipt.edge.parent_revision,
+        &event.base_state_id,
+        &event.transition_kind,
+    )
+    .map_err(ProductApiError::Baseline)?;
+    if identities.service_revision_id != receipt.edge.child_revision
+        || identities.state_id != event.resulting_state_id
+    {
+        return Err(ProductApiError::internal(
+            "accepted_history_identity_mismatch",
+            "durable accepted history edge differs from the canonical history-transition law",
+        ));
+    }
+
+    Ok(Json(HistoryTransitionAcceptedResponse {
+        protocol_version: HISTORY_TRANSITION_ACCEPTED_V1,
+        document_id: receipt.edge.document_id.clone(),
+        source_hash: event.source_sha256,
+        base_revision_id: receipt.edge.parent_revision,
+        revision_id: receipt.edge.child_revision,
+        state_id: identities.state_id,
+        client_operation_id: receipt.edge.operation_id,
+        transition_kind: event.transition_kind,
+        canonical_operation: event.operation,
+        project_schema_version: child.project.schema_version,
+        canonical_revision_schema_version: receipt.binding.canonical_schema_version,
+        canonical_authoring_revision_id: receipt.binding.canonical_revision_id,
+        replayed: replayed_hint || receipt.replayed,
+        scene_refresh: "full_snapshot",
+    }))
+}
+
+fn validate_history_request(
+    request: &HistoryTransitionRequestV1,
+    path_document_id: &str,
+) -> Result<(), ProductApiError> {
+    if request.protocol_version != HISTORY_TRANSITION_INTENT_V1 {
+        return Err(ProductApiError::bad_request(
+            "protocol_version_invalid",
+            "chaptera.history-transition-intent.v1 is required",
+        ));
+    }
+    if request.document_id != path_document_id {
+        return Err(ProductApiError::bad_request(
+            "document_id_mismatch",
+            "path document_id differs from history request document_id",
+        ));
+    }
+    if !matches!(request.command.kind.as_str(), "undo" | "redo") {
+        return Err(ProductApiError::bad_request(
+            "history_transition_unsupported",
+            "this Cloud history slice admits bounded undo or redo only",
+        ));
+    }
+    require_ident(&request.document_id, "document_id")?;
+    require_ident(&request.client_operation_id, "client_operation_id")?;
+    require_hash(&request.source_hash, "source_hash")?;
+    require_revision_id(&request.base_revision_id)?;
+    Ok(())
+}
+
 fn validate_request(
     request: &CommitRequestV1,
     path_document_id: &str,
@@ -693,7 +1253,7 @@ fn validate_request(
     Ok(())
 }
 
-fn request_hash(request: &CommitRequestV1) -> Result<String, ProductApiError> {
+fn request_hash<T: Serialize>(request: &T) -> Result<String, ProductApiError> {
     let bytes = canonical_revision_json_v1(request).map_err(|_| {
         ProductApiError::internal(
             "request_hash_failed",
@@ -801,6 +1361,14 @@ impl ProductApiError {
     }
 }
 
+fn public_product_error_message(status: StatusCode, original: &str) -> &str {
+    if status.is_server_error() {
+        "internal server error"
+    } else {
+        original
+    }
+}
+
 impl IntoResponse for ProductApiError {
     fn into_response(self) -> Response {
         match self {
@@ -813,48 +1381,64 @@ impl IntoResponse for ProductApiError {
                     }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
+                let public_message = public_product_error_message(status, &error.message);
                 (
                     status,
-                    Json(json!({"error": {"code": error.code, "message": error.message}})),
+                    Json(json!({"error": {"code": error.code, "message": public_message}})),
                 )
                     .into_response()
             }
             Self::Source(error) => {
-                let status = if error.code == "document_source_not_found" {
-                    StatusCode::NOT_FOUND
+                // Source membership is not a browser authorization oracle.
+                // A missing source and a document with no visible grant must
+                // have the same public denial, without disclosing tenant data.
+                if error.code == "document_source_not_found" {
+                    (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": {
+                            "code": "grant_missing",
+                            "message": "principal has no grant for the document"
+                        }})),
+                    )
+                        .into_response()
                 } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                };
-                (
-                    status,
-                    Json(json!({"error": {"code": error.code, "message": error.message}})),
-                )
-                    .into_response()
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": {
+                            "code": error.code,
+                            "message": "internal server error"
+                        }})),
+                    )
+                        .into_response()
+                }
             }
             Self::Materializer(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Store(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Baseline(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": {"code": error.code, "message": error.message}})),
+                Json(json!({"error": {"code": error.code, "message": "internal server error"}})),
             )
                 .into_response(),
             Self::Http {
                 status,
                 code,
                 message,
-            } => (
-                status,
-                Json(json!({"error": {"code": code, "message": message}})),
-            )
-                .into_response(),
+            } => {
+                let public_message = public_product_error_message(status, &message);
+                (
+                    status,
+                    Json(json!({"error": {"code": code, "message": public_message}})),
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -1111,6 +1695,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn internal_failures_never_echo_parser_or_storage_diagnostics() {
+        let canary = "private-pub-text-or-provider-secret";
+        let errors = [
+            ProductApiError::internal("editor_open_failed", canary),
+            ProductApiError::Source(SourceAuthorityError {
+                code: "sqlite_source_error",
+                message: canary.to_owned(),
+            }),
+            ProductApiError::Authz(AuthzError {
+                code: "sqlite_authz_error",
+                message: canary.to_owned(),
+            }),
+            ProductApiError::Materializer(RevisionMaterializerError::new("replay_failed", canary)),
+        ];
+        for error in errors {
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = json_body(response).await;
+            assert_eq!(body["error"]["message"], "internal server error");
+            assert!(!body.to_string().contains(canary));
+        }
+
+        let denied = ProductApiError::Authz(AuthzError {
+            code: "grant_missing",
+            message: "document permission missing".into(),
+        })
+        .into_response();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let body = json_body(denied).await;
+        assert_eq!(body["error"]["code"], "grant_missing");
+        assert_eq!(body["error"]["message"], "document permission missing");
+    }
+
+    #[tokio::test]
     async fn http_open_move_retry_stale_restart_and_auth_csrf_are_authoritative() {
         let path = std::env::temp_dir().join(format!(
             "chaptera-product-api-http-{}-{}.sqlite",
@@ -1199,16 +1817,24 @@ mod tests {
             bytes: Arc::new(source_bytes.clone()),
             source_sha256: source_sha256.clone(),
         };
-        let app = router(
-            ProductApiHttpState::with_source_loader(
-                auth,
-                source.clone(),
-                authz.clone(),
-                revisions.clone(),
-                Arc::new(source_loader),
-            )
-            .unwrap(),
+        let manually_seeded_state = ProductApiHttpState::with_source_loader(
+            auth,
+            source.clone(),
+            authz.clone(),
+            revisions.clone(),
+            Arc::new(source_loader),
+        )
+        .unwrap();
+        // The same fully authorized, real-PUB test state MUST NOT be accepted
+        // by the public production router without the isolated replay worker.
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                router(manually_seeded_state.clone())
+            }))
+            .is_err(),
+            "production route must fail closed before any in-process PUB parse"
         );
+        let app = unisolated_unit_test_router(manually_seeded_state);
 
         let unauthorized = app
             .clone()
@@ -1235,6 +1861,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(opened.status(), StatusCode::OK);
+        assert_eq!(opened.headers()[CACHE_CONTROL], "no-store");
         let opened = json_body(opened).await;
         assert_eq!(opened["revision_id"], baseline.service_revision_id);
 
@@ -1250,6 +1877,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reader_scene.status(), StatusCode::OK);
+        assert_eq!(reader_scene.headers()[CACHE_CONTROL], "no-store");
         let reader_scene = json_body(reader_scene).await;
         assert_eq!(
             reader_scene["protocol_version"],
@@ -1481,9 +2109,9 @@ mod tests {
             "https://cloud.example.test",
         )
         .unwrap();
-        let restarted_app = router(
+        let restarted_app = unisolated_unit_test_router(
             ProductApiHttpState::with_source_loader(
-                restarted_auth,
+                restarted_auth.clone(),
                 restarted_source.clone(),
                 restarted_authz.clone(),
                 restarted_revisions.clone(),
@@ -1494,6 +2122,62 @@ mod tests {
             )
             .unwrap(),
         );
+
+        // An otherwise-authorized configured Product API must fail closed
+        // when its sandbox executable is missing. Neither current-document
+        // nor Reader scene may fall back to opening PUB in the Axum process.
+        let fail_closed_app = router(
+            ProductApiHttpState::with_source_loader(
+                restarted_auth,
+                restarted_source.clone(),
+                restarted_authz.clone(),
+                restarted_revisions.clone(),
+                Arc::new(FixtureSourceLoader {
+                    bytes: Arc::new(source_bytes.clone()),
+                    source_sha256: source_sha256.clone(),
+                }),
+            )
+            .unwrap()
+            .with_isolated_replay(SourceBaselineProducerConfig {
+                isolation_python: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/python",
+                ),
+                isolation_harness: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/isolation.py",
+                ),
+                worker_binary: std::path::PathBuf::from(
+                    "/chaptera-security-missing-worker-runtime/chaptera",
+                ),
+                worker_wall_timeout: Duration::from_secs(1),
+                worker_address_space_mb: 256,
+                worker_cpu_seconds: 1,
+                worker_open_files: 16,
+                worker_output_file_mb: 1,
+                temp_root: std::env::temp_dir(),
+            })
+            .unwrap(),
+        );
+        for route in [
+            format!("/v1/documents/{document_id}/current"),
+            format!("/v1/reader/documents/{document_id}/scene"),
+        ] {
+            let failed = fail_closed_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "GET",
+                    &route,
+                    &issued.session_token,
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(failed.headers()[CACHE_CONTROL], "no-store");
+            let failed = json_body(failed).await;
+            assert_eq!(failed["error"]["code"], "product_replay_worker_failed");
+            assert_eq!(failed["error"]["message"], "internal server error");
+        }
 
         // The original OIDC-issued cookie must still work after the original
         // AuthN and revision connections are gone: no in-memory project state
@@ -1593,7 +2277,104 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
-        assert_eq!(json_body(forbidden).await["error"]["code"], "grant_missing");
+        assert_eq!(forbidden.headers()[CACHE_CONTROL], "no-store");
+        // Do not distinguish a missing DocumentId from a real document
+        // invisible to this independently authenticated principal.
+        let guessed_document_id = "document-unknown-privacy-probe";
+        let guessed_current = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/documents/{guessed_document_id}/current"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(guessed_current.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_current.headers()[CACHE_CONTROL], "no-store");
+        let visible_denial = json_body(forbidden).await;
+        assert_eq!(visible_denial["error"]["code"], "grant_missing");
+        assert_eq!(json_body(guessed_current).await, visible_denial);
+
+        let actual_scene_denied = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        let guessed_scene_denied = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{guessed_document_id}/scene"),
+                &other.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(actual_scene_denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_scene_denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(actual_scene_denied.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(guessed_scene_denied.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(
+            json_body(actual_scene_denied).await,
+            json_body(guessed_scene_denied).await
+        );
+
+        let mut denial_receipts = Vec::new();
+        for (index, source_hash) in [source_sha256.clone(), "0".repeat(64)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut attempt = body.clone();
+            attempt["client_operation_id"] = json!(format!("rejected-source-check-{index}"));
+            attempt["source_hash"] = json!(source_hash);
+            let denied = restarted_app
+                .clone()
+                .oneshot(authenticated_request(
+                    "POST",
+                    &format!("/v1/documents/{document_id}/commit"),
+                    &other.session_token,
+                    Some(&other.csrf_token),
+                    Some(attempt),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+            assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+            denial_receipts.push(json_body(denied).await);
+        }
+        assert_eq!(denial_receipts[0], denial_receipts[1]);
+
+        // POST commit must also return the same denial before any source
+        // hash, revision or isolated worker can reveal document membership.
+        let mut guessed_commit = body.clone();
+        guessed_commit["document_id"] = json!(guessed_document_id);
+        guessed_commit["client_operation_id"] = json!("move-guessed-document-privacy");
+        let missing_commit = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{guessed_document_id}/commit"),
+                &other.session_token,
+                Some(&other.csrf_token),
+                Some(guessed_commit),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(missing_commit.status(), StatusCode::FORBIDDEN);
+        assert_eq!(missing_commit.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(json_body(missing_commit).await, denial_receipts[0]);
+
+        assert_eq!(denial_receipts[0]["error"]["code"], "grant_missing");
 
         // A real Viewer grant allows reading the same reopened document but
         // never authorizes a MoveNode mutation. This tests the canonical
@@ -1659,6 +2440,7 @@ mod tests {
             .await
             .unwrap();
         let expired = restarted_app
+            .clone()
             .oneshot(authenticated_request(
                 "GET",
                 &format!("/v1/documents/{document_id}/current"),
@@ -1670,6 +2452,199 @@ mod tests {
             .unwrap();
         assert_eq!(expired.status(), StatusCode::FORBIDDEN);
         assert_eq!(json_body(expired).await["error"]["code"], "grant_expired");
+
+        // Physical HTTP path over pinned Sample3 and freshly reopened SQLite:
+        // Undo is a NEW immutable revision even when the resulting authoring
+        // state returns to exactly the imported baseline geometry.
+        let undo_body = json!({
+            "protocol_version": HISTORY_TRANSITION_INTENT_V1,
+            "document_id": document_id,
+            "source_hash": source_sha256,
+            "base_revision_id": child_revision,
+            "client_operation_id": "undo-sample3-1",
+            "command": { "kind": "undo" }
+        });
+        let undo_no_csrf = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                None,
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(undo_no_csrf.status(), StatusCode::FORBIDDEN);
+        let undone = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(undone.status(), StatusCode::OK);
+        assert_eq!(undone.headers()[CACHE_CONTROL], "no-store");
+        let undone = json_body(undone).await;
+        assert_eq!(undone["protocol_version"], HISTORY_TRANSITION_ACCEPTED_V1);
+        assert_eq!(undone["transition_kind"], "undo");
+        assert_eq!(undone["base_revision_id"], child_revision);
+        let undo_revision = undone["revision_id"].as_str().unwrap().to_owned();
+        assert_ne!(undo_revision, child_revision);
+        assert_ne!(undo_revision, baseline.service_revision_id);
+        assert_eq!(undone["replayed"], false);
+        assert_eq!(undone["scene_refresh"], "full_snapshot");
+
+        let scene_undone = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(scene_undone.status(), StatusCode::OK);
+        let scene_undone = json_body(scene_undone).await;
+        assert_eq!(scene_undone["revision_id"], undo_revision);
+        let restored = scene_undone["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("canonical Undo scene contains the original movable node");
+        assert_eq!(restored["bounds"]["x"], before_x_emu);
+        assert_eq!(restored["bounds"]["y"], before_y_emu);
+
+        let retried_undo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(undo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retried_undo.status(), StatusCode::OK);
+        let retried_undo = json_body(retried_undo).await;
+        assert_eq!(retried_undo["revision_id"], undo_revision);
+        assert_eq!(retried_undo["replayed"], true);
+
+        let mut stale_undo = undo_body.clone();
+        stale_undo["client_operation_id"] = json!("undo-sample3-stale");
+        let stale_undo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(stale_undo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale_undo.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_body(stale_undo).await["error"]["code"],
+            "stale_revision"
+        );
+
+        // A durable Undo carries the original MoveNode operation in its
+        // canonical event. Redo must restore only that exact immediate
+        // operation, yielding a NEW immutable revision after worker replay.
+        let mut redo_body = undo_body;
+        redo_body["base_revision_id"] = json!(undo_revision.clone());
+        redo_body["client_operation_id"] = json!("redo-sample3-1");
+        redo_body["command"]["kind"] = json!("redo");
+        let redone = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(redo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(redone.status(), StatusCode::OK);
+        assert_eq!(redone.headers()[CACHE_CONTROL], "no-store");
+        let redone = json_body(redone).await;
+        assert_eq!(redone["protocol_version"], HISTORY_TRANSITION_ACCEPTED_V1);
+        assert_eq!(redone["transition_kind"], "redo");
+        assert_eq!(redone["base_revision_id"], undo_revision);
+        assert_eq!(redone["replayed"], false);
+        let redo_revision = redone["revision_id"].as_str().unwrap().to_owned();
+        assert_ne!(redo_revision, undo_revision);
+        assert_ne!(redo_revision, child_revision);
+
+        let redone_scene = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(redone_scene.status(), StatusCode::OK);
+        let redone_scene = json_body(redone_scene).await;
+        assert_eq!(redone_scene["revision_id"], redo_revision);
+        let moved_again = redone_scene["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == node_id)
+            .expect("canonical Redo Reader scene contains the moved node");
+        assert_eq!(moved_again["bounds"]["x"], x_emu);
+        assert_eq!(moved_again["bounds"]["y"], y_emu);
+
+        let retried_redo = restarted_app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(redo_body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(retried_redo.status(), StatusCode::OK);
+        let retried_redo = json_body(retried_redo).await;
+        assert_eq!(retried_redo["revision_id"], redo_revision);
+        assert_eq!(retried_redo["replayed"], true);
+
+        // A fresh Redo after a Redo is forbidden; no unpersisted redo stack
+        // may claim to reapply the operation again.
+        let mut invalid_redo = redo_body;
+        invalid_redo["base_revision_id"] = json!(redo_revision);
+        invalid_redo["client_operation_id"] = json!("redo-second-rejected");
+        let rejected = restarted_app
+            .oneshot(authenticated_request(
+                "POST",
+                &format!("/v1/documents/{document_id}/history"),
+                &issued.session_token,
+                Some(&issued.csrf_token),
+                Some(invalid_redo),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_body(rejected).await["error"]["code"],
+            "redo_unavailable"
+        );
 
         restarted_authn.close().await;
         restarted_authz.close().await;

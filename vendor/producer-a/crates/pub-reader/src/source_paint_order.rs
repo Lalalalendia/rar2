@@ -1,3 +1,4 @@
+use super::contents_access::is_page_owned_logo_group;
 use super::*;
 
 pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str = "chaptera.pub-source-page-paint-order.v1";
@@ -106,7 +107,8 @@ pub(super) fn source_page_paint_orders_v1(
         let Some(group_reference) = references.get(&parent_seq) else {
             continue;
         };
-        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
+        let page_logo = is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
+        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) && !page_logo {
             continue;
         }
         let Some(group_parent_seq) = single_parent_seq(group_reference) else {
@@ -126,11 +128,24 @@ pub(super) fn source_page_paint_orders_v1(
             == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             && node.payload.explicit_paint.fill.visible == Some(true)
             && node.payload.explicit_paint.fill.color_rgb.is_some();
+        // Source-backed depth-1 PAGE LOGO ellipses have a proven carrier
+        // order even when their styling still needs visual validation. Do not
+        // broaden the ordinary 0x30 ellipse paint admission here.
+        let page_logo_ellipse =
+            page_logo && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
+        let page_logo_effective_rectangle = page_logo
+            && node.payload.officeart_shape_type
+                == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
+            && node.payload.story_frame.is_none()
+            && node.payload.image_slot.is_none()
+            && node.payload.effective_paint.is_some();
         if !admit_grouped_paint_participant(
             node.payload.story_frame.is_some(),
             node.payload.image_slot.is_some(),
             solid_rectangle,
-        ) {
+        ) && !page_logo_ellipse
+            && !page_logo_effective_rectangle
+        {
             continue;
         }
 
@@ -151,6 +166,22 @@ pub(super) fn source_page_paint_orders_v1(
         if child_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             grouped_invalid_pages.insert(page_id);
             continue;
+        }
+        // A newly materialized LOGO rectangle participates only when its
+        // physical FOPT and resolved effective paint pass the exact same
+        // bounded admission as the materializer. Never infer paint rank from
+        // a generic shape class or from rendered pixels.
+        if page_logo_effective_rectangle && !solid_rectangle {
+            let admitted = node.payload.effective_paint.as_ref().is_some_and(|paint| {
+                super::paint_projection::has_bounded_logo_effective_solid_rectangle(
+                    child_shape,
+                    paint,
+                )
+            });
+            if !admitted {
+                grouped_invalid_pages.insert(page_id);
+                continue;
+            }
         }
 
         grouped_pending.entry(page_id).or_default().push((

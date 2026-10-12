@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Chaptera Cloud — проекты</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/editor/cloud-project-home.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>Chaptera Cloud</strong><span>Мои проекты</span></div>
+    <button id="new-project" type="button">Новый проект</button>
+  </header>
+  <main>
+    <div class="heading">
+      <div class="eyebrow">Рабочее пространство</div>
+      <h1>Проекты</h1>
+      <p id="status" role="status" aria-live="polite">Проверяем авторизацию…</p>
+    </div>
+    <section id="project-list" class="project-grid" aria-label="Список проектов"></section>
+    <section id="empty" class="empty" hidden>
+      <h2>Здесь появятся ваши публикации</h2>
+      <p>Создайте проект из файла Microsoft Publisher PUB.</p>
+    </section>
+  </main>
+  <script type="module" src="/editor/cloud-project-home-v1.mjs"></script>
+</body>
+</html>

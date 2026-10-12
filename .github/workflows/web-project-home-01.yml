@@ -7,6 +7,11 @@ on:
       - "apps/web/project-home-v1.test.mjs"
       - "apps/web/chaptera-cloud-project-catalog-v1.mjs"
       - "apps/web/chaptera-cloud-project-catalog-v1.test.mjs"
+      - "apps/web/cloud-project-home-v1.mjs"
+      - "apps/web/cloud-project-home-v1.test.mjs"
+      - "apps/web/cloud-project-rename-v1.mjs"
+      - "apps/web/cloud-project-rename-v1.test.mjs"
+      - "apps/web/cloud-project-home.html"
       - ".github/workflows/web-project-home-01.yml"
   workflow_dispatch:
 
@@ -30,3 +35,5 @@ jobs:
         run: |
           node --test apps/web/project-home-v1.test.mjs
           node --test apps/web/chaptera-cloud-project-catalog-v1.test.mjs
+          node --test apps/web/cloud-project-home-v1.test.mjs
+          node --test apps/web/cloud-project-rename-v1.test.mjs

@@ -146,6 +146,33 @@ impl JobsRuntime {
         self.publications.close().await;
     }
 
+    /// Check export authority before the HTTP layer probes an exact revision.
+    ///
+    /// This is deliberately separate from the enqueue-time authorization in
+    /// create_export: a caller without a grant must not distinguish a real
+    /// revision ID from an unbound one using the HTTP response.
+    pub async fn authorize_export_before_revision(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        principal_id: &str,
+        client_request_id: &str,
+        now_ms: i64,
+    ) -> Result<(), JobsRuntimeError> {
+        self.authz
+            .authorize(
+                tenant_id,
+                document_id,
+                principal_id,
+                CAP_EXPORT,
+                &format!("export:pre:{client_request_id}"),
+                now_ms,
+            )
+            .await
+            .map_err(authz_error)?;
+        Ok(())
+    }
+
     pub async fn create_export(
         &self,
         request: CreateExportJobRequestV1,
@@ -601,6 +628,34 @@ mod tests {
             operation_id: format!("create:{client}"),
             now_ms: 10,
         }
+    }
+
+    #[tokio::test]
+    async fn export_preflight_denies_unauthorized_identity_before_revision_lookup() {
+        let (runtime, path) = runtime("export-preflight-authz").await;
+        let denied = runtime
+            .authorize_export_before_revision(
+                "tenant:1",
+                "doc:1",
+                "principal:other",
+                "unauthorized-revision-probe",
+                10,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, "grant_missing");
+        runtime
+            .authorize_export_before_revision(
+                "tenant:1",
+                "doc:1",
+                "principal:1",
+                "authorized-revision-probe",
+                10,
+            )
+            .await
+            .unwrap();
+        runtime.close().await;
+        cleanup(&path);
     }
 
     #[tokio::test]

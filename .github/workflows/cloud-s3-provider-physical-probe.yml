@@ -1,0 +1,92 @@
+name: CLOUD-BLOB real S3 provider physical probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # Defense-in-depth only. The environment itself MUST be main-only with
+    # required reviewers and no repository-scope fallback copies of secrets.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'Lalalalendia/rar2'
+    environment: chaptera-s3-physical
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Immutable checkout of the reviewed main commit that initiated the
+          # dispatch, not the moving tip or an attacker-controlled PR branch.
+          ref: ${{ github.sha }}
+
+      - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
+
+      - name: Run owner-pinned physical provider and versioning probe
+        # Keep secrets out of checkout, toolchain setup and artifact upload.
+        # This is an operator-only probe identity. It needs read-only
+        # GetBucketVersioning on both buckets and ListBucketVersions scoped
+        # to the disposable canonical/provider-receipt prefix, in addition
+        # to the existing provider-adapter operations. Never grant those
+        # enumeration permissions to production serve or worker identities.
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CHAPTERA_S3_PROBE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CHAPTERA_S3_PROBE_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CHAPTERA_S3_PROBE_SESSION_TOKEN }}
+          AWS_REGION: ${{ vars.CHAPTERA_S3_PROBE_REGION }}
+          CHAPTERA_S3_PROBE_ENDPOINT_URL: ${{ vars.CHAPTERA_S3_PROBE_ENDPOINT_URL }}
+          CHAPTERA_S3_QUARANTINE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_QUARANTINE_BUCKET }}
+          CHAPTERA_S3_PRIVATE_BUCKET: ${{ vars.CHAPTERA_S3_PROBE_PRIVATE_BUCKET }}
+          CHAPTERA_S3_EXPECTED_BUCKET_OWNER: ${{ vars.CHAPTERA_S3_PROBE_EXPECTED_BUCKET_OWNER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$AWS_REGION"
+          test -n "$CHAPTERA_S3_QUARANTINE_BUCKET"
+          test -n "$CHAPTERA_S3_PRIVATE_BUCKET"
+          test -n "$CHAPTERA_S3_EXPECTED_BUCKET_OWNER"
+          test "$CHAPTERA_S3_PRIVATE_BUCKET" != "$CHAPTERA_S3_QUARANTINE_BUCKET"
+          mkdir -p target/cloud-s3-provider-probe
+          if [ -n "${CHAPTERA_S3_PROBE_ENDPOINT_URL:-}" ]; then
+            export AWS_ENDPOINT_URL_S3="$CHAPTERA_S3_PROBE_ENDPOINT_URL"
+          fi
+          cargo run -p chaptera-server --example cloud_blob_provider_probe --quiet > target/cloud-s3-provider-probe/receipt.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("target/cloud-s3-provider-probe/receipt.json")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          assert receipt["protocol_version"] == "chaptera.cloud-blob-provider-receipt.v1"
+          assert receipt["core_adapter_probe_passed"] is True
+          assert receipt["expected_bucket_owner_configured"] is True
+          assert receipt["download_grant_available"] is False
+          assert receipt["owner_pinned_download_grant_denied"] is True
+          assert receipt["download_grant_policy_passed"] is True
+          assert receipt["direct_upload_grant_available"] is False
+          assert receipt["private_bucket_never_versioned"] is True
+          assert receipt["quarantine_bucket_never_versioned"] is True
+          assert receipt["no_versions_after_delete"] is True
+          assert receipt["physical_delete_v0"] is True
+          # Other IAM, anonymous access and CORS proofs still require
+          # separate principal-scoped physical operator acceptance.
+          assert receipt["serve_list_denied"] is None
+          assert receipt["worker_list_denied"] is None
+          assert receipt["anonymous_access_denied"] is None
+          assert receipt["cors_allowed_origin_only"] is None
+          prohibited = ("url", "secret", "access_key", "account_id", "object_locator")
+          serialized = json.dumps(receipt, sort_keys=True).lower()
+          for token in prohibited:
+              assert token not in serialized, token
+          PY
+
+      - name: Upload sanitized receipt only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cloud-s3-provider-physical-receipt
+          path: target/cloud-s3-provider-probe/receipt.json
+          if-no-files-found: error
+          retention-days: 14

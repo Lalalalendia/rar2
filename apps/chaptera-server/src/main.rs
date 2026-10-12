@@ -20,6 +20,7 @@ use chaptera_server::{
     product_api_http::{self, ProductApiHttpState},
     product_editor_assets,
     product_export_http::{self, ProductExportHttpState},
+    product_replay_worker,
     project_persistence_sqlite::SqliteProjectPersistence,
     revision_materializer::BlobStoreExactSourceLoader,
     runtime_readiness::{
@@ -62,6 +63,52 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::ProductIsolatedReplay {
+        document_id,
+        expected_sha256,
+        expected_byte_len,
+        project_json,
+        expected_project_sha256,
+        move_node_id,
+        move_x_emu,
+        move_y_emu,
+        scene_revision_id,
+        scene_baseline_revision_id,
+    } = &cli.command
+    {
+        let move_intent = move_node_id.as_ref().and_then(|node_id| {
+            Some(product_replay_worker::IsolatedMoveNodeIntentV1 {
+                node_id: node_id.clone(),
+                x_emu: (*move_x_emu)?,
+                y_emu: (*move_y_emu)?,
+            })
+        });
+        let scene_intent = scene_revision_id
+            .as_ref()
+            .zip(scene_baseline_revision_id.as_ref())
+            .map(|(revision_id, baseline_revision_id)| {
+                product_replay_worker::IsolatedReaderSceneIntentV1 {
+                    revision_id: revision_id.clone(),
+                    baseline_revision_id: baseline_revision_id.clone(),
+                }
+            });
+        return match product_replay_worker::run_product_replay_worker(
+            document_id,
+            expected_sha256,
+            *expected_byte_len,
+            project_json.as_deref(),
+            expected_project_sha256.as_deref(),
+            move_intent,
+            scene_intent,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {}", error.code);
                 ExitCode::FAILURE
             }
         };
@@ -237,6 +284,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                                 auth_http.clone(),
                                 workspace.clone(),
                                 projects.clone(),
+                                authz.clone(),
                             ));
                         let source_state = SourceIngressHttpState::new(
                             auth_http.clone(),
@@ -261,6 +309,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             authz.clone(),
                             revision_stream.clone(),
                             BlobStoreExactSourceLoader::new(blob_store.service().clone()),
+                        )?
+                        .with_isolated_replay(
+                            source_ingress_http::baseline_config(source_config),
                         )?;
                         let export_state = ProductExportHttpState::new(
                             auth_http.clone(),
@@ -397,6 +448,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::ProductIsolatedReplay { .. } => unreachable!(
+            "product-isolated-replay is dispatched synchronously before Tokio runtime creation"
         ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"

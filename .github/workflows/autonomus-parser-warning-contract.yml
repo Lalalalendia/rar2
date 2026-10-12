@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-contents/tests/parser_warning_contract.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bridge_diagnostics.rs"
       - "tools/pub-research/build_parser_warning_contract_receipt.py"
+      - "tools/pub-research/test_parser_warning_contract_receipt.py"
       - ".github/workflows/autonomus-parser-warning-contract.yml"
   workflow_dispatch:
 
@@ -20,13 +22,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.94.1
       - name: Run source-free parser diagnostic contract
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-contents --test parser_warning_contract
+      - name: Run Reader missing-evidence and physical-range contract
+        env:
+          CHAPTERA_PARSER_WARNING_RUNTIME_RECEIPT: ${{ runner.temp }}/parser-warning-reader-runtime.json
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib missing_directory_fields_contract
+      - name: Verify receipt rejects lost evidence and false health verdicts
+        run: python -m unittest discover -s tools/pub-research -p test_parser_warning_contract_receipt.py
+      - name: Verify Viewer preserves distinct missing-evidence codes without a damage verdict
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --lib bridge_diagnostics
       - name: Build receipt
         run: |
           python tools/pub-research/build_parser_warning_contract_receipt.py \
             --test-source vendor/producer-a/crates/pub-contents/tests/parser_warning_contract.rs \
-            --commit-sha "${GITHUB_SHA}" \
+            --commit-sha "$(git rev-parse HEAD)" \
+            --reader-runtime-receipt "${RUNNER_TEMP}/parser-warning-reader-runtime.json" \
             --output "${RUNNER_TEMP}/autonomus-parser-warning-contract.json"
       - uses: actions/upload-artifact@v4
         with:

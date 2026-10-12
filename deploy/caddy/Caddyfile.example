@@ -39,7 +39,9 @@ cloud.example.invalid {
 
         transport http {
             dial_timeout 2s
-            response_header_timeout 30s
+            # Product isolated replay is bounded to 30s wall + 5s parent
+            # overhead. The proxy must not terminate an in-budget replay.
+            response_header_timeout 60s
         }
     }
 }

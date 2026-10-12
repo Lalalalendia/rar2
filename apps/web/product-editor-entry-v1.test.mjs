@@ -35,22 +35,26 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   assert.match(pending.status, /Saving change/);
   assert.equal(pending.fidelity, "Fidelity: partial — missing_typeface");
   for (const reason of ["commit_error", "commit_rejected"]) {
-    const view = productEditorStatusView(
-      { ...receipt, reason },
-      scene,
-      { trace_id: "trace:editor-000123" },
-    );
+    const view = productEditorStatusView({ ...receipt, reason }, scene);
     assert.equal(view.kind, "error");
     assert.match(view.status, /reload/);
-    assert.match(view.status, /Ref trace:editor-000123/);
     assert.doesNotMatch(view.status, /Revision sha256:base/);
   }
-  const malformedTrace = productEditorStatusView(
-    { ...receipt, reason: "commit_error" },
+  const undoPending = productEditorStatusView(
+    { reason: "history_sent", revision_id: "sha256:child" },
     scene,
-    { trace_id: "bad id with spaces" },
   );
-  assert.doesNotMatch(malformedTrace.status, /Ref /);
+  assert.equal(undoPending.kind, "pending");
+  assert.match(undoPending.status, /Undoing/);
+  for (const reason of ["history_error", "history_rejected"]) {
+    const view = productEditorStatusView(
+      { reason, revision_id: "sha256:child" },
+      scene,
+    );
+    assert.equal(view.kind, "error");
+    assert.doesNotMatch(view.status, /Revision sha256:child/);
+  }
+
   const confirmed = productEditorStatusView({
     reason: "commit_reconciled",
     revision_id: "sha256:child",
@@ -58,7 +62,6 @@ test("pending, rejected and uncertain edits are not presented as a saved revisio
   }, { fidelity: { state: "supported", reasons: [] } });
   assert.equal(confirmed.kind, "ok");
   assert.equal(confirmed.status, "Revision sha256:child · selected");
-  assert.doesNotMatch(confirmed.status, /Ref /);
   assert.equal(confirmed.fidelity, "Fidelity: supported");
 });
 
@@ -72,4 +75,79 @@ test("SourceIngress persisted document identity opens through the same Editor pa
   assert.equal(documentIdFromEditorPath("/editor/doc/document:%2F%2Fevil.invalid"), null);
   assert.equal(documentIdFromEditorPath("/editor/doc/%GG"), null);
   assert.equal(documentIdFromEditorPath("/editor/doc/" + sourceDocument + "/extra"), null);
+});
+
+test("Redo status distinguishes pending/rejected/uncertain from a confirmed revision", () => {
+  const pending = productEditorStatusView({
+    reason: "history_sent", history_command: "redo", revision_id: "sha256:undo",
+  });
+  assert.equal(pending.kind, "pending");
+  assert.match(pending.status, /Redoing/);
+  for (const reason of ["history_error", "history_rejected"]) {
+    const view = productEditorStatusView({
+      reason, history_command: "redo", revision_id: "sha256:undo",
+    });
+    assert.equal(view.kind, "error");
+    assert.match(view.status, /Redo/);
+    assert.doesNotMatch(view.status, /Revision sha256:undo/);
+  }
+});
+
+test("Pending move save does not show a successful Undo", () => {
+  const view = productEditorStatusView({reason:"history_blocked_during_save",revision_id:"sha256:old"});
+  assert.equal(view.kind, "pending");
+  assert.match(view.status, /Save still pending/);
+  assert.doesNotMatch(view.status, /^Revision /);
+});
+
+test("ambiguous save takes precedence over stale revision success and requires manual recheck", () => {
+  const oldRevision = "sha256:" + "a".repeat(64);
+  const failed = productEditorStatusView({
+    reason: "commit_error", revision_id: oldRevision, commit_uncertain: true,
+  });
+  assert.equal(failed.kind, "error");
+  assert.match(failed.status, /Save outcome unknown/);
+  assert.match(failed.status, /editing locked/);
+  assert.doesNotMatch(failed.status, /Revision sha256/);
+  const inRecovery = productEditorStatusView({
+    reason: "scene_loaded", revision_id: oldRevision,
+    commit_uncertain: true, commit_recovery_in_flight: true,
+  });
+  assert.equal(inRecovery.kind, "pending");
+  assert.match(inRecovery.status, /Checking exact server revision/);
+  assert.doesNotMatch(inRecovery.status, /Revision sha256/);
+  const exact = productEditorStatusView({
+    reason: "commit_authority_reconciled",
+    revision_id: "sha256:" + "b".repeat(64),
+    commit_uncertain: false, commit_recovery_in_flight: false,
+  });
+  assert.equal(exact.kind, "ok");
+  assert.match(exact.status, /Server revision synchronized/);
+  assert.doesNotMatch(exact.status, /Saved/);
+});
+
+test("unknown Undo/Redo outcome remains visibly locked until server history recheck", () => {
+  const BASE = "sha256:" + "a".repeat(64);
+  const CHILD = "sha256:" + "b".repeat(64);
+  const unknown = productEditorStatusView({
+    reason: "history_ack_unknown", history_command: "undo",
+    history_uncertain: true, revision_id: BASE,
+  });
+  assert.equal(unknown.kind, "error");
+  assert.match(unknown.status, /Undo\/Redo outcome unknown/);
+  assert.match(unknown.status, /editing locked/);
+  assert.doesNotMatch(unknown.status, /Revision sha256/);
+  const checking = productEditorStatusView({
+    reason: "scene_loaded", history_uncertain: true,
+    history_recovery_in_flight: true, revision_id: BASE,
+  });
+  assert.equal(checking.kind, "pending");
+  assert.match(checking.status, /Checking exact server history revision/);
+  const recovered = productEditorStatusView({
+    reason: "history_authority_reconciled", history_uncertain: false,
+    history_recovery_in_flight: false, revision_id: CHILD,
+  });
+  assert.equal(recovered.kind, "ok");
+  assert.match(recovered.status, /Server history synchronized/);
+  assert.doesNotMatch(recovered.status, /Saved/);
 });

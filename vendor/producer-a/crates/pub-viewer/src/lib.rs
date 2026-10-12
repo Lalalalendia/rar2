@@ -9,9 +9,13 @@
 
 mod authoring_projection;
 mod borderart;
+mod bridge_diagnostics;
 mod images;
+mod mature_emf_preview;
+mod mature_wmf_preview;
 mod tables;
 mod typography;
+mod viewer_shape_preset;
 
 pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
 
@@ -26,6 +30,7 @@ pub use borderart::{
     ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
     ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
 };
+use bridge_diagnostics::map_bridge_diagnostic;
 pub use images::{
     VIEWER_IMAGE_SOURCE_Q16_ONE, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageRecolorV1,
     ViewerImageSourceWindowV1,
@@ -34,11 +39,14 @@ use images::{
     resolved_page_for_node_v1, retain_viewer_image_uses_for_selected_pages_v1,
     viewer_image_recolor_v1, viewer_image_source_window_v1,
 };
+use mature_emf_preview::viewer_mature_officeart_emf_bitmap_preview_images;
+use mature_wmf_preview::viewer_mature_officeart_wmf_preview_images;
 
 use tables::viewer_tables_from_resolved;
 pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
 #[cfg(test)]
 use tables::{unique_table_column_boundary, unique_table_row_boundary};
+use viewer_shape_preset::viewer_preset_shape_from_canonical;
 
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
@@ -626,6 +634,7 @@ pub enum ViewerPresetShape {
     Ellipse,
     Line,
     LineDashGel,
+    HorizontalLine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -644,7 +653,7 @@ fn fence_semantic_table_container_fill(
     is_semantic_table: bool,
     mut paint: ViewerNodePaint,
 ) -> ViewerNodePaint {
-    if is_semantic_table {
+    if is_semantic_table || paint.preset_shape == Some(ViewerPresetShape::HorizontalLine) {
         paint.solid_fill_rgb = None;
     }
     paint
@@ -681,32 +690,6 @@ fn bridge_effective_value<T: Clone>(
                 offset: source.offset,
                 len: source.len,
             }),
-    }
-}
-
-fn viewer_preset_shape_from_canonical(
-    node: &Node<PubResolvedNodePayload>,
-) -> Option<ViewerPresetShape> {
-    let authoritative_projection = |path: &str| {
-        node.header.source_refs.iter().any(|source_ref| {
-            source_ref.path.as_deref() == Some(path)
-                && source_ref.authority == AuthorityClass::Authoritative
-                && source_ref.confidence == Some(ReadConfidence::Exact)
-                && matches!(source_ref.role, SourceRole::Projection)
-        })
-    };
-    if authoritative_projection("SpContainer/FOPT/line-dashing-dash-gel")
-        && authoritative_projection("SpContainer/FSP/default-line")
-    {
-        Some(ViewerPresetShape::LineDashGel)
-    } else if authoritative_projection("SpContainer/FSP/default-line") {
-        Some(ViewerPresetShape::Line)
-    } else if authoritative_projection("SpContainer/FSP/default-roundrect") {
-        Some(ViewerPresetShape::RoundRect)
-    } else if authoritative_projection("SpContainer/FSP/default-ellipse") {
-        Some(ViewerPresetShape::Ellipse)
-    } else {
-        None
     }
 }
 
@@ -1411,215 +1394,6 @@ fn viewer_legacy_image_preview_images(
             Vec::new(),
             png,
         ));
-    }
-
-    images
-}
-
-fn mature_officeart_wmf_preview_resource_id(
-    source_hash: &Sha256Digest,
-    slot: u32,
-    wmf_bytes: &[u8],
-) -> Result<ResourceId> {
-    let digest = Sha256::digest(wmf_bytes);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
-        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    let source_object_key = format!(
-        "mature-officeart-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}/{}",
-        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
-    );
-    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
-        source_hash,
-        adapter_id: "pub-viewer",
-        source_object_key: &source_object_key,
-        semantic_role: "viewer.mature-officeart-wmf-preview-v1",
-    })
-    .map_err(|error| anyhow!("derive mature OfficeArt WMF preview identity: {error:?}"))?;
-    Ok(ResourceId::from_canonical(canonical))
-}
-
-#[cfg(test)]
-mod mature_officeart_wmf_preview_identity_tests {
-    use super::*;
-
-    #[test]
-    fn preview_resource_identity_is_source_slot_and_wmf_bound() {
-        let source_hash = Sha256Digest::from_bytes([0x11; 32]);
-        let first = mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
-            .expect("preview resource id");
-        let repeated =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
-                .expect("repeat preview resource id");
-        let other_slot =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 4, b"normalized-wmf-a")
-                .expect("other slot preview resource id");
-        let other_wmf =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-b")
-                .expect("other WMF preview resource id");
-
-        assert_eq!(first, repeated);
-        assert_ne!(first, other_slot);
-        assert_ne!(first, other_wmf);
-    }
-}
-
-fn viewer_mature_officeart_wmf_preview_images(
-    bytes: &[u8],
-    source_hash: &Sha256Digest,
-    source: &PubSourceGraphBuild,
-    resolved: &PubResolvedGraph,
-    scene: &BoundedResolvedScene,
-    diagnostics: &mut Vec<ViewerDiagnostic>,
-) -> Vec<ViewerEmbeddedImage> {
-    let bundle = match build_mature_0x2c_wmf_preview_bundle_from_bytes(bytes, &source.graph) {
-        Ok(bundle) => bundle,
-        Err(_) => {
-            diagnostics.push(ViewerDiagnostic {
-                code: "viewer.mature_officeart_wmf.preview_source_unavailable".to_owned(),
-                severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message:
-                    "Source-backed mature OfficeArt WMF images could not be materialized through the bounded preview bridge."
-                        .to_owned(),
-            });
-            return Vec::new();
-        }
-    };
-
-    if bundle.rejected_source_count > 0 {
-        diagnostics.push(ViewerDiagnostic {
-            code: "viewer.mature_officeart_wmf.preview_source_rejected".to_owned(),
-            severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: format!(
-                "{} mature OfficeArt WMF source(s) remain outside the bounded preview profile.",
-                bundle.rejected_source_count
-            ),
-        });
-    }
-
-    let renderable_node_ids = scene
-        .nodes
-        .iter()
-        .map(|node| node.origin)
-        .collect::<BTreeSet<_>>();
-    let mut images = Vec::new();
-
-    for preview_source in bundle.sources {
-        let mut node_ids = preview_source
-            .uses
-            .iter()
-            .map(|usage| usage.node_id)
-            .filter(|node_id| renderable_node_ids.contains(node_id))
-            .collect::<Vec<_>>();
-        node_ids.sort();
-        node_ids.dedup();
-        if node_ids.is_empty() {
-            continue;
-        }
-
-        let preview = match rasterize_wmf_preview(
-            &preview_source.wmf_bytes,
-            preview_source.width_hint,
-            preview_source.height_hint,
-        ) {
-            Ok(preview) => preview,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A structurally valid mature OfficeArt WMF is outside the existing bounded Viewer raster profile."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-        let png = match encode_wmf_preview_png(&preview) {
-            Ok(png) => png,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_encode_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A bounded mature OfficeArt WMF preview could not be encoded as a Viewer image resource."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-        let resource_id = match mature_officeart_wmf_preview_resource_id(
-            source_hash,
-            preview_source.slot,
-            &preview_source.wmf_bytes,
-        ) {
-            Ok(resource_id) => resource_id,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_identity_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A bounded mature OfficeArt WMF preview could not receive a deterministic Viewer resource identity."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-
-        let mut placements = Vec::new();
-        for node_id in &node_ids {
-            let resolved_node = resolved.nodes.get(node_id);
-            let source_window = match resolved_node.map(|node| {
-                viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
-            }) {
-                Some(Ok(source_window)) => source_window,
-                Some(Err(reason)) => {
-                    diagnostics.push(ViewerDiagnostic {
-                        code: "viewer.image.crop_partial".to_owned(),
-                        severity: ViewerDiagnosticSeverity::FidelityWarning,
-                        message: format!(
-                            "Image crop for node {} is present but cannot be projected exactly ({reason}); the bounded WMF preview remains available as the full-image fallback.",
-                            node_id.as_canonical()
-                        ),
-                    });
-                    None
-                }
-                None => None,
-            };
-            let content_rotation_degrees = resolved_node
-                .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
-            let recolor = source.graph.nodes.get(node_id).and_then(|node| {
-                viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
-            });
-            if source_window.is_some() || content_rotation_degrees.is_some() || recolor.is_some() {
-                placements.push(ViewerImagePlacementV1 {
-                    node_id: *node_id,
-                    source_window,
-                    content_rotation_degrees,
-                    recolor,
-                });
-            }
-        }
-
-        images.push(ViewerEmbeddedImage::preview_png(
-            resource_id,
-            node_ids,
-            placements,
-            png,
-        ));
-    }
-
-    if !images.is_empty() {
-        diagnostics.push(ViewerDiagnostic {
-            code: "viewer.mature_officeart_wmf.preview_applied".to_owned(),
-            severity: ViewerDiagnosticSeverity::Info,
-            message: format!(
-                "{} bounded source-backed mature OfficeArt WMF preview resource(s) admitted through the shared Viewer image path.",
-                images.len()
-            ),
-        });
     }
 
     images
@@ -2553,6 +2327,14 @@ fn open_mature_0x2c_bundle(
         &scene,
         &mut document.diagnostics,
     ));
+    images.extend(viewer_mature_officeart_emf_bitmap_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.source,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
 
     let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
 
@@ -3341,224 +3123,6 @@ fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest> {
         .collect::<String>();
     hex.parse()
         .map_err(|error| anyhow!("invalid internally computed SHA-256: {error:?}"))
-}
-
-fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
-    use PubBridgeDiagnostic::*;
-
-    let (code, severity, message) = match diagnostic {
-        PageListSpecialEntry { .. } => (
-            "viewer.page_list.special_entry",
-            ViewerDiagnosticSeverity::Info,
-            "The document page list contains a special non-page entry.",
-        ),
-        PageListUnknownEntry { .. } => (
-            "viewer.page_list.unknown_entry",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The document page list contains an entry the Viewer cannot classify.",
-        ),
-        OpaqueContentsTail { .. } => (
-            "viewer.object.opaque_data",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Some object data is not understood by the current Viewer model.",
-        ),
-        MissingEscherGeometry { .. } => (
-            "viewer.geometry.missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has no confirmed display geometry.",
-        ),
-        AmbiguousEscherGeometry { .. } => (
-            "viewer.geometry.ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has more than one possible display geometry.",
-        ),
-        AmbiguousImageSlot { .. } => (
-            "viewer.image.identity_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "An image reference cannot be resolved to one confirmed embedded image.",
-        ),
-        IncompleteEscherAnchor { .. } => (
-            "viewer.geometry.incomplete",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has incomplete position or size information.",
-        ),
-        InvalidEscherAnchor { .. } => (
-            "viewer.geometry.invalid",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has invalid position or size information.",
-        ),
-        MissingQuillStory { .. } => (
-            "viewer.text.story_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A text frame refers to text that the Viewer could not recover.",
-        ),
-        LegacyObjectNotMaterialized { .. } => (
-            "viewer.legacy.object_not_materialized",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A legacy Publisher page contains an object outside the currently admitted old-0x22 Reader profile.",
-        ),
-        LegacyTextEncodingUnresolved { .. } => (
-            "viewer.text.legacy_encoding_unresolved",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
-        ),
-        McldRecordCountMismatch { .. } | McldOuterBoundViolation { .. } => (
-            "viewer.table.mcld_layout_metrics_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A Quill layout-metrics table uses a structure outside the bounded MCLD profile; core document content remains available.",
-        ),
-        FdppExactStoryFallback { .. } => (
-            "viewer.text.fdpp_exact_story_fallback",
-            ViewerDiagnosticSeverity::Info,
-            "Story text was recovered from exact persisted Contents identity, FDPP boundaries, and TEXT bytes because the ordinary Quill Story service plane is sentinel-filled.",
-        ),
-        EquivalentMarginsPageExtents { .. } => (
-            "viewer.page_extent.equivalent_source_records",
-            ViewerDiagnosticSeverity::Info,
-            "Multiple source page-extent records agree exactly; the Viewer uses their shared page size.",
-        ),
-        ScenarioPageOrderObserved { .. } => (
-            "viewer.page_projection.scenario_order_observed",
-            ViewerDiagnosticSeverity::Info,
-            "A persisted scenario/design page-identity order was recovered. It is retained as evidence only and is not used to suppress physical pages.",
-        ),
-        ScenarioPageOrderUnavailable { .. } => (
-            "viewer.page_projection.scenario_order_unavailable",
-            ViewerDiagnosticSeverity::Info,
-            "Scenario/design page-order metadata could not be resolved safely; it is not used for physical page filtering.",
-        ),
-        PageRoleClassificationUnresolved { .. } => (
-            "viewer.page_projection.roles_unresolved",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Generic customer/master/service page-role filtering is not proven for this file family, so the Viewer preserves all recovered physical PAGE records.",
-        ),
-        LinkedFrameNotMaterialized { .. } => (
-            "viewer.text.link_target_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A linked text frame refers to another frame that is not materialized.",
-        ),
-        GroupedStoryProjected { .. } => (
-            "viewer.geometry.grouped_story_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped text shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedStoryProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_story_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped text shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedImageProjected { .. } => (
-            "viewer.geometry.grouped_image_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped image shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedImageProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_image_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped image shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedPrimitiveProjected { .. } => (
-            "viewer.geometry.grouped_primitive_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped primitive shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedPrimitiveProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_primitive_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped primitive shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedTableProjected { .. } => (
-            "viewer.geometry.grouped_table_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped table was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedTableProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_table_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped table falls outside the bounded group geometry profile.",
-        ),
-        TableMissingRequiredField { .. } => (
-            "viewer.table.required_data_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table is missing data required for the bounded table model.",
-        ),
-        TableMissingTcd { .. } => (
-            "viewer.table.text_map_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's text mapping could not be recovered.",
-        ),
-        TableAmbiguousTcd { .. } => (
-            "viewer.table.text_map_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table has more than one possible text mapping.",
-        ),
-        TableMissingCellsObject { .. } => (
-            "viewer.table.cells_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table refers to a cell collection that is not available.",
-        ),
-        TableCellsWrongRawType { .. } => (
-            "viewer.table.cells_unexpected_kind",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell collection has an unexpected object kind.",
-        ),
-        TableCellsWrongParent { .. } => (
-            "viewer.table.cells_parent_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell collection has an unexpected ownership relation.",
-        ),
-        TableCellCountMismatch { .. } => (
-            "viewer.table.cell_count_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's recovered cell counts disagree.",
-        ),
-        TableCellTextRangeInvalid { .. } => (
-            "viewer.table.cell_text_range_invalid",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table cell points outside the recovered text range.",
-        ),
-        TableStoryLengthMismatch { .. } => (
-            "viewer.table.story_length_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell text boundaries disagree with the recovered story length.",
-        ),
-        TableCellCoordinatesAmbiguous { .. } => (
-            "viewer.table.cell_coordinates_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table cell does not have one confirmed row and column position.",
-        ),
-        TableLayoutMetricsUnavailable { .. } => (
-            "viewer.table.layout_metrics_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Exact table layout metrics are not available.",
-        ),
-        TypographyProjectionUnavailable { .. } => (
-            "viewer.text.typography_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Some source typography could not be projected safely; pinned fallback text rendering remains in use.",
-        ),
-        TypographyUnknownFixedBlockTypes { .. } => (
-            "viewer.text.typography_unknown_block_type",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The typography stream contains unproven fixed block widths; affected typography promotion fails closed.",
-        ),
-        ColorSchemeProjectionUnavailable { .. } => (
-            "viewer.paint.color_scheme_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The current publication color scheme could not be resolved safely; scheme-indexed shape colors remain unavailable.",
-        ),
-        AmbiguousOfficeArtDggDefaults { .. } => (
-            "viewer.paint.dgg_defaults_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Document-wide OfficeArt drawing-group defaults are ambiguous; affected effective paint remains unresolved.",
-        ),
-    };
-
-    ViewerDiagnostic {
-        code: code.to_owned(),
-        severity,
-        message: message.to_owned(),
-    }
 }
 
 fn map_resolve_diagnostic(diagnostic: &PubResolveDiagnostic) -> ViewerDiagnostic {
@@ -6365,7 +5929,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            [8, 8, 7, 8, 8, 9, 7, 8],
+            [8, 8, 8, 9, 9, 10, 8, 9],
         );
     }
 

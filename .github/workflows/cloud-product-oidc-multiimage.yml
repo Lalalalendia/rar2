@@ -1,0 +1,150 @@
+name: CLOUD-PRODUCT-OIDC-MULTIIMAGE authenticated PUB001 and PUB023
+
+on:
+  pull_request:
+    paths:
+      - "tools/run_product_oidc_multiimage_acceptance.py"
+      - "tools/reader_safe_preview_visual_multiimage.py"
+      - "tools/test_reader_safe_preview_visual_multiimage.py"
+      - "apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs"
+      - "tools/run_secure_origin_product_multiimage_browser.mjs"
+      - "tools/run_product_oidc_multiimage_cross_browser.mjs"
+      - "tools/run_product_oidc_multiimage_restart_browser.mjs"
+      - ".github/workflows/cloud-product-oidc-multiimage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-oidc-multiimage-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  real-product-multiimage:
+    name: SourceIngress / OIDC / Product image paint ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: "001"
+            sha: 0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade
+            bytes: "72704"
+          - id: "023"
+            sha: 6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8
+            bytes: "4573696"
+    env:
+      EXACT_SHA: ${{ matrix.sha }}
+      EXACT_BYTES: ${{ matrix.bytes }}
+      CHAPTERA_PRODUCT_MULTI_ID: ${{ matrix.id }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate source-safe runner and real syscall sandbox
+        run: |
+          set -euo pipefail
+          python -m pip install Pillow==11.3.0
+          python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/reader_safe_preview_visual_multiimage.py tools/test_reader_safe_preview_visual_multiimage.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          python tools/test_reader_safe_preview_visual_multiimage.py
+          node --check tools/run_secure_origin_product_multiimage_browser.mjs
+          node --check tools/run_product_oidc_multiimage_cross_browser.mjs
+          node --check tools/run_product_oidc_multiimage_restart_browser.mjs
+          node --check apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "real seccomp required"
+          PY
+          docker version
+
+      - name: Retrieve immutable original Publisher PUB001 or PUB023
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: ${{ runner.temp }}/product-oidc-multiimage/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Pin exact original Publisher source SHA and bytes before parsing
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/product-oidc-multiimage/pinned1050/materialized/native/$EXACT_SHA.pub"
+          test -f "$fixture"
+          printf '%s  %s\n' "$EXACT_SHA" "$fixture" | sha256sum --check
+          test "$(stat -c %s "$fixture")" = "$EXACT_BYTES"
+
+      - name: Build canonical Chaptera HTTP service and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install real Chromium for authenticated Product UI
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Physical real OIDC upload, isolated Product multi-image admission and Chromium
+        env:
+          CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python tools/run_product_oidc_multiimage_acceptance.py \
+            --binary target/debug/chaptera \
+            --fixture "$RUNNER_TEMP/product-oidc-multiimage/pinned1050/materialized/native/$EXACT_SHA.pub" \
+            --fixture-sha256 "$EXACT_SHA" \
+            --head-sha "$CHAPTERA_HEAD_SHA" \
+            --caddy-image caddy:2.10.2-alpine
+
+      - name: Fail closed on PUB/source/session/image identity in ephemeral logs
+        id: product_multi_privacy
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/product-oidc-multiimage-${{ matrix.id }}
+          args=()
+          for file in target/product-oidc-multiimage-${{ matrix.id }}/*.log target/product-oidc-multiimage-${{ matrix.id }}/*.json; do
+            if [ -f "$file" ]; then args+=("$file"); fi
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::no Product multi-image source-neutral receipt or runner log"
+            exit 1
+          fi
+          python tools/security_leak_scan_v1.py \
+            "${args[@]}" \
+            --forbid-literal "Pinned001.pub" \
+            --forbid-literal "Pinned023.pub" \
+            --forbid-literal "chaptera-local-only-secret" \
+            --forbid-literal "$RUNNER_TEMP/product-oidc-multiimage/pinned1050" \
+            --json-out target/product-oidc-multiimage-${{ matrix.id }}/privacy-scan.json
+
+      # Full request logs can contain private document IDs even when the
+      # fail-closed leak scanner reports no raw PUB or secret material.
+      # Scan logs on the runner but never publish them as artifacts.
+      - name: Upload source-neutral Product multi-image counts only
+        if: ${{ always() && steps.product_multi_privacy.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-oidc-multiimage-${{ matrix.id }}-source-neutral
+          path: |
+            target/product-oidc-multiimage-${{ matrix.id }}/summary.json
+            target/product-oidc-multiimage-${{ matrix.id }}/owner.json
+            target/product-oidc-multiimage-${{ matrix.id }}/cross.json
+            target/product-oidc-multiimage-${{ matrix.id }}/restart.json
+            target/product-oidc-multiimage-${{ matrix.id }}/privacy-scan.json
+          if-no-files-found: error
+          retention-days: 14

@@ -28,6 +28,7 @@ mod legacy22_noquill_graph;
 mod legacy22_page_role;
 #[cfg(feature = "master-authority-bridge")]
 mod master_bridge;
+pub mod mature_emf;
 mod mature_wmf;
 mod node_materialization;
 mod ole_presentation;
@@ -50,7 +51,7 @@ mod structural_base;
 mod table_bridge;
 mod typography_projection;
 mod wmf;
-mod wmf_preview;
+pub mod wmf_preview;
 
 pub use asset_export::{
     PUB_ASSET_EXPORT_SCHEMA_V0_1, PUB_ASSET_MANIFEST_FILENAME, PubAssetExportBundle,
@@ -272,7 +273,6 @@ pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validat
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
 };
-
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
 

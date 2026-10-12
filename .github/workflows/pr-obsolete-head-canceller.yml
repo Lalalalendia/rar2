@@ -32,12 +32,35 @@ jobs:
 
           preserve_file="$(mktemp)"
           runs_file="$(mktemp)"
-          trap 'rm -f "$preserve_file" "$runs_file"' EXIT
+          status_file="$(mktemp)"
+          trap 'rm -f "$preserve_file" "$runs_file" "$status_file" "$preserve_file.partial" "$status_file.partial"' EXIT
 
-          gh api --paginate --method GET "repos/$GH_REPO/pulls" \
-            -f state=open -f per_page=100 \
-            --jq '.[].head.sha' \
-            | sort -u >"$preserve_file"
+          # GitHub sometimes returns transient 5xx halfway through a paginated
+          # inventory. Never consume a partial response: replay the FULL query
+          # into a temporary file, and cancel nothing if all retries fail.
+          fetch_complete_inventory() {
+            local output="$1"
+            shift
+            local attempt backoff=2
+            for attempt in 1 2 3 4; do
+              if gh api --paginate --method GET "$@" >"${output}.partial"; then
+                mv "${output}.partial" "$output"
+                return 0
+              fi
+              rm -f "${output}.partial"
+              if [[ "$attempt" -eq 4 ]]; then
+                echo "::error::GitHub API inventory incomplete after 4 attempts; no run cancellations were attempted." >&2
+                return 1
+              fi
+              echo "::warning::GitHub API inventory unavailable (attempt ${attempt}/4); retrying in ${backoff}s." >&2
+              sleep "$backoff"
+              backoff=$((backoff * 2))
+            done
+          }
+
+          fetch_complete_inventory "$preserve_file" "repos/$GH_REPO/pulls" \
+            -f state=open -f per_page=100 --jq '.[].head.sha'
+          sort -u -o "$preserve_file" "$preserve_file"
 
           # On opened/synchronize/reopened, preserve this event's head even if the
           # open-PR listing is momentarily behind the webhook. A closed PR is
@@ -52,10 +75,10 @@ jobs:
 
           : >"$runs_file"
           for status in queued in_progress; do
-            gh api --paginate --method GET "repos/$GH_REPO/actions/runs" \
+            fetch_complete_inventory "$status_file" "repos/$GH_REPO/actions/runs" \
               -f status="$status" -f event=pull_request -f per_page=100 \
-              --jq '.workflow_runs[] | [.id, (.head_branch // ""), .head_sha, .name] | @tsv' \
-              >>"$runs_file"
+              --jq '.workflow_runs[] | [.id, (.head_branch // ""), .head_sha, .name] | @tsv'
+            cat "$status_file" >>"$runs_file"
           done
 
           cancelled=0

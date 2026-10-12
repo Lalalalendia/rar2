@@ -4,6 +4,7 @@
 //! group ancestry. Direct page-local geometry and graph orchestration remain
 //! in the crate root.
 
+use super::contents_access::is_page_owned_logo_group;
 use super::*;
 
 #[derive(Debug)]
@@ -97,8 +98,19 @@ pub(super) fn project_grouped_object_shape(
             .references
             .get(&current_group_seq)
             .context("group Contents reference missing")?;
-        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
-            bail!("group ancestry raw type is not 0x30");
+        // 0x31 has multiple meanings outside page-owned OfficeArt groups.
+        // Permit only the exact depth-1 PAGE-owned LOGO carrier profile.
+        let page_logo = depth == 1
+            && is_page_owned_logo_group(
+                current_group_seq,
+                context.references,
+                context.page_seq_to_id,
+            );
+        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) && !page_logo {
+            bail!("group ancestry is neither ordinary 0x30 nor bounded PAGE LOGO");
+        }
+        if page_logo && child_rotation_op.is_some() {
+            bail!("PAGE LOGO child rotation is outside the measured profile");
         }
 
         let group_matches = context
@@ -114,11 +126,17 @@ pub(super) fn project_grouped_object_shape(
         if current_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             bail!("OfficeArt parent-group link does not match Contents ancestry");
         }
+        if page_logo && (group_shape.fsp.is_none() || current_shape.fsp.is_none()) {
+            bail!("PAGE LOGO is missing a group or child FSP record");
+        }
         let ancestor_rotation = shape_has_nonzero_rotation(group_shape);
         let ancestor_flip_h = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_H);
         let ancestor_flip_v = shape_has_fsp_flag(group_shape, OFFICEART_FSP_FLIP_V);
         if ancestor_rotation {
             bail!("group ancestor has nonzero rotation");
+        }
+        if page_logo && (ancestor_flip_h || ancestor_flip_v) {
+            bail!("PAGE LOGO group flip is outside the measured profile");
         }
         if ancestor_flip_v {
             bail!("group ancestor has vertical flip");
@@ -142,6 +160,9 @@ pub(super) fn project_grouped_object_shape(
                 .as_ref()
                 .context("top group is missing ClientAnchor")?;
             let absolute = publisher_anchor_rect_i128(anchor)?;
+            if page_logo && !translation_only_group_map(group_coords, absolute) {
+                bail!("PAGE LOGO geometry is not translation-only");
+            }
             if child_rotation_op.is_some()
                 && (depth != 1 || !translation_only_group_map(group_coords, absolute))
             {

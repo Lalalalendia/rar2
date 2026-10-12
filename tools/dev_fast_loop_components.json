@@ -2,6 +2,25 @@
   "schema": "chaptera.dev-fast-components.v1",
   "rules": [
     {
+      "name": "source-free experiment receipt contract",
+      "paths": [
+        "packages/protocol/experiment-receipt/v1/*",
+        "packages/protocol/experiment-receipt/v1/fixtures/*",
+        "tools/validate_experiment_receipt.py",
+        "tools/test_experiment_receipt.py",
+        "docs/experiment-receipt-v1.md"
+      ],
+      "commands": [
+        [
+          "python",
+          "-m",
+          "unittest",
+          "tools/test_experiment_receipt.py",
+          "-v"
+        ]
+      ]
+    },
+    {
       "name": "pub-editor authoring core unit",
       "paths": [
         "vendor/producer-a/crates/pub-editor-authoring-core/src/*.rs"

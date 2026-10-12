@@ -1034,7 +1034,9 @@ impl IntoResponse for MigrationEditableRouteHttpError {
             Self::Auth(error) => error.into_response(),
             Self::Authz(error) => {
                 let status = match error.code {
-                    "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (
@@ -1069,7 +1071,9 @@ impl IntoResponse for MigrationEditableRouteHttpError {
             }
             Self::Jobs(error) => {
                 let status = match error.code {
-                    "grant_missing" | "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing" | "grant_expired" | "capability_denied" => {
+                        StatusCode::FORBIDDEN
+                    }
                     "idempotency_conflict"
                     | "job_scope_mismatch"
                     | "job_payload_scope_mismatch" => StatusCode::CONFLICT,
@@ -1115,6 +1119,31 @@ mod tests {
 
     const DOCUMENT_ID: &str = "document:one";
     const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn canonical_migration_route_denials_are_http_403_not_500() {
+        for code in ["grant_missing", "grant_expired", "capability_denied"] {
+            let authz = MigrationEditableRouteHttpError::Authz(AuthzError {
+                code,
+                message: "denied".into(),
+            })
+            .into_response();
+            assert_eq!(authz.status(), StatusCode::FORBIDDEN, "{code}");
+
+            let job = MigrationEditableRouteHttpError::Jobs(JobsRuntimeError {
+                code,
+                message: "denied".into(),
+            })
+            .into_response();
+            assert_eq!(job.status(), StatusCode::FORBIDDEN, "{code}");
+        }
+        let internal = MigrationEditableRouteHttpError::Authz(AuthzError {
+            code: "sqlite_authz_error",
+            message: "internal".into(),
+        })
+        .into_response();
+        assert_eq!(internal.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     #[test]
     fn migration_export_request_rejects_browser_revision_authority() {

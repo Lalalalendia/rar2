@@ -24,6 +24,29 @@ function nodeById(interactionScene, nodeId) {
   return interactionScene.nodes.find((node) => node.node_id === nodeId) ?? null;
 }
 
+function editableShortcutTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  const tag = String(target.tagName ?? "").toLowerCase();
+  if (["input", "textarea", "select"].includes(tag)) return true;
+  if (target.isContentEditable === true) return true;
+  return !!target.closest?.("[contenteditable=true]");
+}
+
+export function historyShortcutCommand(event) {
+  if (!event || typeof event !== "object") return null;
+  if (event.defaultPrevented || event.repeat || event.altKey ||
+      event.isComposing || event.keyCode === 229) return null;
+  if (!(event.ctrlKey || event.metaKey) || editableShortcutTarget(event.target)) return null;
+  const key = String(event.key ?? "").toLowerCase();
+  if (key === "z") return event.shiftKey ? "redo" : "undo";
+  if (key === "y" && !event.shiftKey) return "redo";
+  return null;
+}
+
+export function isUndoShortcutEvent(event) {
+  return historyShortcutCommand(event) === "undo";
+}
+
 export function resolveRichEditorPointerTarget(
   interactionScene,
   pageId,
@@ -91,6 +114,8 @@ export class RichReaderEditorShellV1 {
     service,
     renderOptions = {},
     operationIdFactory = null,
+    historyOperationIdFactory = null,
+    keyboardTarget = globalThis.document ?? host,
     onState = null,
   }) {
     if (!host || typeof host.addEventListener !== "function") {
@@ -99,19 +124,27 @@ export class RichReaderEditorShellV1 {
     if (
       !service ||
       typeof service.commit !== "function" ||
+      typeof service.undo !== "function" ||
       typeof service.currentRichEditorState !== "function" ||
       typeof service.readerSceneForRevision !== "function"
     ) {
       throw new TypeError(
-        "service must implement currentRichEditorState(), commit(), and readerSceneForRevision()",
+        "service must implement currentRichEditorState(), commit(), undo(), and readerSceneForRevision()",
       );
     }
+    if (!keyboardTarget || typeof keyboardTarget.addEventListener !== "function") {
+      throw new TypeError("keyboardTarget EventTarget is required");
+    }
     this.host = host;
+    this.keyboardTarget = keyboardTarget;
     this.service = service;
     this.renderOptions = { ...renderOptions };
     this.operationIdFactory =
       operationIdFactory ??
       (() => "rich-move-" + globalThis.crypto.randomUUID());
+    this.historyOperationIdFactory =
+      historyOperationIdFactory ??
+      (() => "rich-undo-" + globalThis.crypto.randomUUID());
     this.onState = onState;
     this.readerScene = null;
     this.interactionScene = null;
@@ -121,8 +154,25 @@ export class RichReaderEditorShellV1 {
     this.pointerMoveCount = 0;
     this.commitRequests = 0;
     this.lastCommitResult = null;
+    this.historyRequests = 0;
+    this.lastHistoryResult = null;
+    this.lastHistoryKind = null;
+    this.historyInFlight = false;
+    // Lost Undo/Redo ACKs have the same durable-commit uncertainty as MoveNode.
+    this.historyUncertain = null;
+    this.historyRecoveryInFlight = false;
+    this.pendingHistoryRequest = null;
+    this.lastHistoryRecovery = null;
+    this.commitInFlight = false;
+    // Never mistake a lost HTTP ACK for a rejected canonical commit.
+    this.commitUncertain = null;
+    this.commitRecoveryInFlight = false;
+    this.pendingCommitRequest = null;
+    this.lastCommitRecovery = null;
     this._handlers = null;
     this._bound = false;
+    this._keyboardHandler = null;
+    this._keyboardBound = false;
   }
 
   async start() {
@@ -131,6 +181,7 @@ export class RichReaderEditorShellV1 {
       preserveSelection: false,
     });
     this.bindPointerEvents();
+    this.bindKeyboardEvents();
     return this.stateReceipt();
   }
 
@@ -164,7 +215,10 @@ export class RichReaderEditorShellV1 {
   bindPointerEvents() {
     if (this._bound) return;
     const down = (event) => {
-      if (event.button !== 0 || !this.interactionScene) return;
+      if (event.button !== 0 || !this.interactionScene ||
+          this.commitInFlight || this.historyInFlight ||
+          this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) return;
       const pageSvg = this._eventPage(event);
       if (!pageSvg) {
         this._clearSelection("hit_test_none");
@@ -214,7 +268,9 @@ export class RichReaderEditorShellV1 {
     };
 
     const up = async (event) => {
-      if (!this.gesture) return;
+      if (!this.gesture || this.commitInFlight || this.historyInFlight ||
+          this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) return;
       const pageSvg = this._pageSvg(this.gesturePageId);
       if (!pageSvg) {
         this.cancelGesture("gesture_page_missing");
@@ -227,8 +283,10 @@ export class RichReaderEditorShellV1 {
         this.gesture = null;
         this.gesturePageId = null;
         this._renderOverlay();
-        this._emitState("commit_error");
-        throw error;
+        // A DOM event listener must not leak a rejected promise after a
+        // lost ACK. _commitGesture already emitted the exact uncertain/fail
+        // status and preserved the mutation fence for explicit recovery.
+        this._emitState(this.commitUncertain ? "commit_ack_unknown" : "commit_error");
       } finally {
         try {
           this.host.releasePointerCapture?.(event.pointerId);
@@ -256,8 +314,36 @@ export class RichReaderEditorShellV1 {
     this._bound = false;
   }
 
+  bindKeyboardEvents() {
+    if (this._keyboardBound) return;
+    const keydown = (event) => {
+      const command = historyShortcutCommand(event);
+      if (!command) return;
+      event.preventDefault?.();
+      if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) {
+        this._emitState(this.commitUncertain || this.historyUncertain
+          ? "history_blocked_unknown_save" : "history_blocked_during_save");
+        return;
+      }
+      void this[command]().catch(() => {});
+    };
+    this.keyboardTarget.addEventListener("keydown", keydown);
+    this._keyboardHandler = keydown;
+    this._keyboardBound = true;
+  }
+
+  unbindKeyboardEvents() {
+    if (!this._keyboardBound) return;
+    this.keyboardTarget.removeEventListener("keydown", this._keyboardHandler);
+    this._keyboardHandler = null;
+    this._keyboardBound = false;
+  }
+
   cancelGesture(reason = "gesture_cancelled") {
-    if (!this.gesture) return false;
+    if (!this.gesture || this.commitInFlight || this.commitUncertain ||
+        this.commitRecoveryInFlight || this.historyInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight) return false;
     this.gesture.cancel();
     this.gesture = null;
     this.gesturePageId = null;
@@ -280,6 +366,15 @@ export class RichReaderEditorShellV1 {
       pointer_move_count: this.pointerMoveCount,
       commit_request_count: this.commitRequests,
       last_commit_protocol: this.lastCommitResult?.protocol_version ?? null,
+      history_request_count: this.historyRequests,
+      history_in_flight: this.historyInFlight,
+      history_uncertain: this.historyUncertain !== null,
+      history_recovery_in_flight: this.historyRecoveryInFlight,
+      commit_in_flight: this.commitInFlight,
+      commit_uncertain: this.commitUncertain !== null,
+      commit_recovery_in_flight: this.commitRecoveryInFlight,
+      history_command: this.lastHistoryKind,
+      last_history_protocol: this.lastHistoryResult?.protocol_version ?? null,
       visual_scene_is_edit_authority: false,
       browser_interaction_is_durable_authority: false,
     };
@@ -287,6 +382,7 @@ export class RichReaderEditorShellV1 {
 
   destroy() {
     this.unbindPointerEvents();
+    this.unbindKeyboardEvents();
     this.gesture = null;
     this.gesturePageId = null;
     this.readerScene = null;
@@ -295,11 +391,227 @@ export class RichReaderEditorShellV1 {
     this.host.replaceChildren();
   }
 
+  async undo() {
+    return this.#historyTransition("undo");
+  }
+
+  async redo() {
+    return this.#historyTransition("redo");
+  }
+
+  async #historyTransition(kind) {
+    if (this.commitUncertain || this.commitRecoveryInFlight) {
+      this._emitState("history_blocked_unknown_save");
+      throw new Error("history unavailable while commit outcome is uncertain");
+    }
+    if (this.commitInFlight) {
+      this._emitState("history_blocked_during_save");
+      throw new Error("history unavailable until the current commit is confirmed");
+    }
+    if (this.historyUncertain || this.historyRecoveryInFlight) {
+      this._emitState("history_blocked_unknown_save");
+      throw new Error("history unavailable while history outcome is uncertain");
+    }
+    if (this.historyInFlight) throw new Error("history transition already pending");
+    if (typeof this.service[kind] !== "function") throw new TypeError("service cannot perform " + kind);
+    if (!this.readerScene) throw new Error("editor scene is not loaded");
+    if (this.gesture) this.cancelGesture("gesture_cancelled_for_" + kind);
+
+    const request = {
+      sourceHash: this.readerScene.source_hash,
+      baseRevisionId: this.readerScene.revision_id,
+      clientOperationId: this.historyOperationIdFactory(),
+    };
+    this.historyRequests += 1;
+    this.lastHistoryKind = kind;
+    this.pendingHistoryRequest = { kind, ...clone(request), documentId: this.readerScene.document_id };
+    this.historyInFlight = true;
+    this._emitState("history_sent");
+
+    try {
+      const result = await this.service[kind](request);
+      if (result.transition_kind !== kind) throw new Error("history transition kind mismatch");
+      this.lastHistoryResult = clone(result);
+
+      if (result.protocol_version === "chaptera.history-transition-accepted.v1") {
+        const nextReaderScene =
+          await this.service.readerSceneForRevision(result.revision_id);
+        await this.loadScenes(
+          nextReaderScene,
+          projectReaderSceneToEditorInteractionScene(nextReaderScene),
+          { preserveSelection: false },
+        );
+        this.historyInFlight = false;
+        this.pendingHistoryRequest = null;
+        this._emitState("history_reconciled");
+        return { request, result, reader_scene: clone(nextReaderScene) };
+      }
+
+      if (result.protocol_version !== "chaptera.history-transition-rejected.v1") {
+        throw new Error("unknown history transition result protocol");
+      }
+      if (result.current_revision_id) {
+        const currentReaderScene =
+          await this.service.readerSceneForRevision(result.current_revision_id);
+        await this.loadScenes(
+          currentReaderScene,
+          projectReaderSceneToEditorInteractionScene(currentReaderScene),
+          { preserveSelection: false },
+        );
+      }
+      this.historyInFlight = false;
+      this.pendingHistoryRequest = null;
+      this._emitState("history_rejected");
+      return { request, result, reader_scene: clone(this.readerScene) };
+    } catch (error) {
+      // The authoritative history operation may have committed before the
+      // HTTP ACK or post-commit Reader Scene disappeared. Do not unlock.
+      if (this.pendingHistoryRequest) {
+        this.historyUncertain = clone(this.pendingHistoryRequest);
+      }
+      this.historyInFlight = false;
+      this._emitState(this.historyUncertain ? "history_ack_unknown" : "history_error");
+      throw error;
+    }
+  }
+
+  async reconcileUncertainHistory() {
+    const pending = this.historyUncertain;
+    if (!pending) throw new Error("no unknown history transition requires reconciliation");
+    if (this.historyRecoveryInFlight || this.historyInFlight || this.commitInFlight ||
+        this.commitUncertain || this.commitRecoveryInFlight) {
+      throw new Error("history authority reconciliation already pending");
+    }
+    this.historyRecoveryInFlight = true;
+    this._emitState("history_recovery_checking");
+    let reason = "history_recovery_failed";
+    try {
+      // Recheck the authenticated canonical /current and exact Reader Scene.
+      // Head advancement alone cannot attribute the change to this Undo/Redo.
+      const state = await this.service.currentRichEditorState();
+      const current = state?.current_document;
+      const scene = state?.reader_scene;
+      if (!current || !scene ||
+          current.protocol_version !== "chaptera.current-document.v1" ||
+          scene.protocol_version !== "chaptera.reader-scene.v1" ||
+          current.document_id !== pending.documentId ||
+          scene.document_id !== pending.documentId ||
+          current.source_hash !== pending.sourceHash ||
+          scene.source_hash !== pending.sourceHash ||
+          current.revision_id !== scene.revision_id ||
+          typeof current.revision_id !== "string" ||
+          current.revision_id === pending.baseRevisionId) {
+        throw new Error("server has not confirmed a distinct exact canonical history revision");
+      }
+      await this.loadScenes(
+        scene,
+        projectReaderSceneToEditorInteractionScene(scene),
+        { preserveSelection: false },
+      );
+      this.lastHistoryRecovery = {
+        transition_kind: pending.kind,
+        client_operation_id: pending.clientOperationId,
+        observed_revision_id: current.revision_id,
+        original_history_ack_proven: false,
+      };
+      this.pendingHistoryRequest = null;
+      this.historyUncertain = null;
+      reason = "history_authority_reconciled";
+      return clone(this.lastHistoryRecovery);
+    } finally {
+      this.historyRecoveryInFlight = false;
+      this._emitState(reason);
+    }
+  }
+
   async _commitGesture(point) {
+    if (this.commitInFlight || this.historyInFlight || this.commitUncertain ||
+        this.commitRecoveryInFlight || this.historyUncertain ||
+        this.historyRecoveryInFlight) {
+      throw new Error("cannot commit another gesture while save authority is pending");
+    }
+    this.commitInFlight = true;
+    let settledReason = "commit_error";
+    try {
+      const outcome = await this._commitGestureInternal(point);
+      settledReason = outcome.reconciliation?.kind === "accepted_waiting_for_scene"
+        ? "commit_reconciled" : "commit_rejected";
+      return outcome;
+    } catch (error) {
+      // After the POST is dispatched, transport errors do not prove rejection.
+      // Retain the exact operation/idempotency key; lock every mutation.
+      if (this.pendingCommitRequest) {
+        this.commitUncertain = {
+          request: clone(this.pendingCommitRequest),
+          baseRevisionId: this.pendingCommitRequest.base_revision_id,
+          sourceHash: this.pendingCommitRequest.source_hash,
+          documentId: this.pendingCommitRequest.document_id,
+          clientOperationId: this.pendingCommitRequest.client_operation_id,
+        };
+      }
+      throw error;
+    } finally {
+      this.commitInFlight = false;
+      if (!this.commitUncertain) this.pendingCommitRequest = null;
+      this._emitState(this.commitUncertain ? "commit_ack_unknown" : settledReason);
+    }
+  }
+
+  async reconcileUncertainCommit() {
+    const pending = this.commitUncertain;
+    if (!pending) throw new Error("no unknown commit requires reconciliation");
+    if (this.commitRecoveryInFlight || this.commitInFlight || this.historyInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight) {
+      throw new Error("commit authority reconciliation already pending");
+    }
+    this.commitRecoveryInFlight = true;
+    this._emitState("commit_recovery_checking");
+    let reason = "commit_recovery_failed";
+    try {
+      // A fresh authenticated Product /current plus exact Reader Scene.
+      // This does NOT prove which writer made the revision advance.
+      const state = await this.service.currentRichEditorState();
+      const current = state?.current_document;
+      const scene = state?.reader_scene;
+      if (!current || !scene ||
+          current.protocol_version !== "chaptera.current-document.v1" ||
+          scene.protocol_version !== "chaptera.reader-scene.v1" ||
+          current.document_id !== pending.documentId ||
+          scene.document_id !== pending.documentId ||
+          current.source_hash !== pending.sourceHash ||
+          scene.source_hash !== pending.sourceHash ||
+          current.revision_id !== scene.revision_id ||
+          typeof current.revision_id !== "string" ||
+          current.revision_id === pending.baseRevisionId) {
+        throw new Error("server has not confirmed a distinct exact canonical revision");
+      }
+      await this.loadScenes(
+        scene,
+        projectReaderSceneToEditorInteractionScene(scene),
+        { preserveSelection: false },
+      );
+      this.lastCommitRecovery = {
+        client_operation_id: pending.clientOperationId,
+        observed_revision_id: current.revision_id,
+        original_commit_ack_proven: false,
+      };
+      this.pendingCommitRequest = null;
+      this.commitUncertain = null;
+      reason = "commit_authority_reconciled";
+      return clone(this.lastCommitRecovery);
+    } finally {
+      this.commitRecoveryInFlight = false;
+      // On failure, original request and fail-closed mutation fence remain.
+      this._emitState(reason);
+    }
+  }
+
+  async _commitGestureInternal(point) {
     this.gesture.update(point);
     const gesture = this.gesture;
     const selectedNodeId = this.selectedNodeId;
     const request = gesture.commit(this.operationIdFactory());
+    this.pendingCommitRequest = clone(request);
     this.commitRequests += 1;
     this._emitState("commit_sent");
 

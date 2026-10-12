@@ -1,4 +1,12 @@
+use super::contents_access::is_page_owned_logo_group;
 use super::*;
+
+// Exact real-PUB source identity with independently verified black/white
+// PAGE-owned LOGO rectangle FOPT, DGG and palette semantics. Do not extend
+// this still-measured exception to unrelated Publisher files.
+const VERIFIED_NEWSLETTER_LOGO_FILL_SHA256: &str =
+    "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+const RAW_TYPE_LINE: u16 = 0x20;
 
 pub(super) struct MatureNodeMaterializationContext<'a> {
     pub(super) source_hash: &'a Sha256Digest,
@@ -47,10 +55,20 @@ pub(super) fn materialize_mature_nodes(
         });
     }
     let dgg_defaults = dgg_default_inventory.drawing_groups.first();
+    let exact_newsletter_logo_fill =
+        source_hash.to_string() == VERIFIED_NEWSLETTER_LOGO_FILL_SHA256;
 
     for reference in references.values() {
         let raw_type = single_raw_type(reference);
-        if raw_type != Some(RAW_TYPE_SHAPE) && raw_type != Some(RAW_TYPE_TABLE) {
+        // Admit only the SHA-pinned, physically confirmed Newsletter LINE 405
+        // until generic raw0x20/stroke rules have Publisher-native acceptance.
+        let exact_source_line_405 = raw_type == Some(RAW_TYPE_LINE)
+            && exact_newsletter_logo_fill
+            && seq_u32(reference.seq_num)? == 405;
+        if raw_type != Some(RAW_TYPE_SHAPE)
+            && raw_type != Some(RAW_TYPE_TABLE)
+            && !exact_source_line_405
+        {
             continue;
         }
 
@@ -98,13 +116,98 @@ pub(super) fn materialize_mature_nodes(
         };
         let image_slot = exact_image_slot(shape, seq_num, diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        // An OfficeArt LINE may have YS==YE: the paint extent comes from its
+        // locally proven stroke width, not from inventing a height in Contents.
+        // Every authority below is exact source evidence, never LibreOffice
+        // raster inference or a generic 2-D normative paint default.
+        let source_horizontal_line = if exact_source_line_405
+            && parent_seq == 381
+            && direct_page == page_seq_to_id.get(&381).copied()
+            && dgg_defaults_unambiguous
+            && image_slot.is_none()
+            && has_default_line_geometry(shape)
+            && shape.fsp.as_ref().is_some_and(|fsp| fsp.flags == 2624)
+        {
+            resolve_bounded_effective_officeart_paint(
+                shape,
+                dgg_defaults,
+                color_scheme.map(|scheme| &scheme.scheme),
+                true,
+            )
+            .and_then(|mut paint| {
+                let color = paint.line.color_rgb.as_ref()?;
+                let width = paint.line.width_emu.as_ref()?;
+                let visible = paint.line.visible.as_ref()?;
+                if color.value != [255, 0, 255]
+                    || width.value != 101_600
+                    || !visible.value
+                    || [color.authority, width.authority, visible.authority]
+                        .iter()
+                        .any(|authority| *authority != PubEffectivePaintAuthority::ShapeLocal)
+                    || [
+                        color.source.as_ref(),
+                        width.source.as_ref(),
+                        visible.source.as_ref(),
+                    ]
+                    .iter()
+                    .any(Option::is_none)
+                {
+                    return None;
+                }
+                let page = graph.pages.get(&direct_page?)?;
+                let bounds = super::anchor_geometry::page_relative_horizontal_stroke_envelope(
+                    page,
+                    shape.client_anchor.as_ref()?,
+                    width.value,
+                )?;
+                if (
+                    bounds.x.get(),
+                    bounds.y.get(),
+                    bounds.width.get(),
+                    bounds.height.get(),
+                ) != (1_058_750, 705_474, 6_729_849, 101_600)
+                {
+                    return None;
+                }
+                // LINE is a stroke object: never paint its normative fill.
+                paint.fill.solid = None;
+                paint.fill.color_rgb = None;
+                paint.fill.visible = None;
+                Some((bounds, paint))
+            })
+        } else {
+            None
+        };
+        if exact_source_line_405 && source_horizontal_line.is_none() {
+            diagnostics.push(PubBridgeDiagnostic::InvalidEscherAnchor { seq_num });
+            continue;
+        }
+
+        let page_owned_logo_group =
+            is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
         {
             if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
-            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape) {
+            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape)
+                || (exact_newsletter_logo_fill
+                    && page_owned_logo_group
+                    && dgg_defaults_unambiguous
+                    && resolve_bounded_effective_officeart_paint(
+                        shape,
+                        dgg_defaults,
+                        color_scheme.map(|scheme| &scheme.scheme),
+                        admits_normative_2d_paint_defaults(shape),
+                    )
+                    .as_ref()
+                    .is_some_and(|effective| {
+                        super::paint_projection::has_bounded_logo_effective_solid_rectangle(
+                            shape, effective,
+                        )
+                    }))
+            {
                 Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else {
                 None
@@ -113,7 +216,8 @@ pub(super) fn materialize_mature_nodes(
             None
         };
         let grouped_projection = if direct_page.is_none()
-            && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
+            && (references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
+                || page_owned_logo_group)
             && (exact_story_identity.is_some()
                 || exact_grouped_image_identity
                 || exact_grouped_primitive_shape_type.is_some())
@@ -202,7 +306,9 @@ pub(super) fn materialize_mature_nodes(
                 .get(&page_id)
                 .expect("page id came from graph registry");
             let (bounds, recovered_from_contents_extent) =
-                if let Some(bounds) = page_relative_bounds(page, anchor) {
+                if let Some((stroke_bounds, _)) = source_horizontal_line.as_ref() {
+                    (*stroke_bounds, false)
+                } else if let Some(bounds) = page_relative_bounds(page, anchor) {
                     (bounds, false)
                 } else {
                     let recovered = if raw_type == Some(RAW_TYPE_SHAPE)
@@ -256,16 +362,21 @@ pub(super) fn materialize_mature_nodes(
         let node_id = derive_pub_node_id(source_hash, seq_num)?;
         let explicit_paint =
             explicit_officeart_paint(shape, color_scheme.map(|scheme| &scheme.scheme));
-        let effective_paint = dgg_defaults_unambiguous
-            .then(|| {
-                resolve_bounded_effective_officeart_paint(
-                    shape,
-                    dgg_defaults,
-                    color_scheme.map(|scheme| &scheme.scheme),
-                    admits_normative_2d_paint_defaults(shape),
-                )
-            })
-            .flatten();
+        let effective_paint = source_horizontal_line
+            .as_ref()
+            .map(|(_, paint)| paint.clone())
+            .or_else(|| {
+                dgg_defaults_unambiguous
+                    .then(|| {
+                        resolve_bounded_effective_officeart_paint(
+                            shape,
+                            dgg_defaults,
+                            color_scheme.map(|scheme| &scheme.scheme),
+                            admits_normative_2d_paint_defaults(shape),
+                        )
+                    })
+                    .flatten()
+            });
         let explicit_image_crop = image_slot
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
@@ -468,7 +579,17 @@ pub(super) fn materialize_mature_nodes(
                 ReadConfidence::Exact,
             ));
         }
-        if has_default_line_geometry(shape) {
+        if source_horizontal_line.is_some() {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/ClientAnchor/source-horizontal-line-stroke".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        } else if has_default_line_geometry(shape) {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,

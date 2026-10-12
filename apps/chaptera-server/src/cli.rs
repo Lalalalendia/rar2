@@ -66,6 +66,36 @@ pub enum Command {
         #[arg(long)]
         expected_byte_len: u64,
     },
+    /// Replay an exact canonical product project in a confined process.
+    #[command(name = "product-isolated-replay", hide = true)]
+    ProductIsolatedReplay {
+        #[arg(long)]
+        document_id: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        expected_byte_len: u64,
+        /// Omit both options to derive a baseline project in isolation.
+        #[arg(long, requires = "expected_project_sha256")]
+        project_json: Option<PathBuf>,
+        #[arg(long, requires = "project_json")]
+        expected_project_sha256: Option<String>,
+        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"])]
+        move_node_id: Option<String>,
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
+        move_x_emu: Option<i64>,
+        #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
+        move_y_emu: Option<i64>,
+        /// An authorized RevisionStream head, not an arbitrary client path.
+        #[arg(
+            long,
+            requires_all = ["scene_baseline_revision_id", "project_json"],
+            conflicts_with = "move_node_id"
+        )]
+        scene_revision_id: Option<String>,
+        #[arg(long, requires = "scene_revision_id")]
+        scene_baseline_revision_id: Option<String>,
+    },
     #[command(hide = true)]
     GuestReaderScene {
         #[arg(long)]
@@ -92,6 +122,60 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command, MigrateAction};
+
+    #[test]
+    fn reader_scene_mode_requires_exact_project_and_revision_identity() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "doc-a",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut invalid = base.to_vec();
+        invalid.extend(["--scene-revision-id", "revision-a"]);
+        assert!(Cli::try_parse_from(invalid).is_err());
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/project.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--scene-revision-id",
+            "revision-a",
+            "--scene-baseline-revision-id",
+            "revision-a",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid).unwrap().command,
+            Command::ProductIsolatedReplay {
+                scene_revision_id: Some(_),
+                scene_baseline_revision_id: Some(_),
+                ..
+            }
+        ));
+        let mut invalid_mix = base.to_vec();
+        invalid_mix.extend([
+            "--project-json",
+            "/tmp/project.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--scene-revision-id",
+            "revision-a",
+            "--scene-baseline-revision-id",
+            "revision-a",
+            "--move-node-id",
+            "node-id",
+            "--move-x-emu",
+            "0",
+            "--move-y-emu",
+            "0",
+        ]);
+        assert!(Cli::try_parse_from(invalid_mix).is_err());
+    }
 
     #[test]
     fn parses_all_operator_commands() {
@@ -149,6 +233,90 @@ mod tests {
             .unwrap()
             .command,
             Command::MigrationEditableRoutes { .. }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+                "--expected-project-sha256",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay { .. }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay {
+                project_json: None,
+                expected_project_sha256: None,
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+            ])
+            .is_err()
+        );
+
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "product-isolated-replay",
+                "--document-id",
+                "document-one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "1024",
+                "--project-json",
+                "/tmp/project.json",
+                "--expected-project-sha256",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "--move-node-id",
+                "00112233-4455-6677-8899-aabbccddeeff",
+                "--move-x-emu",
+                "100",
+                "--move-y-emu",
+                "-50",
+            ])
+            .unwrap()
+            .command,
+            Command::ProductIsolatedReplay {
+                move_node_id: Some(_),
+                move_x_emu: Some(100),
+                move_y_emu: Some(-50),
+                ..
+            }
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
