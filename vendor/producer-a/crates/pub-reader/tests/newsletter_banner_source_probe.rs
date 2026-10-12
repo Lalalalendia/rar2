@@ -222,7 +222,7 @@ fn exact_newsletter_top_band_source_attribution() {
                 anchor
                     .fields
                     .iter()
-                    .filter(|f| matches!(f.id, 0x2001 | 0x2002 | 0x2003 | 0x2004))
+                    .filter(|f| matches!(f.id, 0x2001..=0x2004))
                     .map(|f| format!("{:04x}={:08x}", f.id, f.value))
                     .collect::<Vec<_>>()
             });
