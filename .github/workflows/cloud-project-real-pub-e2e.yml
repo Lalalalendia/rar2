@@ -120,9 +120,9 @@ jobs:
             --fixture "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --caddy-image caddy:2.10.2-alpine \
-          --story-browser-script tools/run_secure_origin_real_pub_story_browser.mjs \
-          --story-fixture "$RUNNER_TEMP/chaptera-real-pub/Sample3.pub" \
-          --story-fixture-sha256 "$STORY_FIXTURE_SHA256"
+            --story-browser-script tools/run_secure_origin_real_pub_story_browser.mjs \
+            --story-fixture "$RUNNER_TEMP/chaptera-real-pub/Sample3.pub" \
+            --story-fixture-sha256 "$STORY_FIXTURE_SHA256"
 
       - name: Fail closed on Product Editor acceptance privacy leaks
         id: b02_privacy_scan
@@ -141,7 +141,7 @@ jobs:
             echo "::error::real Product Editor acceptance emitted no receipt/log files to scan"
             exit 1
           fi
-          python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "TruncatedNewsletter.pub"             --forbid-literal "Sample3.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
+          python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "TruncatedNewsletter.pub"             --forbid-literal "Sample3.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/Sample3.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
 
       # A failed/missing privacy scan must never publish raw browser/server logs.
       - uses: actions/upload-artifact@v4
