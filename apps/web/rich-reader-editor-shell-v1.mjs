@@ -164,6 +164,7 @@ export class RichReaderEditorShellV1 {
     this.pendingHistoryRequest = null;
     this.lastHistoryRecovery = null;
     this.commitInFlight = false;
+    this.externalMutationLocked = false;
     // Never mistake a lost HTTP ACK for a rejected canonical commit.
     this.commitUncertain = null;
     this.commitRecoveryInFlight = false;
@@ -218,7 +219,8 @@ export class RichReaderEditorShellV1 {
       if (event.button !== 0 || !this.interactionScene ||
           this.commitInFlight || this.historyInFlight ||
           this.commitUncertain || this.commitRecoveryInFlight ||
-          this.historyUncertain || this.historyRecoveryInFlight) return;
+          this.historyUncertain || this.historyRecoveryInFlight ||
+          this.externalMutationLocked) return;
       const pageSvg = this._eventPage(event);
       if (!pageSvg) {
         this._clearSelection("hit_test_none");
@@ -270,7 +272,8 @@ export class RichReaderEditorShellV1 {
     const up = async (event) => {
       if (!this.gesture || this.commitInFlight || this.historyInFlight ||
           this.commitUncertain || this.commitRecoveryInFlight ||
-          this.historyUncertain || this.historyRecoveryInFlight) return;
+          this.historyUncertain || this.historyRecoveryInFlight ||
+          this.externalMutationLocked) return;
       const pageSvg = this._pageSvg(this.gesturePageId);
       if (!pageSvg) {
         this.cancelGesture("gesture_page_missing");
@@ -321,7 +324,8 @@ export class RichReaderEditorShellV1 {
       if (!command) return;
       event.preventDefault?.();
       if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight ||
-          this.historyUncertain || this.historyRecoveryInFlight) {
+          this.historyUncertain || this.historyRecoveryInFlight ||
+          this.externalMutationLocked) {
         this._emitState(this.commitUncertain || this.historyUncertain
           ? "history_blocked_unknown_save" : "history_blocked_during_save");
         return;
@@ -371,6 +375,7 @@ export class RichReaderEditorShellV1 {
       history_uncertain: this.historyUncertain !== null,
       history_recovery_in_flight: this.historyRecoveryInFlight,
       commit_in_flight: this.commitInFlight,
+      external_mutation_locked: this.externalMutationLocked,
       commit_uncertain: this.commitUncertain !== null,
       commit_recovery_in_flight: this.commitRecoveryInFlight,
       history_command: this.lastHistoryKind,
@@ -378,6 +383,18 @@ export class RichReaderEditorShellV1 {
       visual_scene_is_edit_authority: false,
       browser_interaction_is_durable_authority: false,
     };
+  }
+
+  setExternalMutationLocked(locked) {
+    if (typeof locked !== "boolean") throw new TypeError("external mutation lock is boolean");
+    if (locked && (this.commitInFlight || this.historyInFlight ||
+        this.commitUncertain || this.commitRecoveryInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight)) {
+      throw new Error("cannot start Story edit during another pending mutation");
+    }
+    if (locked && this.gesture) this.cancelGesture("gesture_cancelled_for_text_edit");
+    this.externalMutationLocked = locked;
+    this._emitState(locked ? "external_mutation_pending" : "external_mutation_reconciled");
   }
 
   destroy() {
@@ -400,6 +417,10 @@ export class RichReaderEditorShellV1 {
   }
 
   async #historyTransition(kind) {
+    if (this.externalMutationLocked) {
+      this._emitState("history_blocked_during_save");
+      throw new Error("history unavailable while Story mutation is pending");
+    }
     if (this.commitUncertain || this.commitRecoveryInFlight) {
       this._emitState("history_blocked_unknown_save");
       throw new Error("history unavailable while commit outcome is uncertain");
@@ -525,7 +546,8 @@ export class RichReaderEditorShellV1 {
   }
 
   async _commitGesture(point) {
-    if (this.commitInFlight || this.historyInFlight || this.commitUncertain ||
+    if (this.externalMutationLocked || this.commitInFlight ||
+        this.historyInFlight || this.commitUncertain ||
         this.commitRecoveryInFlight || this.historyUncertain ||
         this.historyRecoveryInFlight) {
       throw new Error("cannot commit another gesture while save authority is pending");
