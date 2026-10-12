@@ -1255,7 +1255,7 @@ try {
     physical_pointer_selection_and_canvas_focus: true,
     selection_writes_no_revision: true,
     authenticated_real_pub: true,
-    1pt_exact_emu_move: true,
+    one_point_exact_emu_move: true,
     shift_10pt_exact_emu_move: true,
     separate_operation_and_revision_per_keypress: true,
     canonical_reader_geometry_reconciled: true,
