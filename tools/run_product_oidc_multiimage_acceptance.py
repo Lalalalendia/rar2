@@ -63,6 +63,40 @@ OWNER_FAILURE_SIGNATURES = (
     ("real Publisher 022 source identity mismatch", "source_identity_contract"),
 )
 
+# Sanitize ephemeral browser failure strings to fixed classifications. Never
+# publish failing Scene, image bytes, screenshot, URLs or arbitrary stack text.
+VISUAL_FAILURE_SIGNATURES = (
+    ("Expected \"actual\" to be strictly unequal to:", "unchanged_raster"),
+    ("Product positive must contain exact host-derived image resource count", "scene_image_count_mismatch"),
+    ("all host-owned images must reach Chromium", "chromium_image_count_mismatch"),
+    ("Product browser received a forbidden image URL", "unadmitted_browser_image"),
+    ("Product Scene must match exact pinned case", "product_source_identity_mismatch"),
+    ("pinned Product visual cases require one page", "page_identity_mismatch"),
+    ("Product browser returned a forbidden", "external_browser_resource"),
+    ("imageStats.every", "image_bounds_or_delivery_failure"),
+    ("pageErrors", "browser_page_error"),
+    ("ERR_ASSERTION", "unclassified_visual_assertion"),
+    ("TimeoutError", "visual_capture_timeout"),
+    ("TypeError", "visual_runtime_type_error"),
+    ("SyntaxError", "visual_runtime_syntax_error"),
+)
+
+def classify_visual_failure(private_log: str) -> dict[str, object]:
+    for literal, code in VISUAL_FAILURE_SIGNATURES:
+        if literal in private_log:
+            return {
+                "failure_code": code,
+                "current_http_status": None,
+                "scene_http_status": None,
+                "public_error_code": "redacted",
+            }
+    return {
+        "failure_code": "unclassified_visual_failure",
+        "current_http_status": None,
+        "scene_http_status": None,
+        "public_error_code": "redacted",
+    }
+
 
 def classify_owner_failure(private_log: str) -> dict[str, object]:
     """No caller-controlled value survives this fixed-envelope classifier."""
@@ -108,6 +142,8 @@ def run_stage(name: str, command: list[str], env: dict[str, str]) -> None:
         failure = (
             classify_owner_failure(private_log)
             if name == "owner-browser"
+            else classify_visual_failure(private_log)
+            if name == "product-visual"
             else {
                 "failure_code": "bounded_stage_failure",
                 "current_http_status": None,
