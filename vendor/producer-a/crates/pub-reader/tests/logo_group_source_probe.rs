@@ -254,7 +254,10 @@ fn exact_public_newsletter_logo_0x31_baseline() {
     // source-backed effective fill and line suppression; do not guess paint
     // for generic rectangles outside this PAGE-owned LOGO lane.
     assert!(
-        !build.graph.nodes.contains_key(&derive_pub_node_id(&source_hash, 387).unwrap()),
+        !build
+            .graph
+            .nodes
+            .contains_key(&derive_pub_node_id(&source_hash, 387).unwrap()),
         "locally hidden LOGO shape 387 must not be added"
     );
     let candidates = [
@@ -293,14 +296,20 @@ fn exact_public_newsletter_logo_0x31_baseline() {
                 .as_ref()
                 .expect("LOGO rectangle requires resolved RGB");
             let (expected_rgb, authority) = if seq == 408 {
-                ([255, 255, 255], PubEffectivePaintAuthority::DrawingGroupPrimary)
+                (
+                    [255, 255, 255],
+                    PubEffectivePaintAuthority::DrawingGroupPrimary,
+                )
             } else {
                 ([0, 0, 0], PubEffectivePaintAuthority::ShapeLocal)
             };
             assert_eq!(color.value, expected_rgb);
             assert_eq!(color.authority, authority);
             assert_eq!(effective.fill.visible.as_ref().map(|v| v.value), Some(true));
-            assert_eq!(effective.line.visible.as_ref().map(|v| v.value), Some(false));
+            assert_eq!(
+                effective.line.visible.as_ref().map(|v| v.value),
+                Some(false)
+            );
         }
         let rank = source_order
             .node_ids
