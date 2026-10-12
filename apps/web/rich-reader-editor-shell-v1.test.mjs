@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   isUndoShortcutEvent,
   historyShortcutCommand,
+  nudgeShortcutDelta,
+  PRODUCT_NUDGE_STEP_EMU,
   RichReaderEditorShellV1,
   resolveRichEditorPointerTarget,
 } from "./rich-reader-editor-shell-v1.mjs";
@@ -375,4 +377,191 @@ test("lost Undo/Redo ACK preserves operation identity and blocks edits until can
       assert.equal(commitPosts, 0);
     });
   }
+});
+
+
+test("canvas arrow nudge uses exact 1pt/10pt EMU and never steals forms or IME", () => {
+  const event = {
+    key: "ArrowRight", shiftKey: false, ctrlKey: false, metaKey: false,
+    altKey: false, repeat: false, isComposing: false,
+    defaultPrevented: false, target: { tagName: "DIV" },
+  };
+  assert.equal(PRODUCT_NUDGE_STEP_EMU, 12700);
+  assert.deepEqual(nudgeShortcutDelta(event), { x_emu: 12700, y_emu: 0 });
+  assert.deepEqual(nudgeShortcutDelta({ ...event, key: "ArrowLeft" }), { x_emu: -12700, y_emu: 0 });
+  assert.deepEqual(nudgeShortcutDelta({ ...event, key: "ArrowUp" }), { x_emu: 0, y_emu: -12700 });
+  assert.deepEqual(nudgeShortcutDelta({ ...event, key: "ArrowDown", shiftKey: true }), { x_emu: 0, y_emu: 127000 });
+  for (const invalid of [
+    { ctrlKey: true }, { metaKey: true }, { altKey: true }, { repeat: true },
+    { isComposing: true }, { keyCode: 229 }, { defaultPrevented: true },
+    { target: { tagName: "INPUT" } }, { target: { tagName: "TEXTAREA" } },
+    { target: { tagName: "SELECT" } },
+    { target: { tagName: "DIV", isContentEditable: true } },
+    { target: { tagName: "SPAN", closest: sel => sel === "[contenteditable=true]" } },
+    { key: "z" }, { key: "Delete" },
+  ]) {
+    assert.equal(nudgeShortcutDelta({ ...event, ...invalid }), null, JSON.stringify(invalid));
+  }
+});
+
+test("canvas nudge owns keys only with a selected node and real canvas focus", async () => {
+  const handlers = new Map();
+  const host = {
+    addEventListener() {}, removeEventListener() {},
+    contains() { return false; },
+  };
+  const keyboardTarget = {
+    addEventListener(name, fn) { handlers.set(name, fn); },
+    removeEventListener(name) { handlers.delete(name); },
+  };
+  const service = {
+    async commit() { throw Error("unexpected HTTP write"); },
+    async undo() {}, async redo() {},
+    async currentRichEditorState() {}, async readerSceneForRevision() {},
+  };
+  const shell = new RichReaderEditorShellV1({ host, keyboardTarget, service });
+  shell.interactionScene = interaction();
+  shell.readerScene = {
+    protocol_version: "chaptera.reader-scene.v1", document_id: "doc",
+    source_hash: "a".repeat(64), revision_id: "sha256:" + "b".repeat(64),
+    pages: [], nodes: [],
+  };
+  shell.selectedNodeId = A;
+  const deltas = [];
+  shell.nudgeSelectedNode = async delta => { deltas.push(delta); };
+  shell.bindKeyboardEvents();
+  const keydown = handlers.get("keydown");
+  const press = (target, rest = {}) => {
+    let prevented = false;
+    keydown({
+      key: "ArrowRight", target, repeat: false, ctrlKey: false,
+      metaKey: false, altKey: false, shiftKey: false, isComposing: false,
+      defaultPrevented: false, preventDefault() { prevented = true; }, ...rest,
+    });
+    return prevented;
+  };
+  assert.equal(press(host), true);
+  assert.deepEqual(deltas, [{ x_emu: 12700, y_emu: 0 }]);
+  assert.equal(press({ tagName: "BUTTON" }), false);
+  assert.equal(press({ tagName: "INPUT" }), false);
+  assert.equal(press(host, { ctrlKey: true }), false);
+  shell.selectedNodeId = null;
+  assert.equal(press(host), false);
+  shell.selectedNodeId = A;
+  shell.commitUncertain = { originalRequest: true };
+  assert.equal(press(host), true, "the lock must also stop browser-native key movement");
+  assert.equal(deltas.length, 1, "cannot send nudge over an unknown durable save");
+  shell.commitUncertain = null;
+  shell.historyUncertain = { originalRequest: true };
+  assert.equal(press(host), true);
+  assert.equal(deltas.length, 1, "cannot send nudge over unknown Undo/Redo");
+  shell.unbindKeyboardEvents();
+  assert.equal(handlers.size, 0);
+});
+
+test("one arrow nudge creates one canonical MoveNode, preserving operation/scene authority", async () => {
+  const SOURCE = "a".repeat(64);
+  const BASE = "sha256:" + "b".repeat(64);
+  const HEAD1 = "sha256:" + "c".repeat(64);
+  const HEAD2 = "sha256:" + "d".repeat(64);
+  const bounds = { x: 38000, y: 64000, width: 200000, height: 125000 };
+  let revision = BASE;
+  let canonicalBounds = { ...bounds };
+  let operationId = 0;
+  const sent = [];
+  function readerScene() {
+    return {
+      protocol_version: "chaptera.reader-scene.v1", document_id: "doc",
+      source_hash: SOURCE, revision_id: revision,
+      pages: [{ page_id: PAGE, order: 0, width_emu: 800000, height_emu: 800000 }],
+      nodes: [{ node_id: A, page_id: PAGE, parent_node_id: null,
+        origin_node_id: null, kind: "shape", bounds: { ...canonicalBounds } }],
+    };
+  }
+  const service = {
+    async commit(req) {
+      sent.push(structuredClone(req));
+      assert.equal(req.base_revision_id, revision, "no stale or browser-synthetic base");
+      const next = sent.length === 1 ? HEAD1 : HEAD2;
+      canonicalBounds = { ...canonicalBounds, x: req.command.x_emu, y: req.command.y_emu };
+      revision = next;
+      return {
+        protocol_version: "chaptera.commit-accepted.v1", document_id: "doc",
+        source_hash: SOURCE, revision_id: next, base_revision_id: req.base_revision_id,
+        client_operation_id: req.client_operation_id,
+      };
+    },
+    async readerSceneForRevision(expected) {
+      assert.equal(expected, revision);
+      return readerScene();
+    },
+    async undo() {}, async redo() {},
+    async currentRichEditorState() {},
+  };
+  const host = { addEventListener() {}, removeEventListener() {} };
+  const shell = new RichReaderEditorShellV1({
+    host, keyboardTarget: host, service,
+    operationIdFactory: () => "nudge-" + (++operationId),
+  });
+  shell.readerScene = readerScene();
+  shell.interactionScene = interaction([{ node_id: A, page_id: PAGE,
+    parent_node_id: null, kind: "shape", bounds: { ...bounds },
+    z_order: null, paint_order: null }]);
+  shell.selectedNodeId = A;
+  shell._renderOverlay = () => {};
+  shell.loadScenes = async (scene, projected) => {
+    shell.readerScene = structuredClone(scene);
+    shell.interactionScene = structuredClone(projected);
+    shell.gesture = null;
+    shell.gesturePageId = null;
+    shell.selectedNodeId = null;
+  };
+  const result1 = await shell.nudgeSelectedNode({ x_emu: 12700, y_emu: 0 });
+  assert.equal(result1.result.revision_id, HEAD1);
+  const result2 = await shell.nudgeSelectedNode({ x_emu: 0, y_emu: -127000 });
+  assert.equal(result2.result.revision_id, HEAD2);
+  assert.equal(shell.stateReceipt().commit_request_count, 2);
+  assert.equal(shell.stateReceipt().selected_node_id, A);
+  assert.equal(shell.stateReceipt().revision_id, HEAD2);
+  assert.equal(shell.stateReceipt().commit_uncertain, false);
+  assert.deepEqual(sent.map(x => x.command), [
+    { kind: "move_node_to", node_id: A, x_emu: 50700, y_emu: 64000 },
+    { kind: "move_node_to", node_id: A, x_emu: 50700, y_emu: -63000 },
+  ]);
+  assert.deepEqual(sent.map(x => x.client_operation_id), ["nudge-1", "nudge-2"]);
+  assert.deepEqual(sent.map(x => x.base_revision_id), [BASE, HEAD1]);
+  assert.ok(sent.every(x => x.source_hash === SOURCE && x.document_id === "doc"));
+});
+
+test("lost ACK while nudging fences all next mutations with the exact request", async () => {
+  let posts = 0;
+  const host = { addEventListener() {}, removeEventListener() {} };
+  const service = {
+    async commit() { ++posts; throw Error("ACK dropped after durable save"); },
+    async undo() {}, async redo() {}, async currentRichEditorState() {},
+    async readerSceneForRevision() {},
+  };
+  const shell = new RichReaderEditorShellV1({
+    host, keyboardTarget: host, service,
+    operationIdFactory: () => "nudge-stable-operation",
+  });
+  shell.readerScene = {
+    protocol_version: "chaptera.reader-scene.v1", document_id: "doc",
+    source_hash: "a".repeat(64), revision_id: "sha256:" + "b".repeat(64),
+    pages: [], nodes: [],
+  };
+  shell.interactionScene = interaction();
+  shell.selectedNodeId = A;
+  shell._renderOverlay = () => {};
+  await assert.rejects(shell.nudgeSelectedNode({ x_emu: 12700, y_emu: 0 }), /ACK dropped/);
+  assert.equal(posts, 1);
+  assert.equal(shell.stateReceipt().commit_uncertain, true);
+  assert.equal(shell.commitUncertain.clientOperationId, "nudge-stable-operation");
+  assert.deepEqual(shell.pendingCommitRequest, shell.commitUncertain.request);
+  await assert.rejects(
+    shell.nudgeSelectedNode({ x_emu: 12700, y_emu: 0 }),
+    /nudge unavailable while an edit or history authority is pending/,
+  );
+  assert.equal(posts, 1);
+  assert.equal(shell.commitUncertain.request.base_revision_id, "sha256:" + "b".repeat(64));
 });
