@@ -1,0 +1,70 @@
+# Retired rar#93 diagnostic lineage. This path remains a retirement guard because
+# the protected merge gate selects workflows from the trusted base revision.
+# PREFLIGHT-01's only diagnostic implementation/workflow is tools/preflight/ +
+# preflight-01.yml; this guard prevents the obsolete implementation returning.
+name: Retired preflight lineage guard
+
+on:
+  pull_request:
+    paths:
+      - "tools/preflight_v1.py"
+      - "tools/test_preflight_v1.py"
+      - "tools/run_preflight_contract.py"
+      - "docs/preflight-v1.md"
+      - ".github/workflows/preflight-v1.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  retired-lineage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Keep the obsolete implementation retired
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          retired = ["tools/preflight_v1.py", "tools/test_preflight_v1.py",
+                     "tools/run_preflight_contract.py", "docs/preflight-v1.md"]
+          assert not any(Path(p).exists() for p in retired), "superseded preflight lineage returned"
+          assert Path("tools/preflight/preflight.py").is_file()
+          assert Path(".github/workflows/preflight-01.yml").is_file()
+          PY
+      - name: Prove the retained canonical diagnostic contract
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory() as directory:
+              out = Path(directory)
+              for fixture, label in [("problem.json", "problem"),
+                                     ("fixed-overflow.json", "fixed"),
+                                     ("problem.json", "repeat")]:
+                  subprocess.run(["python", "tools/preflight/preflight.py", "--input",
+                                  "tools/preflight/fixtures/" + fixture, "--out",
+                                  str(out / (label + ".json"))], check=True)
+              problem = json.loads((out / "problem.json").read_text())
+              fixed = json.loads((out / "fixed.json").read_text())
+              expected = {"TEXT_OVERFLOW", "RESOURCE_MISSING", "RESOURCE_MODIFIED",
+                          "SEMANTIC_OPAQUE", "SEMANTIC_UNSUPPORTED", "OUTPUT_RISK"}
+              assert {d["code"] for d in problem["diagnostics"]} == expected
+              assert {d["code"] for d in fixed["diagnostics"]} == expected - {"TEXT_OVERFLOW"}
+              assert problem["summary"]["diagnostic_count"] == 6
+              assert fixed["summary"]["diagnostic_count"] == 5
+              assert [d for d in problem["diagnostics"] if d["code"] != "TEXT_OVERFLOW"] == fixed["diagnostics"]
+              overflow = next(d for d in problem["diagnostics"] if d["code"] == "TEXT_OVERFLOW")
+              assert overflow["origin"] == {"page_id": "page-1", "node_id": "text-1", "story_id": "story-1"}
+              assert all(f"{code}: {count}" in problem["summary"]["human"]
+                         for code, count in problem["summary"]["counts_by_code"].items())
+              assert (out / "problem.json").read_bytes() == (out / "repeat.json").read_bytes()
+          PY
