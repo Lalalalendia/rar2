@@ -38,6 +38,18 @@ export function productEditorStatusView(state, readerScene = null) {
     return { status: "Save outcome unknown — editing locked. Recheck server revision.",
       kind: "error", fidelity };
   }
+  if (state.history_uncertain === true) {
+    if (state.history_recovery_in_flight === true) {
+      return { status: "Checking exact server history revision — editing locked…",
+        kind: "pending", fidelity };
+    }
+    return { status: "Undo/Redo outcome unknown — editing locked. Recheck server revision.",
+      kind: "error", fidelity };
+  }
+  if (state.reason === "history_authority_reconciled") {
+    return { status: "Server history synchronized — verify the change before continuing",
+      kind: "ok", fidelity };
+  }
   if (state.reason === "commit_authority_reconciled") {
     return { status: "Server revision synchronized — verify the change before continuing",
       kind: "ok", fidelity };
@@ -143,24 +155,29 @@ export async function bootProductEditor({
       statusText(status,view.status,view.kind);
       fidelity.textContent=view.fidelity;
       const mutationLocked=state.history_in_flight===true||state.commit_in_flight===true||
-        state.commit_uncertain===true||state.commit_recovery_in_flight===true;
+        state.commit_uncertain===true||state.commit_recovery_in_flight===true||
+        state.history_uncertain===true||state.history_recovery_in_flight===true;
       if(undoButton) undoButton.disabled=mutationLocked;
       if(redoButton) redoButton.disabled=mutationLocked;
       if(recheckButton){
-        recheckButton.hidden=state.commit_uncertain!==true;
-        recheckButton.disabled=state.commit_uncertain!==true||
-          state.commit_recovery_in_flight===true;
+        recheckButton.hidden=state.commit_uncertain!==true&&state.history_uncertain!==true;
+        recheckButton.disabled=!mutationLocked||state.commit_recovery_in_flight===true||
+          state.history_recovery_in_flight===true||
+          (state.commit_uncertain!==true&&state.history_uncertain!==true);
       }
     },
   });
   await shell.start();
   recheckButton?.addEventListener("click",()=>{
-    if(!shell.commitUncertain||shell.commitRecoveryInFlight) return;
-    void shell.reconcileUncertainCommit().catch(()=>{});
+    if(shell.commitUncertain && !shell.commitRecoveryInFlight){
+      void shell.reconcileUncertainCommit().catch(()=>{});
+    }else if(shell.historyUncertain && !shell.historyRecoveryInFlight){
+      void shell.reconcileUncertainHistory().catch(()=>{});
+    }
   });
   for(const [button,command] of [[undoButton,"undo"],[redoButton,"redo"]]){
     button?.addEventListener("click",()=>{
-      if(shell.historyInFlight) return;
+      if(shell.historyInFlight||shell.historyUncertain||shell.historyRecoveryInFlight) return;
       void shell[command]().catch(()=>{});
     });
   }
