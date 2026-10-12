@@ -134,6 +134,36 @@ fn exact_newsletter_top_band_source_attribution() {
             .and_then(|paint| paint.line.width_emu.as_ref())
             .map(|c| (c.value, c.authority));
         let line_is_magenta = line_rgb == Some(MAGENTA_RGB);
+        if *seq == 405 {
+            // An actual PAGE381 native OfficeArt line, not a LO raster guess.
+            assert!(owner_page381, "line owner must be PAGE381");
+            assert_eq!(shape_type, Some(0x0014), "OfficeArt line primitive");
+            assert_eq!(line_rgb, Some(MAGENTA_RGB), "palette slot2 = magenta");
+            let anchor = shape.client_anchor.as_ref().expect("line F010 anchor");
+            let signed = |field_id: u16| -> i64 {
+                let values = anchor.fields.iter().filter(|f| f.id == field_id)
+                    .map(|f| f.value).collect::<Vec<_>>();
+                let [value] = values.as_slice() else {
+                    panic!("line must have a unique anchor coordinate {field_id:04x}");
+                };
+                i64::from(i32::from_le_bytes(value.to_le_bytes()))
+            };
+            let page = build.graph.pages.get(&page_id).expect("source PAGE381");
+            let half_width = page.size.width.get() / 2;
+            let half_height = page.size.height.get() / 2;
+            let x0 = half_width + signed(pub_escher::PUBLISHER_FIELD_XS);
+            let x1 = half_width + signed(pub_escher::PUBLISHER_FIELD_XE);
+            let y0 = half_height + signed(pub_escher::PUBLISHER_FIELD_YS);
+            let y1 = half_height + signed(pub_escher::PUBLISHER_FIELD_YE);
+            assert_eq!(y0, y1, "physical line is horizontal");
+            assert!(x1 > x0, "positive source stroke span");
+            println!(
+                "NEWSLETTER_BAND_SOURCE_LINE seq=405 page_width_emu={} page_height_emu={} x0_emu={x0} x1_emu={x1} y_emu={y0} effective_line_rgb={line_rgb:?} line_visible={line_visible:?} line_width_emu={line_width:?} native_publisher_stroke_verified=false",
+                page.size.width.get(),
+                page.size.height.get(),
+            );
+            assert_eq!((x0, x1, y0), (1058750, 7788599, 756274));
+        }
         direct_magenta += usize::from(local_magenta);
         effective_magenta += usize::from(effective_is_magenta);
         page_magenta += usize::from(owner_page381 && (local_magenta || effective_is_magenta));
