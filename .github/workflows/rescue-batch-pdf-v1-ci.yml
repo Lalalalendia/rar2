@@ -1,0 +1,30 @@
+name: RESCUE-BATCH-PDF V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_batch_pdf_v1.py'
+      - 'tools/test_rescue_batch_pdf_v1.py'
+      - 'tools/rescue_batch_pdf_v1.md'
+      - '.github/workflows/rescue-batch-pdf-v1-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  synthetic-resume-and-safety:
+    name: Synthetic folder/ZIP/resume regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Compile stdlib-only tool and tests
+        run: python3 -m compileall -q tools/rescue_batch_pdf_v1.py tools/test_rescue_batch_pdf_v1.py
+      - name: Run source-free synthetic batch tests
+        run: python3 -m unittest discover -s tools -p test_rescue_batch_pdf_v1.py -v
