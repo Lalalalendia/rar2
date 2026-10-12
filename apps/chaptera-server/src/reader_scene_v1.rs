@@ -916,6 +916,7 @@ pub fn from_viewer_geometry_with_fonts(
                 pub_viewer::ViewerPresetShape::Ellipse => "ellipse",
                 pub_viewer::ViewerPresetShape::Line => "line",
                 pub_viewer::ViewerPresetShape::LineDashGel => "line_dash_gel",
+                pub_viewer::ViewerPresetShape::HorizontalLine => "horizontal_line",
             }),
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
