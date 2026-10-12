@@ -450,6 +450,39 @@ impl SqliteAuthorizedRevisionCommitter {
         request_hash: &str,
         now_ms: i64,
     ) -> Result<Option<AuthorizedRevisionCommitReceipt>, AuthzError> {
+        self.reconcile_revision_for_capability(
+            tenant_id, document_id, principal_id, operation_id, request_hash, now_ms,
+            CAP_EDIT_GEOMETRY,
+        )
+        .await
+    }
+
+    pub async fn reconcile_text_revision(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        principal_id: &str,
+        operation_id: &str,
+        request_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<AuthorizedRevisionCommitReceipt>, AuthzError> {
+        self.reconcile_revision_for_capability(
+            tenant_id, document_id, principal_id, operation_id, request_hash, now_ms,
+            CAP_EDIT_TEXT,
+        )
+        .await
+    }
+
+    async fn reconcile_revision_for_capability(
+        &self,
+        tenant_id: &str,
+        document_id: &str,
+        principal_id: &str,
+        operation_id: &str,
+        request_hash: &str,
+        now_ms: i64,
+        capability: &'static str,
+    ) -> Result<Option<AuthorizedRevisionCommitReceipt>, AuthzError> {
         validate_identity_set(tenant_id, document_id, principal_id, operation_id)?;
         validate_revision_request_hash(request_hash)?;
         validate_now(now_ms)?;
@@ -460,7 +493,7 @@ impl SqliteAuthorizedRevisionCommitter {
             tenant_id,
             document_id,
             principal_id,
-            CAP_EDIT_GEOMETRY,
+            capability,
             now_ms,
         )
         .await
@@ -475,7 +508,7 @@ impl SqliteAuthorizedRevisionCommitter {
                     operation_id,
                     "revision.commit",
                     "denied",
-                    CAP_EDIT_GEOMETRY,
+                    capability,
                     denied.authz_version,
                     Some(denied.code),
                     now_ms,
@@ -527,7 +560,7 @@ impl SqliteAuthorizedRevisionCommitter {
                 operation_id,
                 "revision.commit",
                 "allowed",
-                CAP_EDIT_GEOMETRY,
+                capability,
                 decision.authz_version,
                 None,
                 now_ms,
@@ -554,6 +587,35 @@ impl SqliteAuthorizedRevisionCommitter {
         binding: RevisionIdentityBinding,
         now_ms: i64,
     ) -> Result<AuthorizedRevisionCommitReceipt, AuthzError> {
+        self.commit_revision_for_capability(
+            tenant_id, principal_id, edge, binding, now_ms, CAP_EDIT_GEOMETRY,
+        )
+        .await
+    }
+
+    pub async fn commit_text_revision(
+        &self,
+        tenant_id: &str,
+        principal_id: &str,
+        edge: RevisionEdge,
+        binding: RevisionIdentityBinding,
+        now_ms: i64,
+    ) -> Result<AuthorizedRevisionCommitReceipt, AuthzError> {
+        self.commit_revision_for_capability(
+            tenant_id, principal_id, edge, binding, now_ms, CAP_EDIT_TEXT,
+        )
+        .await
+    }
+
+    async fn commit_revision_for_capability(
+        &self,
+        tenant_id: &str,
+        principal_id: &str,
+        edge: RevisionEdge,
+        binding: RevisionIdentityBinding,
+        now_ms: i64,
+        capability: &'static str,
+    ) -> Result<AuthorizedRevisionCommitReceipt, AuthzError> {
         validate_identity_set(
             tenant_id,
             &edge.document_id,
@@ -569,7 +631,7 @@ impl SqliteAuthorizedRevisionCommitter {
             tenant_id,
             &edge.document_id,
             principal_id,
-            CAP_EDIT_GEOMETRY,
+            capability,
             now_ms,
         )
         .await
@@ -584,7 +646,7 @@ impl SqliteAuthorizedRevisionCommitter {
                     &edge.operation_id,
                     "revision.commit",
                     "denied",
-                    CAP_EDIT_GEOMETRY,
+                    capability,
                     denied.authz_version,
                     Some(denied.code),
                     now_ms,
@@ -639,7 +701,7 @@ impl SqliteAuthorizedRevisionCommitter {
                     &edge.operation_id,
                     "revision.commit",
                     "allowed",
-                    CAP_EDIT_GEOMETRY,
+                    capability,
                     decision.authz_version,
                     None,
                     now_ms,
@@ -661,7 +723,7 @@ impl SqliteAuthorizedRevisionCommitter {
                 &edge.operation_id,
                 "revision.commit",
                 "allowed",
-                CAP_EDIT_GEOMETRY,
+                capability,
                 decision.authz_version,
                 None,
                 now_ms,
@@ -1924,6 +1986,116 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decision.authz_version, 1);
+
+        drop(committer);
+        revisions.close().await;
+        authority.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn text_revision_barrier_checks_text_grant_idempotency_and_revocation() {
+        let (path, authority, revisions) = revision_stores("text-revision-barrier").await;
+        authority
+            .set_role(
+                "tenant:authz",
+                "document:revision",
+                "principal:editor",
+                DocumentRole::Editor,
+                None,
+                "grant-text-editor",
+                10,
+            )
+            .await
+            .unwrap();
+
+        let committer =
+            SqliteAuthorizedRevisionCommitter::new(authority.clone(), revisions.clone()).unwrap();
+        let request_hash = "b".repeat(64);
+        assert!(
+            committer
+                .reconcile_text_revision(
+                    "tenant:authz",
+                    "document:revision",
+                    "principal:editor",
+                    "operation:move-1",
+                    &request_hash,
+                    15,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let accepted = committer
+            .commit_text_revision(
+                "tenant:authz",
+                "principal:editor",
+                revision_edge(&request_hash),
+                revision_binding(),
+                20,
+            )
+            .await
+            .unwrap();
+        assert!(!accepted.replayed);
+        assert_eq!(accepted.authz_version, 1);
+
+        let replay = committer
+            .reconcile_text_revision(
+                "tenant:authz",
+                "document:revision",
+                "principal:editor",
+                "operation:move-1",
+                &request_hash,
+                25,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.edge, accepted.edge);
+        assert_eq!(replay.binding, accepted.binding);
+
+        let conflict = committer
+            .reconcile_text_revision(
+                "tenant:authz",
+                "document:revision",
+                "principal:editor",
+                "operation:move-1",
+                &"c".repeat(64),
+                30,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(conflict.code, "idempotency_conflict");
+
+        authority
+            .revoke(
+                "tenant:authz",
+                "document:revision",
+                "principal:editor",
+                "revoke-text-editor",
+                35,
+            )
+            .await
+            .unwrap();
+
+        let denied_replay = committer
+            .reconcile_text_revision(
+                "tenant:authz",
+                "document:revision",
+                "principal:editor",
+                "operation:move-1",
+                &request_hash,
+                40,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied_replay.code, "grant_missing");
+        assert_eq!(
+            revisions.load_document_edges("document:revision").await.unwrap().len(),
+            1
+        );
 
         drop(committer);
         revisions.close().await;
