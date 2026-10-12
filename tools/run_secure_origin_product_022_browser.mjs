@@ -127,7 +127,7 @@ try {
     throw new Error("UI Product HTTP failed: current=" + result.currentStatus +
       " scene=" + result.sceneStatus + " fixed_code=" + safeCode);
   }
-  const { scene, current } = result;
+  // current and scene were captured from the actual UI HTTP responses above.
   if (result.currentStatus !== 200 || result.sceneStatus !== 200 ||
       result.cacheControl !== "no-store" || current?.document_id !== documentId ||
       !current?.revision_id || scene?.protocol_version !== "chaptera.reader-scene.v1" ||
