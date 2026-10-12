@@ -345,6 +345,56 @@ try {
     uploaded_label_verified: true,
     status: homeReceipt.status,
   };
+  // Real UI rename, not a direct API request. The result must be confirmed
+  // by the exact server receipt, a fresh durable catalog and a browser reload.
+  const renamedTitle = "Chaptera " + hash.slice(0, 12);
+  const homeCard = page.locator(
+    '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"]'
+  );
+  await homeCard.locator('[data-action="rename-project"]').click();
+  await homeCard.locator('[data-action="rename-input"]').fill(renamedTitle);
+  const renameResponsePromise = page.waitForResponse(response => {
+    if (response.request().method() !== "POST") return false;
+    return decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/projects/" + homeReceipt.project_id + "/rename";
+  }, { timeout: 30000 });
+  await homeCard.locator('[data-action="save-rename"]').click();
+  const renameResponse = await renameResponsePromise;
+  if (renameResponse.status() !== 200) {
+    // Emit only a bounded machine error code. Never log the project title or
+    // any raw Product/SQLite diagnostics into retained CI browser logs.
+    const denied = await renameResponse.json().catch(() => null);
+    const code = typeof denied?.error === "string" &&
+      /^[a-z0-9_:-]{1,96}$/.test(denied.error) ? denied.error : "unknown";
+    throw new Error("real project rename HTTP failed: " + renameResponse.status() +
+      " code=" + code);
+  }
+  if (renameResponse.headers()["cache-control"] !== "no-store") {
+    throw new Error("project rename receipt response lacked private no-store policy");
+  }
+  const renamed = await renameResponse.json();
+  if (renamed.protocol_version !== "chaptera.project-rename-receipt.v1" ||
+      renamed.receipt?.project_id !== homeReceipt.project_id ||
+      renamed.receipt?.name !== renamedTitle ||
+      !Number.isSafeInteger(renamed.receipt?.metadata_version)) {
+    throw new Error("project rename returned an unbound receipt");
+  }
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(({ id, name }) => {
+    const card = document.querySelector(
+      '[data-document-id="' + CSS.escape(id) + '"]'
+    );
+    return card?.querySelector("h2")?.textContent === name &&
+      document.querySelector("#status")?.textContent?.startsWith("Проектов:");
+  }, { id: documentId, name: renamedTitle }, { timeout: 30000 });
+
   const homeOpen = page.locator(
     '[data-document-id="' + documentId.replace(/"/g, '\\"') + '"] [data-action="open-project"]'
   );
@@ -954,6 +1004,8 @@ try {
     oversized_upload_admission: oversizedAdmission,
     initial_editor_paint: initialPaint,
     project_home_catalog_claim: true,
+    project_rename_claim: true,
+    project_rename: { project_id: homeReceipt.project_id, metadata_version: renamed.receipt.metadata_version, catalog_verified_after_reload: true },
     project_home: safeHomeReceipt,
     project_home_editor_paint: homeOpenedPaint,
     reloaded_editor_paint: reopenedPaint,
