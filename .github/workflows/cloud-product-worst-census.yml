@@ -4,6 +4,7 @@ on:
     paths:
       - "tools/run_product_oidc_worst_census_acceptance.py"
       - "tools/reader_product_49_111_probe.py"
+      - "tools/test_reader_product_49_111_probe.py"
       - "apps/cloud-reader/product-host-visual-pages.test.mjs"
       - "tools/run_secure_origin_product_worst_browser.mjs"
       - ".github/workflows/cloud-product-worst-census.yml"
@@ -56,6 +57,7 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check "Pillow==11.3.0"
           python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_49_111_probe.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          python tools/test_reader_product_49_111_probe.py
           node --check tools/run_secure_origin_product_worst_browser.mjs
           node --check apps/cloud-reader/product-host-visual-pages.test.mjs
           python - <<'PY'
