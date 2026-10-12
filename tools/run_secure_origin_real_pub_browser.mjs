@@ -45,8 +45,16 @@ page.on("response", response => {
 });
 
 async function verifyEditorPaint(current, stage) {
-  // A successful /current read and document URL can coexist with failed
-  // shell boot. Require the real Reader projection to reach the page DOM.
+  // First prove the actual Product shell has painted the exact revision.
+  // Do not race a second costly cold-source Reader worker against shell boot:
+  // that can exhaust the bounded per-file CPU allowance and produce a false
+  // 500 under concurrent acceptance probes. The independent authoritative
+  // Reader fetch below remains mandatory after the actual DOM proof.
+  await page.waitForFunction(revision => {
+    const status = document.querySelector("#status");
+    return status?.classList.contains("ok") && status.textContent.includes(revision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
+  }, current.revision_id, { timeout: 30000 });
   const scene = await page.evaluate(async id => {
     const response = await fetch("/v1/reader/documents/" + encodeURIComponent(id) + "/scene", {
       credentials: "same-origin", cache: "no-store",
@@ -60,11 +68,6 @@ async function verifyEditorPaint(current, stage) {
       !scene.pages?.length || !scene.nodes?.length || !scene.fidelity?.state) {
     throw new Error(stage + ": Reader scene lacks exact imported identity or content");
   }
-  await page.waitForFunction(revision => {
-    const status = document.querySelector("#status");
-    return status?.classList.contains("ok") && status.textContent.includes(revision) &&
-      document.querySelectorAll("#canvas svg.page[data-page-id]").length > 0;
-  }, current.revision_id, { timeout: 30000 });
   const paint = await page.evaluate(() => ({
     document_id: document.querySelector("#document")?.textContent,
     fidelity_label: document.querySelector("#fidelity")?.textContent,
