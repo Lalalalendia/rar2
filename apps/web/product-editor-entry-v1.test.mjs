@@ -125,3 +125,29 @@ test("ambiguous save takes precedence over stale revision success and requires m
   assert.match(exact.status, /Server revision synchronized/);
   assert.doesNotMatch(exact.status, /Saved/);
 });
+
+test("unknown Undo/Redo outcome remains visibly locked until server history recheck", () => {
+  const BASE = "sha256:" + "a".repeat(64);
+  const CHILD = "sha256:" + "b".repeat(64);
+  const unknown = productEditorStatusView({
+    reason: "history_ack_unknown", history_command: "undo",
+    history_uncertain: true, revision_id: BASE,
+  });
+  assert.equal(unknown.kind, "error");
+  assert.match(unknown.status, /Undo\/Redo outcome unknown/);
+  assert.match(unknown.status, /editing locked/);
+  assert.doesNotMatch(unknown.status, /Revision sha256/);
+  const checking = productEditorStatusView({
+    reason: "scene_loaded", history_uncertain: true,
+    history_recovery_in_flight: true, revision_id: BASE,
+  });
+  assert.equal(checking.kind, "pending");
+  assert.match(checking.status, /Checking exact server history revision/);
+  const recovered = productEditorStatusView({
+    reason: "history_authority_reconciled", history_uncertain: false,
+    history_recovery_in_flight: false, revision_id: CHILD,
+  });
+  assert.equal(recovered.kind, "ok");
+  assert.match(recovered.status, /Server history synchronized/);
+  assert.doesNotMatch(recovered.status, /Saved/);
+});
