@@ -61,15 +61,25 @@ jobs:
       - name: Prove browser acceptance binds canonical revision and Scene chain
         run: python tools/test_browser_acceptance_binding.py
       - name: Fetch pinned Apache POI SampleNewsletter.pub Git blob
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p .acceptance-input
-          curl -fsSL "https://api.github.com/repos/apache/poi/git/blobs/94900925af5832c493784f3cb51563f838a64df8" > .acceptance-input/blob.json
+          # Authenticated public-blob read avoids shared anonymous API rate limits.
+          # Retain fail-closed HTTP behavior and the existing fixture SHA/size gate.
+          curl --fail --silent --show-error --location --connect-timeout 15 --max-time 90 \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/apache/poi/git/blobs/94900925af5832c493784f3cb51563f838a64df8" \
+            > .acceptance-input/blob.json
           python - <<'PY'
           import base64, json, pathlib
           data = json.loads(pathlib.Path(".acceptance-input/blob.json").read_text())
+          if data.get("sha") != "94900925af5832c493784f3cb51563f838a64df8":
+              raise SystemExit("unexpected Git blob identity")
           if data.get("encoding") != "base64":
               raise SystemExit("unexpected Git blob encoding")
-          raw = base64.b64decode(data["content"])
+          raw = base64.b64decode(data["content"], validate=True)
           pathlib.Path(".acceptance-input/SampleNewsletter.pub").write_bytes(raw)
           PY
       - name: Validate real-PUB acceptance gate
