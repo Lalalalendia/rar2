@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { documentIdFromEditorPath, loginUrlForReturnPath, productEditorStatusView } from "./product-editor-entry-v1.mjs";
+import {
+  documentIdFromEditorPath, loginUrlForReturnPath, productEditorStatusView,
+  sourcePlainStoryCandidates, oneShotStoryIntent,
+} from "./product-editor-entry-v1.mjs";
 
 const DOC="10000000-0000-4000-8000-000000000001";
 
@@ -150,4 +153,48 @@ test("unknown Undo/Redo outcome remains visibly locked until server history rech
   assert.equal(recovered.kind, "ok");
   assert.match(recovered.status, /Server history synchronized/);
   assert.doesNotMatch(recovered.status, /Saved/);
+});
+
+test("Story inspector admits only plain framed source Stories, never table/rich", () => {
+  const graph = {
+    nodes: {
+      a: {payload: {story_frame: {story_id: "plain"}}},
+      b: {payload: {story_frame: {story_id: "rich"}}},
+      c: {payload: {story_frame: {story_id: "table"}}},
+      d: {payload: {table: {story_id: "table"}}},
+    },
+    stories: {
+      plain: {text: "ABC", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      rich: {text: "Rich", runs: [{source: "import"}]},
+      table: {text: "Cell"},
+      unframed: {text: "No frame"},
+    },
+  };
+  assert.deepEqual(sourcePlainStoryCandidates(graph), [{story_id: "plain", text: "ABC"}]);
+});
+
+test("one-shot Story diff uses Unicode scalar positions and no client authoritative before", () => {
+  const intent = oneShotStoryIntent({
+    documentId: DOC,
+    sourceHash: "a".repeat(64),
+    baseRevisionId: "sha256:" + "b".repeat(64),
+    storyId: "40000000-0000-4000-8000-000000000001",
+    canonicalText: "A😀BC",
+    observedText: "A😀YC",
+    clientOperationId: "product-story-test",
+  });
+  assert.equal(intent.command.start_scalar, 2);
+  assert.equal(intent.command.end_scalar, 3);
+  assert.equal(intent.command.replacement_text, "Y");
+  assert.equal("expected_before" in intent.command, false);
+  assert.equal("typing_format" in intent.command, false);
+  assert.equal("depends_on_client_operation_id" in intent, false);
+  assert.throws(() => oneShotStoryIntent({
+    documentId: DOC,sourceHash:"a".repeat(64),baseRevisionId:"sha256:"+"b".repeat(64),
+    storyId:"story",canonicalText:"abc",observedText:"abc",clientOperationId:"story-test",
+  }), /no text change/);
+  assert.throws(() => oneShotStoryIntent({
+    documentId:DOC,sourceHash:"a".repeat(64),baseRevisionId:"sha256:"+"b".repeat(64),
+    storyId:"story",canonicalText:"abc",observedText:"a\nbc",clientOperationId:"story-test",
+  }), /no new paragraphs/);
 });
