@@ -81,6 +81,7 @@ pub(super) fn page_relative_bounds(page: &Page, anchor: &PublisherFieldRecord) -
 /// Return a positive-size paint envelope for an exact horizontal OfficeArt
 /// LINE without changing its centered source stroke axis. The caller must
 /// independently authorize the source's line type, width, color, and visibility.
+#[allow(dead_code)] // Staged geometry primitive; source-line admission is separately gated.
 pub(super) fn page_relative_horizontal_stroke_envelope(
     page: &Page,
     anchor: &PublisherFieldRecord,
@@ -97,6 +98,7 @@ pub(super) fn page_relative_horizontal_stroke_envelope(
     )
 }
 
+#[allow(dead_code)] // Used by the gated source-line bridge and regression tests.
 fn horizontal_stroke_envelope_values(
     page_width_emu: i64,
     page_height_emu: i64,
