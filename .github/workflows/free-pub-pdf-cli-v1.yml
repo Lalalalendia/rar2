@@ -244,12 +244,14 @@ jobs:
               for item in report["pdf"].get("nodes", [])
           )
 
-          # Canonical exact-head baseline after preview-alpha provenance fencing.
+          # Canonical fixed-PDF baseline, independently measured on unchanged main
+          # in comment-only PR #2657, physical Free PUB PDF CLI #38236001178.
+          # Strict hashes remain enforced; do not infer native Publisher parity.
           # SampleNewsletter carries alpha through a derived Viewer preview, not
           # an exact embedded image resource, so it must not inherit /SMask.
-          assert canonical["pdf_sha256"] == "52ec92919a4d10e5175ab66fa6bf6eac5c171ed2ba5c257d0a5449b4c7d2d062"
-          assert canonical["loss_json_sha256"] == "adf460569d47730812cee86581d916ace0f78efb8ceb550346f4aab1a613c1fd"
-          assert canonical["loss_text_sha256"] == "802b475b0a759b99c0af26498b2a67df46034c5577e0a974ba037b022afcd062"
+          assert canonical["pdf_sha256"] == "edd12f20f705227014fab0e8cb2887c2d796492e937764d40a1c871cb872209e"
+          assert canonical["loss_json_sha256"] == "45e2ee3c9d8ae82a5e4b4f675206d2ca2e77c301f58def8a16362ebdd5843538"
+          assert canonical["loss_text_sha256"] == "0a8c0d14e72d81c4db8d3fd1e3ad320d18c1dbe4edcc7ccae93539251c616774"
 
           receipt = {
               "schema": "chaptera.free-pub-pdf-cli-acceptance.v1",
