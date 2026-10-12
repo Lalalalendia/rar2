@@ -47,8 +47,8 @@ FIXTURE_URL = (
 FIXTURE_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 # Keep the packaged launcher pinned to the same canonical graph identity as
 # LAYOUT-RESOLVED-SCENE and the current same-head Viewer receipt.
-GRAPH_SHA = "a84e0e064bd1355434005cd81fcc04da26d640a7135b8c65e2b8a730ae301752"
-GRAPH_BYTES = 293042
+GRAPH_SHA = "f85927cde6e2569b9ea7a6a5f634e303d83b1956e0e498d6211cf44cd669ab07"
+GRAPH_BYTES = 299252
 
 
 def sha256(path: pathlib.Path) -> str:
