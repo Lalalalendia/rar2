@@ -79,6 +79,23 @@ try {
   // A second GET /v1/session would rotate its CSRF secret and invalidate
   // the browser's upload-token, causing a correct fail-closed HTTP 403.
   monitorExternalRequests = true;
+  // Capture the real Editor shell's requests BEFORE the file triggers a new
+  // document navigation. The shell already GETs /current and /scene. Starting
+  // a second pair of Product replay jobs here would double CPU/memory use and
+  // can turn a bounded single-worker result into a synthetic timeout.
+  const isUiResponse = (response, kind) => {
+    if (response.request().method() !== "GET") return false;
+    const url = new URL(response.url());
+    if (url.origin !== origin) return false;
+    const route = decodeURIComponent(url.pathname);
+    return kind === "current"
+      ? /^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)
+      : /^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route);
+  };
+  const currentFromUi = page.waitForResponse(
+    response => isUiResponse(response, "current"), { timeout: 150000 });
+  const sceneFromUi = page.waitForResponse(
+    response => isUiResponse(response, "scene"), { timeout: 150000 });
   await page.locator("#pub-file").setInputFiles({
     name: "Pinned022.pub",
     mimeType: "application/x-mspublisher",
@@ -90,24 +107,26 @@ try {
   );
   const documentId = decodeURIComponent(new URL(page.url()).pathname)
     .replace("/editor/doc/", "");
-  const result = await page.evaluate(async id => {
-    const currentResponse = await fetch(
-      "/v1/documents/" + encodeURIComponent(id) + "/current",
-      { credentials: "same-origin", cache: "no-store" },
-    );
-    const current = await currentResponse.json().catch(() => null);
-    const response = await fetch(
-      "/v1/reader/documents/" + encodeURIComponent(id) + "/scene",
-      { credentials: "same-origin", cache: "no-store" },
-    );
-    const scene = await response.json().catch(() => null);
-    return {
-      currentStatus: currentResponse.status,
-      sceneStatus: response.status,
-      cacheControl: response.headers.get("cache-control"),
-      current, scene,
-    };
-  }, documentId);
+  const [currentResponse, sceneResponse] = await Promise.all([
+    currentFromUi, sceneFromUi,
+  ]);
+  const [current, scene] = await Promise.all([
+    currentResponse.json().catch(() => null),
+    sceneResponse.json().catch(() => null),
+  ]);
+  const result = {
+    currentStatus: currentResponse.status(),
+    sceneStatus: sceneResponse.status(),
+    cacheControl: sceneResponse.headers()["cache-control"] ?? null,
+    current, scene,
+  };
+  if (result.currentStatus !== 200 || result.sceneStatus !== 200) {
+    const code = scene?.error?.code;
+    const safeCode = typeof code === "string" && /^[a-z0-9_]{1,80}$/.test(code)
+      ? code : "redacted";
+    throw new Error("UI Product HTTP failed: current=" + result.currentStatus +
+      " scene=" + result.sceneStatus + " fixed_code=" + safeCode);
+  }
   const { scene, current } = result;
   if (result.currentStatus !== 200 || result.sceneStatus !== 200 ||
       result.cacheControl !== "no-store" || current?.document_id !== documentId ||
