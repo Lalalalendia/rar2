@@ -220,13 +220,30 @@ def main() -> int:
     parser.add_argument("--caddy-image", default="caddy:2.10.2-alpine")
     parser.add_argument("--fixture", type=pathlib.Path, required=True)
     parser.add_argument("--fixture-sha256", required=True)
+    parser.add_argument("--story-browser-script", type=pathlib.Path)
+    parser.add_argument("--story-fixture", type=pathlib.Path)
+    parser.add_argument("--story-fixture-sha256")
     args = parser.parse_args()
+    story_flags = (
+        args.story_browser_script is not None,
+        args.story_fixture is not None,
+        args.story_fixture_sha256 is not None,
+    )
+    if any(story_flags) and not all(story_flags):
+        raise SystemExit("Story acceptance requires script, exact fixture and SHA together")
 
     fixture = args.fixture.resolve()
     if not fixture.is_file() or hashlib.sha256(fixture.read_bytes()).hexdigest() != args.fixture_sha256:
         raise SystemExit("real pinned PUB SHA does not match expected fixture")
     binary = args.binary.resolve()
     browser_script = args.browser_script.resolve()
+    story_browser_script = args.story_browser_script.resolve() if args.story_browser_script else None
+    story_fixture = args.story_fixture.resolve() if args.story_fixture else None
+    if story_fixture is not None:
+        if not story_fixture.is_file() or hashlib.sha256(story_fixture.read_bytes()).hexdigest() != args.story_fixture_sha256:
+            raise SystemExit("pinned real Story PUB SHA mismatch")
+        if not story_browser_script.is_file():
+            raise SystemExit("Story browser script not found")
     restart_browser_script = args.restart_browser_script.resolve()
     cross_principal_browser_script = args.cross_principal_browser_script.resolve()
     if not binary.is_file():
@@ -257,6 +274,7 @@ def main() -> int:
     caddy_log = TARGET / "caddy.log"
     worker_log = TARGET / "worker.log"
     browser_log = TARGET / "browser.log"
+    story_browser_log = TARGET / "browser-story.log"
     cross_principal_browser_log = TARGET / "browser-cross-principal.log"
     restart_server_log = TARGET / "server-restart.log"
     restart_worker_log = TARGET / "worker-restart.log"
@@ -401,6 +419,46 @@ def main() -> int:
                     raise RuntimeError(
                         "secure-origin Chromium acceptance emitted no receipt"
                     )
+
+                # A separate genuine source-backed Story edit uses the same
+                # existing OIDC session and live Product runtime, not a
+                # second authentication, storage or revision implementation.
+                if story_browser_script is not None:
+                    story_env = browser_env.copy()
+                    story_env.update(
+                        {
+                            "CHAPTERA_STORY_PUB_FIXTURE": str(story_fixture),
+                            "CHAPTERA_STORY_PUB_SHA256": args.story_fixture_sha256,
+                            "CHAPTERA_STORY_RECEIPT": str(
+                                (TARGET / "story-receipt.json").resolve()
+                            ),
+                        }
+                    )
+                    story_browser = subprocess.run(
+                        ["node", str(story_browser_script)],
+                        cwd=ROOT,
+                        env=story_env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    story_browser_log.write_text(
+                        story_browser.stdout + "\n--- stderr ---\n" + story_browser.stderr,
+                        encoding="utf-8",
+                    )
+                    if worker.poll() is not None:
+                        raise RuntimeError(
+                            f"real SourceValidation worker exited during Story acceptance: {worker.returncode}"
+                        )
+                    if story_browser.returncode != 0:
+                        raise RuntimeError(
+                            "real Product Story browser acceptance failed; "
+                            f"see {story_browser_log}"
+                        )
+                    if not (TARGET / "story-receipt.json").is_file():
+                        raise RuntimeError(
+                            "real Product Story browser emitted no bounded receipt"
+                        )
 
                 # Same issuer/JWKS, different OIDC subject, fresh browser context.
                 # This proves guessed durable DocumentId does not grant a second

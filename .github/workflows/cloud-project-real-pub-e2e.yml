@@ -17,6 +17,7 @@ on:
       - "tools/run_secure_origin_real_pub.py"
       - "tools/run_secure_origin_oidc_acceptance.py"
       - "tools/run_secure_origin_real_pub_browser.mjs"
+      - "tools/run_secure_origin_real_pub_story_browser.mjs"
       - "tools/run_secure_origin_real_pub_restart_browser.mjs"
       - "tools/run_secure_origin_cross_principal_browser.mjs"
       - "tools/run_product_isolation_security_probe.py"
@@ -38,6 +39,8 @@ jobs:
     env:
       FIXTURE_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
       FIXTURE_BYTES: "291840"
+      STORY_FIXTURE_SHA256: 424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc
+      STORY_FIXTURE_BYTES: "72192"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -58,6 +61,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py tools/run_product_isolation_security_probe.py
           node --check tools/run_secure_origin_real_pub_browser.mjs
+          node --check tools/run_secure_origin_real_pub_story_browser.mjs
           node --check tools/run_secure_origin_real_pub_restart_browser.mjs
           node --check tools/run_secure_origin_cross_principal_browser.mjs
           python - <<'PY'
@@ -75,6 +79,18 @@ jobs:
             --output "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"
           printf '%s  %s\n' "$FIXTURE_SHA256" "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" | sha256sum -c -
           test "$(stat -c %s "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub")" = "$FIXTURE_BYTES"
+          # Same immutable Apache POI real-PUB source the Rust Editor fixtures use.
+          # Fixture bytes never enter CI artifacts or PR discussion.
+          python - <<'PY'
+          import base64, hashlib, os
+          from pathlib import Path
+          source = Path("vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64")
+          data = base64.b64decode("".join(source.read_text().split()), validate=True)
+          assert len(data) == int(os.environ["STORY_FIXTURE_BYTES"])
+          assert hashlib.sha256(data).hexdigest() == os.environ["STORY_FIXTURE_SHA256"]
+          dest = Path(os.environ["RUNNER_TEMP"]) / "chaptera-real-pub" / "Sample3.pub"
+          dest.write_bytes(data)
+          PY
 
       - name: Build canonical HTTP service and real isolated workers
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
@@ -103,7 +119,10 @@ jobs:
             --cross-principal-browser-script tools/run_secure_origin_cross_principal_browser.mjs \
             --fixture "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub" \
             --fixture-sha256 "$FIXTURE_SHA256" \
-            --caddy-image caddy:2.10.2-alpine
+            --caddy-image caddy:2.10.2-alpine \
+          --story-browser-script tools/run_secure_origin_real_pub_story_browser.mjs \
+          --story-fixture "$RUNNER_TEMP/chaptera-real-pub/Sample3.pub" \
+          --story-fixture-sha256 "$STORY_FIXTURE_SHA256"
 
       - name: Fail closed on Product Editor acceptance privacy leaks
         id: b02_privacy_scan
@@ -112,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          for path in             target/cloud-real-pub-ingress/receipt.json             target/cloud-real-pub-ingress/server.log             target/cloud-real-pub-ingress/worker.log             target/cloud-real-pub-ingress/browser.log             target/cloud-real-pub-ingress/browser-cross-principal.log             target/cloud-real-pub-ingress/server-restart.log             target/cloud-real-pub-ingress/worker-restart.log             target/cloud-real-pub-ingress/browser-restart.log             target/cloud-real-pub-ingress/caddy.log
+          for path in             target/cloud-real-pub-ingress/receipt.json             target/cloud-real-pub-ingress/server.log             target/cloud-real-pub-ingress/worker.log             target/cloud-real-pub-ingress/browser.log             target/cloud-real-pub-ingress/browser-story.log             target/cloud-real-pub-ingress/story-receipt.json             target/cloud-real-pub-ingress/browser-cross-principal.log             target/cloud-real-pub-ingress/server-restart.log             target/cloud-real-pub-ingress/worker-restart.log             target/cloud-real-pub-ingress/browser-restart.log             target/cloud-real-pub-ingress/caddy.log
           do
             if [ -f "$path" ]; then
               args+=("$path")
@@ -122,7 +141,7 @@ jobs:
             echo "::error::real Product Editor acceptance emitted no receipt/log files to scan"
             exit 1
           fi
-          python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "TruncatedNewsletter.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
+          python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "TruncatedNewsletter.pub"             --forbid-literal "Sample3.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
 
       # A failed/missing privacy scan must never publish raw browser/server logs.
       - uses: actions/upload-artifact@v4
@@ -135,6 +154,8 @@ jobs:
             target/cloud-real-pub-ingress/server.log
             target/cloud-real-pub-ingress/worker.log
             target/cloud-real-pub-ingress/browser.log
+            target/cloud-real-pub-ingress/browser-story.log
+            target/cloud-real-pub-ingress/story-receipt.json
             target/cloud-real-pub-ingress/browser-cross-principal.log
             target/cloud-real-pub-ingress/server-restart.log
             target/cloud-real-pub-ingress/worker-restart.log
