@@ -451,7 +451,12 @@ impl SqliteAuthorizedRevisionCommitter {
         now_ms: i64,
     ) -> Result<Option<AuthorizedRevisionCommitReceipt>, AuthzError> {
         self.reconcile_revision_for_capability(
-            tenant_id, document_id, principal_id, operation_id, request_hash, now_ms,
+            tenant_id,
+            document_id,
+            principal_id,
+            operation_id,
+            request_hash,
+            now_ms,
             CAP_EDIT_GEOMETRY,
         )
         .await
@@ -467,7 +472,12 @@ impl SqliteAuthorizedRevisionCommitter {
         now_ms: i64,
     ) -> Result<Option<AuthorizedRevisionCommitReceipt>, AuthzError> {
         self.reconcile_revision_for_capability(
-            tenant_id, document_id, principal_id, operation_id, request_hash, now_ms,
+            tenant_id,
+            document_id,
+            principal_id,
+            operation_id,
+            request_hash,
+            now_ms,
             CAP_EDIT_TEXT,
         )
         .await
@@ -588,7 +598,12 @@ impl SqliteAuthorizedRevisionCommitter {
         now_ms: i64,
     ) -> Result<AuthorizedRevisionCommitReceipt, AuthzError> {
         self.commit_revision_for_capability(
-            tenant_id, principal_id, edge, binding, now_ms, CAP_EDIT_GEOMETRY,
+            tenant_id,
+            principal_id,
+            edge,
+            binding,
+            now_ms,
+            CAP_EDIT_GEOMETRY,
         )
         .await
     }
@@ -602,7 +617,12 @@ impl SqliteAuthorizedRevisionCommitter {
         now_ms: i64,
     ) -> Result<AuthorizedRevisionCommitReceipt, AuthzError> {
         self.commit_revision_for_capability(
-            tenant_id, principal_id, edge, binding, now_ms, CAP_EDIT_TEXT,
+            tenant_id,
+            principal_id,
+            edge,
+            binding,
+            now_ms,
+            CAP_EDIT_TEXT,
         )
         .await
     }
