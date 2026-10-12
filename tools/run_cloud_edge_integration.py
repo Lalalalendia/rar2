@@ -9,11 +9,13 @@ import hashlib
 import http.server
 import json
 import pathlib
+import re
 import socket
 import ssl
 import subprocess
 import threading
 import time
+import tomllib
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -116,8 +118,31 @@ def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def checked_response_header_timeout(source: str) -> int:
+    """Keep proxy deadline above bounded Product replay's hard deadline.
+
+    The Product replay host waits worker_wall_timeout + 5 seconds; Caddy
+    must not independently produce a 504 while that request is in budget.
+    Never silently widen the worker's CPU, memory or source-security caps.
+    """
+    matches = re.findall(r"(?m)^\s*response_header_timeout\s+([1-9][0-9]*)s\s*$", source)
+    if len(matches) != 1:
+        raise AssertionError("production Caddyfile must define exactly one bounded response header timeout")
+    header_seconds = int(matches[0])
+    config = tomllib.loads(SOURCE_CONFIG.read_text(encoding="utf-8"))
+    worker_ms = config["source_ingress"]["baseline"]["worker_wall_timeout_ms"]
+    if type(worker_ms) is not int or not 0 < worker_ms <= 120_000:
+        raise AssertionError("Product replay worker wall deadline is invalid")
+    # At least 5s more than the worker budget to account for the Rust parent
+    # process deadline; 120s bounds slow connection/resource amplification.
+    if not 0 < header_seconds <= 120 or 1000 * header_seconds <= worker_ms + 5_000:
+        raise AssertionError("Caddy response header timeout is shorter than Product worker allowance")
+    return header_seconds
+
+
 def render_caddy() -> pathlib.Path:
     source = SOURCE_CADDY.read_text(encoding="utf-8")
+    checked_response_header_timeout(source)
     for marker in ("cloud.example.invalid", "127.0.0.1:8080", "reverse_proxy"):
         if marker not in source:
             raise AssertionError(f"production Caddyfile missing marker {marker!r}")
