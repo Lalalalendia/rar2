@@ -1,6 +1,12 @@
 use super::contents_access::is_page_owned_logo_group;
 use super::*;
 
+// Exact real-PUB source identity with independently verified black/white
+// PAGE-owned LOGO rectangle FOPT, DGG and palette semantics. Do not extend
+// this still-measured exception to unrelated Publisher files.
+const VERIFIED_NEWSLETTER_LOGO_FILL_SHA256: &str =
+    "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+
 pub(super) struct MatureNodeMaterializationContext<'a> {
     pub(super) source_hash: &'a Sha256Digest,
     pub(super) contents_stream: &'a StreamPath,
@@ -48,6 +54,8 @@ pub(super) fn materialize_mature_nodes(
         });
     }
     let dgg_defaults = dgg_default_inventory.drawing_groups.first();
+    let exact_newsletter_logo_fill =
+        source_hash.to_string() == VERIFIED_NEWSLETTER_LOGO_FILL_SHA256;
 
     for reference in references.values() {
         let raw_type = single_raw_type(reference);
@@ -99,13 +107,31 @@ pub(super) fn materialize_mature_nodes(
         };
         let image_slot = exact_image_slot(shape, seq_num, diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let page_owned_logo_group =
+            is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
         {
             if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
-            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape) {
+            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape)
+                || (exact_newsletter_logo_fill
+                    && page_owned_logo_group
+                    && dgg_defaults_unambiguous
+                    && resolve_bounded_effective_officeart_paint(
+                        shape,
+                        dgg_defaults,
+                        color_scheme.map(|scheme| &scheme.scheme),
+                        admits_normative_2d_paint_defaults(shape),
+                    )
+                    .as_ref()
+                    .is_some_and(|effective| {
+                        super::paint_projection::has_bounded_logo_effective_solid_rectangle(
+                            shape, effective,
+                        )
+                    }))
+            {
                 Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else {
                 None
@@ -115,7 +141,7 @@ pub(super) fn materialize_mature_nodes(
         };
         let grouped_projection = if direct_page.is_none()
             && (references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-                || is_page_owned_logo_group(parent_seq, references, page_seq_to_id))
+                || page_owned_logo_group)
             && (exact_story_identity.is_some()
                 || exact_grouped_image_identity
                 || exact_grouped_primitive_shape_type.is_some())

@@ -133,11 +133,18 @@ pub(super) fn source_page_paint_orders_v1(
         // broaden the ordinary 0x30 ellipse paint admission here.
         let page_logo_ellipse =
             page_logo && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
+        let page_logo_effective_rectangle = page_logo
+            && node.payload.officeart_shape_type
+                == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
+            && node.payload.story_frame.is_none()
+            && node.payload.image_slot.is_none()
+            && node.payload.effective_paint.is_some();
         if !admit_grouped_paint_participant(
             node.payload.story_frame.is_some(),
             node.payload.image_slot.is_some(),
             solid_rectangle,
         ) && !page_logo_ellipse
+            && !page_logo_effective_rectangle
         {
             continue;
         }
@@ -159,6 +166,22 @@ pub(super) fn source_page_paint_orders_v1(
         if child_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
             grouped_invalid_pages.insert(page_id);
             continue;
+        }
+        // A newly materialized LOGO rectangle participates only when its
+        // physical FOPT and resolved effective paint pass the exact same
+        // bounded admission as the materializer. Never infer paint rank from
+        // a generic shape class or from rendered pixels.
+        if page_logo_effective_rectangle && !solid_rectangle {
+            let admitted = node.payload.effective_paint.as_ref().is_some_and(|paint| {
+                super::paint_projection::has_bounded_logo_effective_solid_rectangle(
+                    child_shape,
+                    paint,
+                )
+            });
+            if !admitted {
+                grouped_invalid_pages.insert(page_id);
+                continue;
+            }
         }
 
         grouped_pending.entry(page_id).or_default().push((
