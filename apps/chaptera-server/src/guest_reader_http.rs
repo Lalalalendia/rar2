@@ -2482,7 +2482,12 @@ mod tests {
         let stored = store.get(&pending.session_id).await.unwrap().unwrap();
         assert_eq!(stored.state, GuestSessionState::Opening);
         assert!(stored.scene_json.is_none());
-        assert!(store.mark_expired(&pending.session_id, 61_000).await.unwrap());
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
 
         store.close().await;
         let _ = fs::remove_file(path);
