@@ -121,6 +121,8 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("TableTextBaselineArmV1::LegacyFontSize", text)
         self.assertIn("TableTextBaselineArmV1::PhysicalFirstLineExtent", text)
         self.assertIn("baseline_ab_arms_reuse_one_physical_fit_without_changing_glyphs", text)
+        self.assertIn("baseline_ab_rejects_wrong_story_scalar_length_and_font_size", text)
+        self.assertIn("complete_table_cell_typography_v1(cell)", text)
         self.assertNotIn("line.line_height_emu > content_bounds.height.get()", text)
         self.assertIn("Measure research-only TABLE first-baseline A/B", workflow)
         self.assertIn("table_text_baseline_ab=", workflow)

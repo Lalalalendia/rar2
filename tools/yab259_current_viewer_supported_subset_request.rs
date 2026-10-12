@@ -806,6 +806,60 @@ mod table_cell_first_line_observation_tests {
             assert_eq!(runs[0].fill_rgb, [12, 34, 56]);
         }
     }
+
+    #[test]
+    fn baseline_ab_rejects_wrong_story_scalar_length_and_font_size() {
+        for case in 0..2 {
+            let mut sample = cell(75, 110, 100);
+            sample.typography = vec![CurrentTypographyRun {
+                scalar_start: 10,
+                scalar_end: 14,
+                text_size_emu: 100,
+                color_rgb: Some([12, 34, 56]),
+            }];
+            if case == 0 {
+                sample.text = "ABC".into();
+                sample.layout.as_mut().unwrap().lines[0].text = "ABC".into();
+            } else {
+                sample.typography[0].text_size_emu = 101;
+            }
+            let table = CurrentTable {
+                cells: vec![sample],
+                uniform_cell_text_inset_emu: Some(10),
+                uniform_cell_vertical_alignment: Some(CurrentTableVerticalAlignment::Top),
+                borders: Vec::new(),
+            };
+            let font = CurrentFont {
+                resource_id: "pinned:test".to_owned(),
+                fingerprint_sha256: "a".repeat(64),
+                face_index: 0,
+                bytes: vec![1],
+            };
+            let mut runs = Vec::new();
+            let mut glyphs = BTreeSet::new();
+            let mut summary = MappingSummary::default();
+            assert!(!append_single_line_table_text_ab_v1(
+                &table,
+                NodeId::from_canonical(CanonicalId::from_bytes([2; 16])),
+                RectEmu::new(
+                    LengthEmu::ZERO,
+                    LengthEmu::ZERO,
+                    LengthEmu::new(400),
+                    LengthEmu::new(100),
+                ),
+                &Affine2D::identity(),
+                &font,
+                &mut runs,
+                &mut glyphs,
+                &mut summary,
+                TableTextBaselineArmV1::PhysicalFirstLineExtent,
+            )
+            .expect("invalid TABLE source text must remain residual"));
+            assert_eq!(summary.table_text_ab_residual_cell_count, 1);
+            assert!(runs.is_empty());
+            assert!(glyphs.is_empty());
+        }
+    }
 }
 
 /// Research-only Carlton AB selector. Absent in the ordinary fixed-output path.
@@ -903,6 +957,15 @@ fn append_single_line_table_text_ab_v1(
             continue;
         };
         if line.text.is_empty()
+            || !complete_table_cell_typography_v1(cell)
+            || u32::try_from(cell.text.chars().count())
+                .ok()
+                .and_then(|length| cell_start.checked_add(length))
+                != Some(cell_end)
+            || cell
+                .typography
+                .iter()
+                .any(|run| i64::from(run.text_size_emu) != *font_size_emu)
             || !line.spans.is_empty()
             || line.scalar_start != cell_start
             || line.scalar_end != cell_end
