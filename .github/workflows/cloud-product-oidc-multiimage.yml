@@ -8,6 +8,8 @@ on:
       - "tools/test_reader_safe_preview_visual_multiimage.py"
       - "apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs"
       - "tools/run_secure_origin_product_multiimage_browser.mjs"
+      - "tools/run_product_oidc_multiimage_cross_browser.mjs"
+      - "tools/run_product_oidc_multiimage_restart_browser.mjs"
       - ".github/workflows/cloud-product-oidc-multiimage.yml"
   workflow_dispatch:
 
@@ -59,6 +61,8 @@ jobs:
           python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/reader_safe_preview_visual_multiimage.py tools/test_reader_safe_preview_visual_multiimage.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
           python tools/test_reader_safe_preview_visual_multiimage.py
           node --check tools/run_secure_origin_product_multiimage_browser.mjs
+          node --check tools/run_product_oidc_multiimage_cross_browser.mjs
+          node --check tools/run_product_oidc_multiimage_restart_browser.mjs
           node --check apps/cloud-reader/product-safe-preview-multiimage-browser.test.mjs
           python - <<'PY'
           import ctypes.util
@@ -139,6 +143,8 @@ jobs:
           path: |
             target/product-oidc-multiimage-${{ matrix.id }}/summary.json
             target/product-oidc-multiimage-${{ matrix.id }}/owner.json
+            target/product-oidc-multiimage-${{ matrix.id }}/cross.json
+            target/product-oidc-multiimage-${{ matrix.id }}/restart.json
             target/product-oidc-multiimage-${{ matrix.id }}/privacy-scan.json
           if-no-files-found: error
           retention-days: 14
