@@ -21,8 +21,7 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId,
-    open_mature_0x2c_editor,
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -37,8 +36,7 @@ use crate::{
     },
     product_replay_worker::{
         IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
-        IsolatedStoryRangeIntentV1,
-        ProductReplayWorkerError,
+        IsolatedStoryRangeIntentV1, ProductReplayWorkerError,
     },
     reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
@@ -992,10 +990,9 @@ async fn commit_story_range(
                     "canonical Story base revision cannot be replayed",
                 )
             })?;
-        let story_id: StoryId = serde_json::from_value(serde_json::Value::String(
-            request.command.story_id.clone(),
-        ))
-        .map_err(|_| ProductApiError::bad_request("story_id_invalid", "invalid StoryId"))?;
+        let story_id: StoryId =
+            serde_json::from_value(serde_json::Value::String(request.command.story_id.clone()))
+                .map_err(|_| ProductApiError::bad_request("story_id_invalid", "invalid StoryId"))?;
         let story = session.graph().stories.get(&story_id).ok_or_else(|| {
             ProductApiError::bad_request("story_id_invalid", "source StoryId does not exist")
         })?;
@@ -1564,7 +1561,11 @@ fn validate_story_range_request(
         || request.command.story_id.is_empty()
         || request.command.story_id.len() > 128
         || request.command.replacement_text.len() > 8192
-        || request.command.replacement_text.chars().any(|ch| ch.is_control())
+        || request
+            .command
+            .replacement_text
+            .chars()
+            .any(|ch| ch.is_control())
     {
         return Err(ProductApiError::bad_request(
             "story_range_invalid",
@@ -1990,8 +1991,7 @@ mod tests {
                 "replacement_text": "A"
             }
         });
-        let valid: StoryRangeCommitRequestV1 =
-            serde_json::from_value(base.clone()).unwrap();
+        let valid: StoryRangeCommitRequestV1 = serde_json::from_value(base.clone()).unwrap();
         assert!(validate_story_range_request(&valid, "document-1").is_ok());
 
         let mut browser_forged = base.clone();
@@ -2004,20 +2004,17 @@ mod tests {
 
         let mut chained = base.clone();
         chained["depends_on_client_operation_id"] = json!("operation-story-00");
-        let request: StoryRangeCommitRequestV1 =
-            serde_json::from_value(chained).unwrap();
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(chained).unwrap();
         assert!(validate_story_range_request(&request, "document-1").is_err());
 
         let mut paragraph = base.clone();
         paragraph["command"]["replacement_text"] = json!("new\nparagraph");
-        let request: StoryRangeCommitRequestV1 =
-            serde_json::from_value(paragraph).unwrap();
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(paragraph).unwrap();
         assert!(validate_story_range_request(&request, "document-1").is_err());
 
         let mut invalid_range = base;
         invalid_range["command"]["end_scalar"] = json!(0);
-        let request: StoryRangeCommitRequestV1 =
-            serde_json::from_value(invalid_range).unwrap();
+        let request: StoryRangeCommitRequestV1 = serde_json::from_value(invalid_range).unwrap();
         assert!(validate_story_range_request(&request, "document-1").is_err());
     }
 
