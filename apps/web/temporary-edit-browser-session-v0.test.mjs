@@ -121,6 +121,52 @@ test("no storage permits current-tab view but reports resume unavailable", async
   assert.equal(result.restorable, false);
 });
 
+test("interrupted open after accepted upload resumes only that server handshake", async () => {
+  const store = storage();
+  await assert.rejects(() => new TemporaryEditBrowserSessionV0({
+    storage: store, csrfToken,
+    fetchImpl: flow({ open: { error: "guest_scene_worker_failed" } }).fetchImpl,
+  }).start(file), /temporary_response_identity_mismatch/);
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push({ url, opts });
+      if (calls.length === 1) {
+        return response({ error: "guest_scene_not_ready" }, 409);
+      }
+      return response(opened);
+    },
+  });
+  const result = await client.resume();
+  assert.equal(result.kind, "temporary_preview");
+  assert.equal(result.expires_at_ms, stored.expires_at_ms);
+  assert.deepEqual(calls.map(({url, opts}) => [url, opts.method]), [
+    [path + "scene", "GET"],
+    [path + "open", "POST"],
+  ]);
+  assert.equal(calls[1].opts.body, "{}");
+  assert.equal(calls[1].opts.headers["x-chaptera-reader-session"], token);
+});
+
+test("unrelated 409 never authorizes a second open", async () => {
+  const store = storage();
+  await new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: flow().fetchImpl,
+  }).start(file);
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return response({ error: "guest_upload_state_conflict" }, 409);
+    },
+  });
+  await assert.rejects(() => client.resume(), /guest_upload_state_conflict/);
+  assert.deepEqual(calls, [path + "scene"]);
+  assert.equal(client.hasSavedSession(), true);
+});
+
 test("expired capability is blocked by server 410 and discarded", async () => {
   const store = storage();
   await new TemporaryEditBrowserSessionV0({
