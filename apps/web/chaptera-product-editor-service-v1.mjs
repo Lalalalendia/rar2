@@ -1,4 +1,5 @@
 import { traceHeadersV1 } from "./observability-v1.mjs";
+import { validateStoryRangeIntentV1 } from "./text-protocol-v1.mjs";
 import { adaptReaderSceneToEditorScene } from "./reader-scene-editor-adapter-v1.mjs";
 import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 
@@ -229,6 +230,78 @@ export class ChapteraProductEditorServiceV1 {
       throw new Error("current Reader scene document identity mismatch");
     }
     return clone(value);
+  }
+
+  // Supported plain StoryRange intents only. Browser provides no canonical
+  // expected_before or durable text state; the isolated server derives both.
+  async commitStoryRange(request) {
+    const intent = validateStoryRangeIntentV1(request);
+    if (intent.document_id !== this.documentId) {
+      throw new TypeError("Story commit document differs from bound service document");
+    }
+    if (intent.depends_on_client_operation_id != null) {
+      throw new TypeError("pending Story operation chains are not admitted by Product V1");
+    }
+    if (intent.command.replacement_text.length > 8192 ||
+        [...intent.command.replacement_text].some((ch) => /[\\u0000-\\u001f\\u007f]/u.test(ch))) {
+      throw new TypeError("Product V1 admits only bounded plain Story replacements");
+    }
+    this.commitRequests += 1;
+    this.lastRequest = clone(intent);
+    const context = this.#context("commit", intent.client_operation_id);
+    this.lastCommitTraceContext = context;
+
+    const result = await this.#mutationJson(
+      "/v1/documents/" + encodeURIComponent(this.documentId) + "/story-commit",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(intent),
+      },
+      context,
+    );
+
+    if (result.response.ok) {
+      const accepted = ensureProtocol(
+        result.value, "chaptera.commit-accepted.v1", "Story commit accepted",
+      );
+      const operation = accepted.canonical_operation;
+      if (accepted.document_id !== intent.document_id ||
+          accepted.source_hash !== intent.source_hash ||
+          accepted.base_revision_id !== intent.base_revision_id ||
+          accepted.client_operation_id !== intent.client_operation_id ||
+          typeof accepted.revision_id !== "string" ||
+          !/^sha256:[0-9a-f]{64}$/.test(accepted.revision_id) ||
+          accepted.revision_id === intent.base_revision_id ||
+          operation?.kind !== "replace_story_range" ||
+          operation.story_id !== intent.command.story_id ||
+          operation.start_scalar !== intent.command.start_scalar ||
+          operation.end_scalar !== intent.command.end_scalar ||
+          operation.replacement_text !== intent.command.replacement_text) {
+        throw new Error("Story commit accepted identity mismatch");
+      }
+      return clone(accepted);
+    }
+
+    const code = responseErrorCode(result.value);
+    if (!REJECTABLE_COMMIT_CODES.has(code) &&
+        !["story_range_invalid", "story_id_invalid", "story_range_rejected",
+          "product_story_range_rejected", "product_story_range_invalid",
+          "text_causal_chain_unsupported"].includes(code)) {
+      this.#throwUnlessOk(result, "Story commit");
+    }
+    const currentRevisionId = code === "stale_revision"
+      ? (await this.currentDocument()).revision_id : null;
+    return {
+      protocol_version: COMMIT_REJECTED_V1,
+      document_id: intent.document_id,
+      base_revision_id: intent.base_revision_id,
+      current_revision_id: currentRevisionId,
+      client_operation_id: intent.client_operation_id,
+      code,
+      message_key: "revision." + code,
+      retryable: code === "stale_revision",
+    };
   }
 
   async commit(request) {
