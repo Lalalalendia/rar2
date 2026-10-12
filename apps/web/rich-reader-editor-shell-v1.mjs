@@ -158,6 +158,11 @@ export class RichReaderEditorShellV1 {
     this.lastHistoryResult = null;
     this.lastHistoryKind = null;
     this.historyInFlight = false;
+    // Lost Undo/Redo ACKs have the same durable-commit uncertainty as MoveNode.
+    this.historyUncertain = null;
+    this.historyRecoveryInFlight = false;
+    this.pendingHistoryRequest = null;
+    this.lastHistoryRecovery = null;
     this.commitInFlight = false;
     // Never mistake a lost HTTP ACK for a rejected canonical commit.
     this.commitUncertain = null;
@@ -212,7 +217,8 @@ export class RichReaderEditorShellV1 {
     const down = (event) => {
       if (event.button !== 0 || !this.interactionScene ||
           this.commitInFlight || this.historyInFlight ||
-          this.commitUncertain || this.commitRecoveryInFlight) return;
+          this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) return;
       const pageSvg = this._eventPage(event);
       if (!pageSvg) {
         this._clearSelection("hit_test_none");
@@ -263,7 +269,8 @@ export class RichReaderEditorShellV1 {
 
     const up = async (event) => {
       if (!this.gesture || this.commitInFlight || this.historyInFlight ||
-          this.commitUncertain || this.commitRecoveryInFlight) return;
+          this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) return;
       const pageSvg = this._pageSvg(this.gesturePageId);
       if (!pageSvg) {
         this.cancelGesture("gesture_page_missing");
@@ -313,8 +320,9 @@ export class RichReaderEditorShellV1 {
       const command = historyShortcutCommand(event);
       if (!command) return;
       event.preventDefault?.();
-      if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight) {
-        this._emitState(this.commitUncertain
+      if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight ||
+          this.historyUncertain || this.historyRecoveryInFlight) {
+        this._emitState(this.commitUncertain || this.historyUncertain
           ? "history_blocked_unknown_save" : "history_blocked_during_save");
         return;
       }
@@ -334,7 +342,8 @@ export class RichReaderEditorShellV1 {
 
   cancelGesture(reason = "gesture_cancelled") {
     if (!this.gesture || this.commitInFlight || this.commitUncertain ||
-        this.commitRecoveryInFlight) return false;
+        this.commitRecoveryInFlight || this.historyInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight) return false;
     this.gesture.cancel();
     this.gesture = null;
     this.gesturePageId = null;
@@ -359,6 +368,8 @@ export class RichReaderEditorShellV1 {
       last_commit_protocol: this.lastCommitResult?.protocol_version ?? null,
       history_request_count: this.historyRequests,
       history_in_flight: this.historyInFlight,
+      history_uncertain: this.historyUncertain !== null,
+      history_recovery_in_flight: this.historyRecoveryInFlight,
       commit_in_flight: this.commitInFlight,
       commit_uncertain: this.commitUncertain !== null,
       commit_recovery_in_flight: this.commitRecoveryInFlight,
@@ -397,6 +408,10 @@ export class RichReaderEditorShellV1 {
       this._emitState("history_blocked_during_save");
       throw new Error("history unavailable until the current commit is confirmed");
     }
+    if (this.historyUncertain || this.historyRecoveryInFlight) {
+      this._emitState("history_blocked_unknown_save");
+      throw new Error("history unavailable while history outcome is uncertain");
+    }
     if (this.historyInFlight) throw new Error("history transition already pending");
     if (typeof this.service[kind] !== "function") throw new TypeError("service cannot perform " + kind);
     if (!this.readerScene) throw new Error("editor scene is not loaded");
@@ -409,6 +424,7 @@ export class RichReaderEditorShellV1 {
     };
     this.historyRequests += 1;
     this.lastHistoryKind = kind;
+    this.pendingHistoryRequest = { kind, ...clone(request), documentId: this.readerScene.document_id };
     this.historyInFlight = true;
     this._emitState("history_sent");
 
@@ -426,6 +442,7 @@ export class RichReaderEditorShellV1 {
           { preserveSelection: false },
         );
         this.historyInFlight = false;
+        this.pendingHistoryRequest = null;
         this._emitState("history_reconciled");
         return { request, result, reader_scene: clone(nextReaderScene) };
       }
@@ -443,18 +460,74 @@ export class RichReaderEditorShellV1 {
         );
       }
       this.historyInFlight = false;
+      this.pendingHistoryRequest = null;
       this._emitState("history_rejected");
       return { request, result, reader_scene: clone(this.readerScene) };
     } catch (error) {
+      // The authoritative history operation may have committed before the
+      // HTTP ACK or post-commit Reader Scene disappeared. Do not unlock.
+      if (this.pendingHistoryRequest) {
+        this.historyUncertain = clone(this.pendingHistoryRequest);
+      }
       this.historyInFlight = false;
-      this._emitState("history_error");
+      this._emitState(this.historyUncertain ? "history_ack_unknown" : "history_error");
       throw error;
+    }
+  }
+
+  async reconcileUncertainHistory() {
+    const pending = this.historyUncertain;
+    if (!pending) throw new Error("no unknown history transition requires reconciliation");
+    if (this.historyRecoveryInFlight || this.historyInFlight || this.commitInFlight ||
+        this.commitUncertain || this.commitRecoveryInFlight) {
+      throw new Error("history authority reconciliation already pending");
+    }
+    this.historyRecoveryInFlight = true;
+    this._emitState("history_recovery_checking");
+    let reason = "history_recovery_failed";
+    try {
+      // Recheck the authenticated canonical /current and exact Reader Scene.
+      // Head advancement alone cannot attribute the change to this Undo/Redo.
+      const state = await this.service.currentRichEditorState();
+      const current = state?.current_document;
+      const scene = state?.reader_scene;
+      if (!current || !scene ||
+          current.protocol_version !== "chaptera.current-document.v1" ||
+          scene.protocol_version !== "chaptera.reader-scene.v1" ||
+          current.document_id !== pending.documentId ||
+          scene.document_id !== pending.documentId ||
+          current.source_hash !== pending.sourceHash ||
+          scene.source_hash !== pending.sourceHash ||
+          current.revision_id !== scene.revision_id ||
+          typeof current.revision_id !== "string" ||
+          current.revision_id === pending.baseRevisionId) {
+        throw new Error("server has not confirmed a distinct exact canonical history revision");
+      }
+      await this.loadScenes(
+        scene,
+        projectReaderSceneToEditorInteractionScene(scene),
+        { preserveSelection: false },
+      );
+      this.lastHistoryRecovery = {
+        transition_kind: pending.kind,
+        client_operation_id: pending.clientOperationId,
+        observed_revision_id: current.revision_id,
+        original_history_ack_proven: false,
+      };
+      this.pendingHistoryRequest = null;
+      this.historyUncertain = null;
+      reason = "history_authority_reconciled";
+      return clone(this.lastHistoryRecovery);
+    } finally {
+      this.historyRecoveryInFlight = false;
+      this._emitState(reason);
     }
   }
 
   async _commitGesture(point) {
     if (this.commitInFlight || this.historyInFlight || this.commitUncertain ||
-        this.commitRecoveryInFlight) {
+        this.commitRecoveryInFlight || this.historyUncertain ||
+        this.historyRecoveryInFlight) {
       throw new Error("cannot commit another gesture while save authority is pending");
     }
     this.commitInFlight = true;
@@ -487,7 +560,8 @@ export class RichReaderEditorShellV1 {
   async reconcileUncertainCommit() {
     const pending = this.commitUncertain;
     if (!pending) throw new Error("no unknown commit requires reconciliation");
-    if (this.commitRecoveryInFlight || this.commitInFlight || this.historyInFlight) {
+    if (this.commitRecoveryInFlight || this.commitInFlight || this.historyInFlight ||
+        this.historyUncertain || this.historyRecoveryInFlight) {
       throw new Error("commit authority reconciliation already pending");
     }
     this.commitRecoveryInFlight = true;
