@@ -715,6 +715,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        32 => EDITOR_PROJECT_VERSION_V0_32,
         31 => EDITOR_PROJECT_VERSION_V0_31,
         30 => EDITOR_PROJECT_VERSION_V0_30,
         29 => EDITOR_PROJECT_VERSION_V0_29,
