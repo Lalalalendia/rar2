@@ -12,11 +12,11 @@ from pathlib import Path
 from cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid, sha256
 from reader_publisher_lo_49_111_scoreboard_v1 import load_frozen, read_publisher_registry, winner
 
-CASES = {
-    '020': ('6c6af8064f91ad5321f76c97c00b1a6564794d92614373334de23e2759294aaa', 1),
-    '026': ('5c1054b0bd7bd3ae64ab6884e51943e2c5161cdf2dd13803c8d338f652c06cf0', 1),
-    '043': ('e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b', 2),
-}
+from product_full_cohort_shards_v1 import build as load_exact_product_cohort
+
+CASES = {item['id']: (item['source_sha256'], item['pages'])
+         for shard in load_exact_product_cohort()['shards']
+         for item in shard['fixtures']}
 BROWSER = 'chaptera.product-worst-publisher-ab-browser.v1'
 OUTPUT = 'chaptera.product-worst-publisher-ab-score.v1'
 
@@ -76,6 +76,8 @@ def compare(case: str, ref_path: Path, pair_path: Path, frozen_path: Path,
         raise ValueError('source Publisher/PUB PDF SHA mismatch')
     browser=json.loads((browser_dir/'browser-receipt.json').read_text(encoding='utf-8'))
     before,after=check_receipt(browser,case,head)
+    if browser.get('fidelity_state') not in ('supported','partial'):
+        raise ValueError('Product host fidelity disposition was not proven')
     rows=[]
     for i,(ordinal,lo_cells,_historic) in enumerate(lo_rows):
         page_ref=ref['pages'][ordinal-1]
@@ -95,7 +97,15 @@ def compare(case: str, ref_path: Path, pair_path: Path, frozen_path: Path,
                 raise ValueError('ephemeral real Chromium screenshot identity mismatch')
             amounts[state_name]=compare_grid(image_grid(png),oracle)['changed_cell_count']
         product=amounts['after']
+        p=after['pages'][i]
+        extent={'width_pt': round(p['width_emu']/12700-page_ref['media_width_pt'],8),
+                'height_pt': round(p['height_emu']/12700-page_ref['media_height_pt'],8)}
         rows.append({'page':ordinal,'product_changed_cells':product,
+                     'product_page_identity_sha256':p['page_id_sha256'],
+                     'chromium_png_sha256':p['screenshot_sha256'],
+                     'physical_extent_delta_pt':extent,
+                     'host_derived_resource_count':browser['host_resource_count'],
+                     'fidelity_state':('partial' if browser['fidelity_state']=='partial' else 'full'),
                      'same_scene_image_off_changed_cells':amounts['before'],
                      'host_image_effect_cells':amounts['before']-product,
                      'frozen_lo_changed_cells':lo_cells,
