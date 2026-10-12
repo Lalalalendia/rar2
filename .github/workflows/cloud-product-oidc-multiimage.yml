@@ -54,6 +54,8 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/run_product_oidc_multiimage_acceptance.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
           node --check tools/run_secure_origin_product_multiimage_browser.mjs
+          node --check apps/cloud-reader/product-safe-preview-022-browser.test.mjs
+          python -m py_compile tools/reader_safe_preview_visual_022.py
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "real seccomp required"
@@ -86,6 +88,7 @@ jobs:
           set -euo pipefail
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
 
       - name: Physical real OIDC upload, isolated Product multi-image admission and Chromium
         env:
@@ -133,6 +136,7 @@ jobs:
           path: |
             target/product-oidc-multiimage-${{ matrix.id }}/summary.json
             target/product-oidc-multiimage-${{ matrix.id }}/owner.json
+            target/product-oidc-multiimage-${{ matrix.id }}/publisher-comparison.json
             target/product-oidc-multiimage-${{ matrix.id }}/privacy-scan.json
           if-no-files-found: error
           retention-days: 14
