@@ -840,7 +840,9 @@ mod grouped_solid_rectangle_tests {
         assert!(has_bounded_grouped_solid_rectangle(&explicit_solid));
     }
 
-    fn logo_effective_fill(color_authority: PubEffectivePaintAuthority) -> PubEffectiveShapePaintSource {
+    fn logo_effective_fill(
+        color_authority: PubEffectivePaintAuthority,
+    ) -> PubEffectiveShapePaintSource {
         PubEffectiveShapePaintSource {
             fill: PubEffectiveFillSource {
                 solid: Some(PubEffectivePaintValue {
@@ -888,24 +890,38 @@ mod grouped_solid_rectangle_tests {
         let mut no_local_fill = local.clone();
         no_local_fill.fill.visible.as_mut().unwrap().authority =
             PubEffectivePaintAuthority::NormativeDefault;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &no_local_fill));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_local_fill
+        ));
 
         let mut unknown_color = local.clone();
         unknown_color.fill.color_rgb = None;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &unknown_color));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &unknown_color
+        ));
 
         let mut normative_color = local.clone();
         normative_color.fill.color_rgb.as_mut().unwrap().authority =
             PubEffectivePaintAuthority::NormativeDefault;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &normative_color));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &normative_color
+        ));
 
         let mut no_color_source = local.clone();
         no_color_source.fill.color_rgb.as_mut().unwrap().source = None;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &no_color_source));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_color_source
+        ));
 
         let mut gradient = local.clone();
         gradient.fill.solid.as_mut().unwrap().value = false;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &gradient));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect, &gradient
+        ));
 
         let mut line = local.clone();
         line.line.visible.as_mut().unwrap().value = true;
@@ -914,19 +930,30 @@ mod grouped_solid_rectangle_tests {
         let mut no_local_line = local.clone();
         no_local_line.line.visible.as_mut().unwrap().authority =
             PubEffectivePaintAuthority::NormativeDefault;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&rect, &no_local_line));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &rect,
+            &no_local_line
+        ));
 
         let mut ellipse = rect.clone();
         ellipse.fsp.as_mut().unwrap().shape_type = OFFICEART_SHAPE_TYPE_ELLIPSE;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&ellipse, &local));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &ellipse, &local
+        ));
 
         let mut opacity = rect.clone();
-        opacity.fopts[0].properties.push(property(0x0182, 0x0000_8000));
-        assert!(!has_bounded_logo_effective_solid_rectangle(&opacity, &local));
+        opacity.fopts[0]
+            .properties
+            .push(property(0x0182, 0x0000_8000));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &opacity, &local
+        ));
 
         let mut connector = rect.clone();
         connector.fsp.as_mut().unwrap().flags |= OFFICEART_FSP_CONNECTOR_BIT;
-        assert!(!has_bounded_logo_effective_solid_rectangle(&connector, &local));
+        assert!(!has_bounded_logo_effective_solid_rectangle(
+            &connector, &local
+        ));
     }
 
     #[test]
