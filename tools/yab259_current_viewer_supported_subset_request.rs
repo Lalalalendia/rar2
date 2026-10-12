@@ -98,6 +98,10 @@ struct CurrentTableCell {
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
+    layout: Option<CurrentTextLayout>,
+    #[serde(default)]
+    single_line_natural_extent_emu: Option<i64>,
+    #[serde(default)]
     bounds: Option<RectEmu>,
     #[serde(default)]
     fill_rgb: Option<[u8; 3]>,
@@ -252,6 +256,10 @@ struct MappingSummary {
     table_cell_uniform_size_count: usize,
     table_cell_resolved_color_count: usize,
     table_cell_inset_bounds_valid_count: usize,
+    table_cell_layout_evidence_count: usize,
+    table_cell_physical_first_line_fit_count: usize,
+    table_cell_baseline_false_reject_count: usize,
+    table_cell_layout_inconsistent_count: usize,
     table_uniform_cell_text_inset_count: usize,
     table_uniform_vertical_alignment_count: usize,
     derived_table_fill_node_count: usize,
@@ -523,6 +531,57 @@ fn table_cell_inset_fits_bounds_v1(cell: &CurrentTableCell, inset: i64) -> bool 
     bounds.width.get() > double_inset && bounds.height.get() > double_inset
 }
 
+/// Audit an already-resolved TABLE line; never synthesize new line geometry or glyphs.
+/// A successful result is evidence only, not permission to add PDF text runs.
+fn observed_table_cell_physical_fit_v1(cell: &CurrentTableCell, inset: i64) -> Option<bool> {
+    let bounds = cell.bounds?;
+    let natural = cell.single_line_natural_extent_emu?;
+    let layout = cell.layout.as_ref()?;
+    let CurrentTextLayoutDisposition::SharedResolved {
+        font_resource_id,
+        font_fingerprint_sha256,
+        font_size_emu,
+        line_height_emu,
+    } = &layout.disposition
+    else {
+        return None;
+    };
+    let double_inset = inset.checked_mul(2)?;
+    let content_width = bounds.width.get().checked_sub(double_inset)?;
+    let content_height = bounds.height.get().checked_sub(double_inset)?;
+    if inset < 0
+        || content_width <= 0
+        || content_height <= 0
+        || natural <= 0
+        || *font_size_emu <= 0
+        || *line_height_emu <= 0
+        || font_resource_id.is_empty()
+        || font_fingerprint_sha256.len() != 64
+        || layout.lines.len() != 1
+    {
+        return None;
+    }
+    let line = &layout.lines[0];
+    if line.text != cell.text
+        || Some(line.scalar_start) != cell.story_scalar_start
+        || Some(line.scalar_end) != cell.story_scalar_end
+        || line.scalar_start >= line.scalar_end
+        || line.line_height_emu != *line_height_emu
+        || line.measured_width_emu <= 0
+        || line.measured_width_emu > content_width
+        || natural > content_height
+        || layout.vertical_offset_emu < 0
+        || layout.vertical_offset_emu > content_height - natural
+        || !line.spans.is_empty()
+        || !line.shaping.as_ref().is_some_and(|shape| {
+            shape.units_per_em > 0 && !shape.glyphs.is_empty()
+        })
+    {
+        return None;
+    }
+    Some(*line_height_emu > content_height)
+}
+
 fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSummary) {
     let admitted_inset = table
         .uniform_cell_text_inset_emu
@@ -589,6 +648,104 @@ fn observe_table_text_authority_v1(table: &CurrentTable, summary: &mut MappingSu
         {
             summary.table_cell_inset_bounds_valid_count += 1;
         }
+        if cell.layout.is_some() || cell.single_line_natural_extent_emu.is_some() {
+            summary.table_cell_layout_evidence_count += 1;
+            match admitted_inset.and_then(|inset| observed_table_cell_physical_fit_v1(cell, inset)) {
+                Some(baseline_would_reject) => {
+                    summary.table_cell_physical_first_line_fit_count += 1;
+                    if baseline_would_reject {
+                        summary.table_cell_baseline_false_reject_count += 1;
+                    }
+                }
+                None => summary.table_cell_layout_inconsistent_count += 1,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod table_cell_first_line_observation_tests {
+    use super::*;
+
+    fn cell(natural: i64, baseline: i64, height: i64) -> CurrentTableCell {
+        CurrentTableCell {
+            id: TableCellId::from_canonical(CanonicalId::from_bytes([7; 16])),
+            story_scalar_start: Some(10),
+            story_scalar_end: Some(14),
+            text: "ABCD".to_owned(),
+            typography: Vec::new(),
+            layout: Some(CurrentTextLayout {
+                disposition: CurrentTextLayoutDisposition::SharedResolved {
+                    font_resource_id: "pinned:test".to_owned(),
+                    font_fingerprint_sha256: "a".repeat(64),
+                    font_size_emu: 100,
+                    line_height_emu: baseline,
+                },
+                vertical_offset_emu: 0,
+                lines: vec![CurrentTextLine {
+                    scalar_start: 10,
+                    scalar_end: 14,
+                    text: "ABCD".to_owned(),
+                    measured_width_emu: 150,
+                    line_height_emu: baseline,
+                    x_offset_emu: 0,
+                    spans: Vec::new(),
+                    shaping: Some(CurrentShaping {
+                        environment: BoundedShapingDescriptor {
+                            layout: BoundedLayoutEnvironment {
+                                engine_revision: "test".to_owned(),
+                                font_set_fingerprint: "a".repeat(64),
+                                resource_fingerprint: "pinned:test".to_owned(),
+                            },
+                            face_index: 0,
+                            font_size_emu: LengthEmu::new(100),
+                            shaper_revision: "test".to_owned(),
+                        },
+                        units_per_em: 1000,
+                        glyphs: vec![BoundedShapedGlyph {
+                            glyph_id: 1,
+                            cluster: 10,
+                            x_advance: LengthEmu::new(1),
+                            y_advance: LengthEmu::ZERO,
+                            x_offset: LengthEmu::ZERO,
+                            y_offset: LengthEmu::ZERO,
+                            unsafe_to_break: false,
+                        }],
+                    }),
+                }],
+            }),
+            single_line_natural_extent_emu: Some(natural),
+            bounds: Some(RectEmu::new(
+                LengthEmu::new(0),
+                LengthEmu::new(0),
+                LengthEmu::new(400),
+                LengthEmu::new(height),
+            )),
+            fill_rgb: None,
+            fill_visible: None,
+        }
+    }
+
+    #[test]
+    fn physical_first_line_height_can_fit_when_baseline_advance_would_not() {
+        let mut candidate = cell(75, 110, 100);
+        let CurrentTextLayoutDisposition::SharedResolved { .. } =
+            &candidate.layout.as_ref().unwrap().disposition
+        else {
+            panic!("shared layout fixture expected");
+        };
+        assert_eq!(observed_table_cell_physical_fit_v1(&candidate, 10), Some(true));
+        candidate.layout.as_mut().unwrap().vertical_offset_emu = 6;
+        assert_eq!(observed_table_cell_physical_fit_v1(&candidate, 10), None);
+    }
+
+    #[test]
+    fn physical_fit_rejects_truncated_height_and_mismatched_story_range() {
+        let mut candidate = cell(81, 110, 100);
+        assert_eq!(observed_table_cell_physical_fit_v1(&candidate, 10), None);
+        candidate.single_line_natural_extent_emu = Some(75);
+        candidate.story_scalar_end = Some(15);
+        assert_eq!(observed_table_cell_physical_fit_v1(&candidate, 10), None);
     }
 }
 

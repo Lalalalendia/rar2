@@ -94,6 +94,21 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("derived TABLE paint census does not partition fill and border primitives", text)
         self.assertIn("derived TABLE paint node cardinality drift", text)
 
+    def test_table_layout_observation_consumes_existing_physical_evidence_without_paint(self) -> None:
+        text = MAPPER.read_text(encoding="utf-8")
+        self.assertIn("layout: Option<CurrentTextLayout>", text)
+        self.assertIn("single_line_natural_extent_emu: Option<i64>", text)
+        self.assertIn("fn observed_table_cell_physical_fit_v1", text)
+        self.assertIn("table_cell_layout_evidence_count", text)
+        self.assertIn("table_cell_physical_first_line_fit_count", text)
+        self.assertIn("table_cell_baseline_false_reject_count", text)
+        self.assertIn("table_cell_layout_inconsistent_count", text)
+        self.assertIn("Some(*line_height_emu > content_height)", text)
+        self.assertIn("fn table_cell_first_line_observation_tests", text)
+        # Observations must never manufacture glyph-run output.
+        self.assertIn("let mut text_runs = Vec::<FixedTextRun>::new()", text)
+        self.assertNotIn("table_cell_first_line_observation_tests::emit", text)
+
     def test_runner_defaults_to_exact_alpha_but_retains_explicit_reject_control(self) -> None:
         text = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_alpha_smask_pdf_donor", text)
