@@ -345,7 +345,7 @@ test("lost Undo/Redo ACK preserves operation identity and blocks edits until can
       assert.equal(shell.historyInFlight, false);
       assert.equal(shell.stateReceipt().history_uncertain, true);
       assert.equal(shell.historyUncertain.clientOperationId, "history-exact-operation-id");
-      assert.deepEqual(shell.pendingHistoryRequest, requests[0]);
+      assert.deepEqual(shell.pendingHistoryRequest, { ...requests[0], documentId: "doc" });
       assert.equal(shell.pendingHistoryRequest.documentId, "doc");
       assert.equal(states.at(-1).reason, "history_ack_unknown");
 
@@ -358,7 +358,7 @@ test("lost Undo/Redo ACK preserves operation identity and blocks edits until can
         recoveryMode = mode;
         await assert.rejects(shell.reconcileUncertainHistory());
         assert.equal(shell.stateReceipt().history_uncertain, true, mode + " must stay locked");
-        assert.deepEqual(shell.pendingHistoryRequest, requests[0]);
+        assert.deepEqual(shell.pendingHistoryRequest, { ...requests[0], documentId: "doc" });
       }
       assert.equal(shell.readerScene.revision_id, BASE);
       recoveryMode = "confirmed";
