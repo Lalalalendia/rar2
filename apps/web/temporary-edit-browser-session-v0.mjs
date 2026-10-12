@@ -7,6 +7,12 @@ const SESSION_ID = /^tempedit:[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;
 const SOURCE_SHA = /^[0-9a-f]{64}$/;
 const CLASSIFICATIONS = new Set(["supported", "partial", "salvage", "unsupported", "rejected"]);
+const SAFE_SERVER_ERRORS = new Set([
+  "guest_session_expired", "guest_session_not_found", "guest_session_token_required",
+  "guest_upload_too_large", "guest_upload_length_mismatch", "guest_upload_state_conflict",
+  "guest_upload_not_stored", "guest_open_in_progress", "guest_scene_not_ready",
+  "guest_source_scan_failed", "guest_scene_worker_failed", "guest_upload_admission_failed",
+]);
 
 function fail(code, status) {
   const error = new Error(code);
@@ -44,7 +50,7 @@ async function readJson(response) {
   if (!response.ok) {
     // Never reflect arbitrary server text, source bytes or bearer material.
     const raw = body?.error;
-    const code = typeof raw === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(raw)
+    const code = typeof raw === "string" && SAFE_SERVER_ERRORS.has(raw)
       ? raw : "temporary_request_failed";
     throw fail(code, response.status);
   }
