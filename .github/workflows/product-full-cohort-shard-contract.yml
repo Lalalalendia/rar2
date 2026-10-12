@@ -1,0 +1,52 @@
+name: Product 49/111 immutable physical shard contract
+
+on:
+  pull_request:
+    paths:
+      - tools/product_full_cohort_shards_v1.py
+      - tools/test_product_full_cohort_shards_v1.py
+      - .github/workflows/product-full-cohort-shard-contract.yml
+      - tools/corpus/receipts/publisher-lo-t999-49-111-frozen-v1.json
+      - tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-full-shard-contract-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  immutable-physical-roster:
+    name: Validate 49 PUB / 39 eligible / 111 PAGE exact source roster
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reject source/PDF/oracle drift, post-hoc exclusions and shard overlap
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/product_full_cohort_shards_v1.py tools/test_product_full_cohort_shards_v1.py
+          python tools/test_product_full_cohort_shards_v1.py -v
+      - name: Exercise full fixed roster and ephemeral matrix serialization
+        run: |
+          set -euo pipefail
+          python tools/product_full_cohort_shards_v1.py --matrix > "$RUNNER_TEMP/product-shards.json"
+          python tools/product_full_cohort_shards_v1.py --case 020 > "$RUNNER_TEMP/product-case-020.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          matrix = json.loads((tmp / 'product-shards.json').read_text())['include']
+          assert len(matrix) == 4
+          assert [s['pages'] for s in matrix] == [28, 28, 28, 27]
+          assert [len(s['case_ids'].split()) for s in matrix] == [2, 12, 12, 13]
+          case = json.loads((tmp / 'product-case-020.json').read_text())
+          assert case['id'] == '020' and case['pages'] == 1
+          PY
