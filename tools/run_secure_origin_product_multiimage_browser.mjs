@@ -1,0 +1,274 @@
+#!/usr/bin/env node
+// Real OIDC-authenticated Product pinned PUB001/023: SourceIngress -> isolated reader
+// -> host re-encode -> authenticated HTTP -> Chromium SVG. No mocked routes.
+// Scene, PUB, cookies, and image bytes remain on the ephemeral CI runner.
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { dirname } from "node:path";
+import { chromium } from "playwright";
+
+const origin = process.env.CHAPTERA_SECURE_ORIGIN;
+const fixturePath = process.env.CHAPTERA_PREVIEW_022_FIXTURE;
+const expectedSha = process.env.CHAPTERA_PREVIEW_022_SHA256;
+const fixtureId = process.env.CHAPTERA_PRODUCT_MULTI_ID;
+const known = {
+  "001": { sha: "0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade", bytes: 72704, images: 1 },
+  "023": { sha: "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8", bytes: 4573696, images: 7 },
+};
+const fixture = known[fixtureId];
+const storageState = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
+const privatePath = process.env.CHAPTERA_PREVIEW_022_PRIVATE;
+const scenePath = process.env.CHAPTERA_PREVIEW_022_SCENE_OUT;
+const summaryPath = process.env.CHAPTERA_PREVIEW_022_SUMMARY;
+if ([origin, fixturePath, expectedSha, storageState, privatePath, scenePath, summaryPath].some(v => !v)) {
+  throw new Error("Product 022 requires pinned source, saved real OIDC session and private receipt paths");
+}
+if (!fixture || expectedSha !== fixture.sha) {
+  throw new Error("Product acceptance must use the pinned Publisher 022 source");
+}
+const pub = await readFile(fixturePath);
+if (pub.length !== fixture.bytes ||
+    createHash("sha256").update(pub).digest("hex") !== expectedSha) {
+  throw new Error("real Publisher 022 source identity mismatch");
+}
+const browser = await chromium.launch({
+  headless: true,
+  args: ["--host-resolver-rules=MAP edge.test 127.0.0.1"],
+});
+const context = await browser.newContext({
+  ignoreHTTPSErrors: true,
+  ...(existsSync(storageState) ? { storageState } : {}),
+  viewport: { width: 1450, height: 1100 },
+});
+const page = await context.newPage();
+const errors = [];
+const foreign = [];
+// Genuine PKCE browser login necessarily visits the test OIDC provider.
+// The no-external-resource fence begins only after the authenticated owner
+// is ready to select a PUB; it still covers ingress, Product and image paint.
+let monitorExternalRequests = false;
+page.on("pageerror", err => errors.push(String(err)));
+page.on("request", request => {
+  const url = request.url();
+  if (monitorExternalRequests &&
+      !url.startsWith(origin + "/") && !url.startsWith("data:")) {
+    foreign.push(url);
+  }
+});
+try {
+  // This cookie was obtained by the real authorization-code/PKCE browser
+  // journey, NOT assembled or injected by the test.
+  let cookies = await context.cookies(origin);
+  if (!cookies.some(c => c.name === "__Host-chaptera_session")) {
+    // Fresh browser must complete the actual OIDC authorization-code / PKCE
+    // redirect; never synthesize or inject an authentication cookie.
+    await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+      null, { timeout: 30000 },
+    );
+    await context.storageState({ path: storageState });
+    cookies = await context.cookies(origin);
+  }
+  const session = cookies.find(c => c.name === "__Host-chaptera_session");
+  if (!session || !session.secure || !session.httpOnly ||
+      session.sameSite !== "Lax" || session.domain !== "edge.test") {
+    throw new Error("real OIDC browser session not preserved");
+  }
+  await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+    null, { timeout: 30000 },
+  );
+  // The UI's already completed real OIDC session/workspace preparation.
+  // A second GET /v1/session would rotate its CSRF secret and invalidate
+  // the browser's upload-token, causing a correct fail-closed HTTP 403.
+  monitorExternalRequests = true;
+  // Capture the real Editor shell's requests BEFORE the file triggers a new
+  // document navigation. The shell already GETs /current and /scene. Starting
+  // a second pair of Product replay jobs here would double CPU/memory use and
+  // can turn a bounded single-worker result into a synthetic timeout.
+  const isUiResponse = (response, kind) => {
+    if (response.request().method() !== "GET") return false;
+    const url = new URL(response.url());
+    if (url.origin !== origin) return false;
+    const route = decodeURIComponent(url.pathname);
+    return kind === "current"
+      ? /^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)
+      : /^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route);
+  };
+  const currentFromUi = page.waitForResponse(
+    response => isUiResponse(response, "current"), { timeout: 150000 });
+  const sceneFromUi = page.waitForResponse(
+    response => isUiResponse(response, "scene"), { timeout: 150000 });
+  await page.locator("#pub-file").setInputFiles({
+    name: "Pinned" + fixtureId + ".pub",
+    mimeType: "application/x-mspublisher",
+    buffer: pub,
+  });
+  await page.waitForURL(url =>
+    /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
+    { timeout: 150000, waitUntil: "domcontentloaded" },
+  );
+  const documentId = decodeURIComponent(new URL(page.url()).pathname)
+    .replace("/editor/doc/", "");
+  const [currentResponse, sceneResponse] = await Promise.all([
+    currentFromUi, sceneFromUi,
+  ]);
+  const [current, scene] = await Promise.all([
+    currentResponse.json().catch(() => null),
+    sceneResponse.json().catch(() => null),
+  ]);
+  const result = {
+    currentStatus: currentResponse.status(),
+    sceneStatus: sceneResponse.status(),
+    cacheControl: sceneResponse.headers()["cache-control"] ?? null,
+    current, scene,
+  };
+  if (result.currentStatus !== 200 || result.sceneStatus !== 200) {
+    const code = scene?.error?.code;
+    const safeCode = typeof code === "string" && /^[a-z0-9_]{1,80}$/.test(code)
+      ? code : "redacted";
+    throw new Error("UI Product HTTP failed: current=" + result.currentStatus +
+      " scene=" + result.sceneStatus + " fixed_code=" + safeCode);
+  }
+  // current and scene were captured from the actual UI HTTP responses above.
+  if (result.currentStatus !== 200 || result.sceneStatus !== 200 ||
+      result.cacheControl !== "no-store" || current?.document_id !== documentId ||
+      !current?.revision_id || scene?.protocol_version !== "chaptera.reader-scene.v1" ||
+      scene.document_id !== documentId || scene.revision_id !== current.revision_id ||
+      scene.source_hash !== expectedSha || scene.pages?.length !== 1 ||
+      scene.fidelity?.state !== "partial") {
+    throw new Error("authenticated Product HTTP did not preserve pinned source and current revision");
+  }
+  if (!(scene.fidelity.reasons ?? []).includes("safe_preview_color_untransformed")) {
+    throw new Error("host preview lost its explicit partial color-fidelity disposition");
+  }
+  if (scene.project || scene.authoring_graph || scene.source_bytes) {
+    throw new Error("Product Reader returned forbidden raw authoring or PUB source payload");
+  }
+  const resources = scene.resources ?? [];
+  const admitted = resources.filter(resource =>
+    (resource.mime === "image/png" || resource.mime === "image/jpeg") &&
+    resource.availability === "inline_data_url" &&
+    typeof resource.inline_data_url === "string");
+  if (admitted.length !== fixture.images) {
+    throw new Error("pinned Product fixture does not admit its exact image count");
+  }
+  const imageIds = new Set();
+  for (const item of admitted) {
+    const rid = item.resource_id;
+    if (!rid || imageIds.has(rid)) {
+      throw new Error("Product image resource identity is missing or duplicated");
+    }
+    imageIds.add(rid);
+    const prefix = "data:" + item.mime + ";base64,";
+    if (!item.inline_data_url.startsWith(prefix)) {
+      throw new Error("Product host preview URL/MIME invalid");
+    }
+    const encoded = Buffer.from(item.inline_data_url.slice(prefix.length), "base64");
+    const imageCap = (item.mime === "image/png" ? 4 : 5) * 1024 * 1024;
+    const magic = item.mime === "image/png" ? "89504e470d0a1a0a" : "ffd8ff";
+    if (encoded.length === 0 || encoded.length > imageCap ||
+        encoded.subarray(0, magic.length / 2).toString("hex") !== magic) {
+      throw new Error("Product host derivative exceeds cap or has invalid magic");
+    }
+    const used = (scene.nodes ?? []).some(node =>
+      node.resource_id === rid ||
+      (node.decorative_border?.placements ?? []).some(p => p.resource_id === rid));
+    if (!used) throw new Error("Product derived image does not belong to a Scene node");
+  }
+  if (Buffer.byteLength(JSON.stringify(scene), "utf8") > 16 * 1024 * 1024) {
+    throw new Error("Product Scene size cap violated");
+  }
+  await page.waitForFunction(
+    props => document.querySelector("#status")?.classList.contains("ok") &&
+      document.querySelector("#status")?.textContent?.includes(props.revision) &&
+      document.querySelectorAll("#canvas svg.page[data-page-id]").length === 1 &&
+      document.querySelectorAll("#canvas svg image[data-resource-id]").length >= props.images,
+    { revision: current.revision_id, images: fixture.images }, { timeout: 45000 },
+  );
+  const paint = await page.locator("#canvas svg image[data-resource-id]").evaluateAll(
+    async images => Promise.all(images.map(async image => {
+      const href = image.getAttribute("href") || image.getAttribute("xlink:href");
+      if (!href?.startsWith("data:image/png;base64,") &&
+          !href?.startsWith("data:image/jpeg;base64,")) {
+        throw new Error("browser displayed a non-host image URL");
+      }
+      const decoded = new Image();
+      decoded.src = href;
+      await decoded.decode();
+      const box = image.getBoundingClientRect();
+      return {
+        resource_id: image.getAttribute("data-resource-id"),
+        visible: box.width > 0 && box.height > 0,
+        decoded: decoded.naturalWidth > 0 && decoded.naturalHeight > 0,
+      };
+    })),
+  );
+  const paintedIds = new Set(
+    paint.filter(p => p.visible && p.decoded).map(p => p.resource_id));
+  if (paintedIds.size !== fixture.images ||
+      [...imageIds].some(resourceId => !paintedIds.has(resourceId)) ||
+      errors.length || foreign.length) {
+    throw new Error("authenticated Product source images failed Chromium paint");
+  }
+  const resource = admitted[0];
+
+  // Fresh, cookie-free browser context must not receive this Scene.
+  const anon = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const anonymousPage = await anon.newPage();
+    await anonymousPage.goto(origin + "/live", { waitUntil: "domcontentloaded" });
+    const anonymousStatus = await anonymousPage.evaluate(async id => {
+      const response = await fetch("/v1/reader/documents/" +
+        encodeURIComponent(id) + "/scene", { credentials: "same-origin", cache: "no-store" });
+      return response.status;
+    }, documentId);
+    if (anonymousStatus !== 401) {
+      throw new Error("anonymous Product Reader request did not return 401");
+    }
+  } finally {
+    await anon.close();
+  }
+
+  // PRIVATE files used only for image-on/off Publisher A/B and cross-principal/
+  // restart controls in the same ephemeral job. Never upload these paths.
+  await mkdir(dirname(scenePath), { recursive: true });
+  await writeFile(scenePath, JSON.stringify(scene), "utf8");
+  await writeFile(privatePath, JSON.stringify({
+    document_id: documentId,
+    revision_id: current.revision_id,
+    source_sha256: expectedSha,
+    resource_id: resource.resource_id,
+  }), "utf8");
+  const receipt = {
+    schema: "chaptera.product-oidc-multiimage-browser.v1",
+    fixture: fixtureId,
+    repository_commit_sha: process.env.CHAPTERA_HEAD_SHA ?? "unverified",
+    real_oidc_pkce_session_reused: true,
+    tls_product_source_ingress: true,
+    exact_source_and_revision: true,
+    actual_product_http_status: 200,
+    isolated_worker_and_host_owned_image: true,
+    host_image_count: admitted.length,
+    scene_image_resource_count: admitted.length,
+    browser_painted_resources: paintedIds.size,
+    browser_svg_image_count: paint.length,
+    chromium_pixels_decoded: true,
+    anonymous_scene_status: 401,
+    source_container_forwarded: false,
+    external_image_requests: 0,
+    browser_errors: 0,
+    fidelity_state: "partial",
+    production_s3_claim: false,
+    deployed_host_claim: false,
+  };
+  await mkdir(dirname(summaryPath), { recursive: true });
+  await writeFile(summaryPath, JSON.stringify(receipt, null, 2) + "\n", "utf8");
+  process.stdout.write("PRODUCT_OIDC_MULTIIMAGE " + JSON.stringify(receipt) + "\n");
+} finally {
+  await context.close();
+  await browser.close();
+}
