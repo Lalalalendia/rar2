@@ -158,6 +158,12 @@ export class RichReaderEditorShellV1 {
     this.lastHistoryResult = null;
     this.lastHistoryKind = null;
     this.historyInFlight = false;
+    this.commitInFlight = false;
+    // Never mistake a lost HTTP ACK for a rejected canonical commit.
+    this.commitUncertain = null;
+    this.commitRecoveryInFlight = false;
+    this.pendingCommitRequest = null;
+    this.lastCommitRecovery = null;
     this._handlers = null;
     this._bound = false;
     this._keyboardHandler = null;
@@ -204,7 +210,9 @@ export class RichReaderEditorShellV1 {
   bindPointerEvents() {
     if (this._bound) return;
     const down = (event) => {
-      if (event.button !== 0 || !this.interactionScene) return;
+      if (event.button !== 0 || !this.interactionScene ||
+          this.commitInFlight || this.historyInFlight ||
+          this.commitUncertain || this.commitRecoveryInFlight) return;
       const pageSvg = this._eventPage(event);
       if (!pageSvg) {
         this._clearSelection("hit_test_none");
@@ -254,7 +262,8 @@ export class RichReaderEditorShellV1 {
     };
 
     const up = async (event) => {
-      if (!this.gesture) return;
+      if (!this.gesture || this.commitInFlight || this.historyInFlight ||
+          this.commitUncertain || this.commitRecoveryInFlight) return;
       const pageSvg = this._pageSvg(this.gesturePageId);
       if (!pageSvg) {
         this.cancelGesture("gesture_page_missing");
@@ -267,8 +276,10 @@ export class RichReaderEditorShellV1 {
         this.gesture = null;
         this.gesturePageId = null;
         this._renderOverlay();
-        this._emitState("commit_error");
-        throw error;
+        // A DOM event listener must not leak a rejected promise after a
+        // lost ACK. _commitGesture already emitted the exact uncertain/fail
+        // status and preserved the mutation fence for explicit recovery.
+        this._emitState(this.commitUncertain ? "commit_ack_unknown" : "commit_error");
       } finally {
         try {
           this.host.releasePointerCapture?.(event.pointerId);
@@ -302,7 +313,11 @@ export class RichReaderEditorShellV1 {
       const command = historyShortcutCommand(event);
       if (!command) return;
       event.preventDefault?.();
-      if (this.historyInFlight) return;
+      if (this.historyInFlight || this.commitUncertain || this.commitRecoveryInFlight) {
+        this._emitState(this.commitUncertain
+          ? "history_blocked_unknown_save" : "history_blocked_during_save");
+        return;
+      }
       void this[command]().catch(() => {});
     };
     this.keyboardTarget.addEventListener("keydown", keydown);
@@ -318,7 +333,8 @@ export class RichReaderEditorShellV1 {
   }
 
   cancelGesture(reason = "gesture_cancelled") {
-    if (!this.gesture) return false;
+    if (!this.gesture || this.commitInFlight || this.commitUncertain ||
+        this.commitRecoveryInFlight) return false;
     this.gesture.cancel();
     this.gesture = null;
     this.gesturePageId = null;
@@ -343,6 +359,9 @@ export class RichReaderEditorShellV1 {
       last_commit_protocol: this.lastCommitResult?.protocol_version ?? null,
       history_request_count: this.historyRequests,
       history_in_flight: this.historyInFlight,
+      commit_in_flight: this.commitInFlight,
+      commit_uncertain: this.commitUncertain !== null,
+      commit_recovery_in_flight: this.commitRecoveryInFlight,
       history_command: this.lastHistoryKind,
       last_history_protocol: this.lastHistoryResult?.protocol_version ?? null,
       visual_scene_is_edit_authority: false,
@@ -370,6 +389,14 @@ export class RichReaderEditorShellV1 {
   }
 
   async #historyTransition(kind) {
+    if (this.commitUncertain || this.commitRecoveryInFlight) {
+      this._emitState("history_blocked_unknown_save");
+      throw new Error("history unavailable while commit outcome is uncertain");
+    }
+    if (this.commitInFlight) {
+      this._emitState("history_blocked_during_save");
+      throw new Error("history unavailable until the current commit is confirmed");
+    }
     if (this.historyInFlight) throw new Error("history transition already pending");
     if (typeof this.service[kind] !== "function") throw new TypeError("service cannot perform " + kind);
     if (!this.readerScene) throw new Error("editor scene is not loaded");
@@ -426,10 +453,91 @@ export class RichReaderEditorShellV1 {
   }
 
   async _commitGesture(point) {
+    if (this.commitInFlight || this.historyInFlight || this.commitUncertain ||
+        this.commitRecoveryInFlight) {
+      throw new Error("cannot commit another gesture while save authority is pending");
+    }
+    this.commitInFlight = true;
+    let settledReason = "commit_error";
+    try {
+      const outcome = await this._commitGestureInternal(point);
+      settledReason = outcome.reconciliation?.kind === "accepted_waiting_for_scene"
+        ? "commit_reconciled" : "commit_rejected";
+      return outcome;
+    } catch (error) {
+      // After the POST is dispatched, transport errors do not prove rejection.
+      // Retain the exact operation/idempotency key; lock every mutation.
+      if (this.pendingCommitRequest) {
+        this.commitUncertain = {
+          request: clone(this.pendingCommitRequest),
+          baseRevisionId: this.pendingCommitRequest.base_revision_id,
+          sourceHash: this.pendingCommitRequest.source_hash,
+          documentId: this.pendingCommitRequest.document_id,
+          clientOperationId: this.pendingCommitRequest.client_operation_id,
+        };
+      }
+      throw error;
+    } finally {
+      this.commitInFlight = false;
+      if (!this.commitUncertain) this.pendingCommitRequest = null;
+      this._emitState(this.commitUncertain ? "commit_ack_unknown" : settledReason);
+    }
+  }
+
+  async reconcileUncertainCommit() {
+    const pending = this.commitUncertain;
+    if (!pending) throw new Error("no unknown commit requires reconciliation");
+    if (this.commitRecoveryInFlight || this.commitInFlight || this.historyInFlight) {
+      throw new Error("commit authority reconciliation already pending");
+    }
+    this.commitRecoveryInFlight = true;
+    this._emitState("commit_recovery_checking");
+    let reason = "commit_recovery_failed";
+    try {
+      // A fresh authenticated Product /current plus exact Reader Scene.
+      // This does NOT prove which writer made the revision advance.
+      const state = await this.service.currentRichEditorState();
+      const current = state?.current_document;
+      const scene = state?.reader_scene;
+      if (!current || !scene ||
+          current.protocol_version !== "chaptera.current-document.v1" ||
+          scene.protocol_version !== "chaptera.reader-scene.v1" ||
+          current.document_id !== pending.documentId ||
+          scene.document_id !== pending.documentId ||
+          current.source_hash !== pending.sourceHash ||
+          scene.source_hash !== pending.sourceHash ||
+          current.revision_id !== scene.revision_id ||
+          typeof current.revision_id !== "string" ||
+          current.revision_id === pending.baseRevisionId) {
+        throw new Error("server has not confirmed a distinct exact canonical revision");
+      }
+      await this.loadScenes(
+        scene,
+        projectReaderSceneToEditorInteractionScene(scene),
+        { preserveSelection: false },
+      );
+      this.lastCommitRecovery = {
+        client_operation_id: pending.clientOperationId,
+        observed_revision_id: current.revision_id,
+        original_commit_ack_proven: false,
+      };
+      this.pendingCommitRequest = null;
+      this.commitUncertain = null;
+      reason = "commit_authority_reconciled";
+      return clone(this.lastCommitRecovery);
+    } finally {
+      this.commitRecoveryInFlight = false;
+      // On failure, original request and fail-closed mutation fence remain.
+      this._emitState(reason);
+    }
+  }
+
+  async _commitGestureInternal(point) {
     this.gesture.update(point);
     const gesture = this.gesture;
     const selectedNodeId = this.selectedNodeId;
     const request = gesture.commit(this.operationIdFactory());
+    this.pendingCommitRequest = clone(request);
     this.commitRequests += 1;
     this._emitState("commit_sent");
 

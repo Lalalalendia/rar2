@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   isUndoShortcutEvent,
   historyShortcutCommand,
+  RichReaderEditorShellV1,
   resolveRichEditorPointerTarget,
 } from "./rich-reader-editor-shell-v1.mjs";
 
@@ -156,4 +157,123 @@ test("Ctrl/Cmd+Shift+Z and Ctrl+Y route Redo without stealing text or IME histor
   ]) {
     assert.equal(historyShortcutCommand({ ...base, ...e }), null);
   }
+});
+
+test("unresolved move save blocks both history commands before any HTTP request", async () => {
+  let calls = 0;
+  const fake = { addEventListener(){}, removeEventListener(){} };
+  const service = {
+    commit(){}, currentRichEditorState(){}, readerSceneForRevision(){},
+    undo(){ calls++; }, redo(){ calls++; },
+  };
+  const receipts = [];
+  const shell = new RichReaderEditorShellV1({
+    host:fake,keyboardTarget:fake,service,onState:state=>receipts.push(state),
+  });
+  shell.readerScene = { source_hash:"a".repeat(64),revision_id:"sha256:"+"b".repeat(64) };
+  shell.commitInFlight = true;
+  await assert.rejects(()=>shell.undo(), /history unavailable until/);
+  await assert.rejects(()=>shell.redo(), /history unavailable until/);
+  assert.equal(calls,0);
+  assert.deepEqual(receipts.map(state=>state.reason),[
+    "history_blocked_during_save","history_blocked_during_save",
+  ]);
+  assert.ok(receipts.every(state=>state.commit_in_flight===true));
+});
+
+test("lost MoveNode ACK keeps exact operation ID and locks all editing until source-exact server reconciliation", async () => {
+  const SOURCE = "a".repeat(64);
+  const BASE = "sha256:" + "b".repeat(64);
+  const CHILD = "sha256:" + "c".repeat(64);
+  let currentRevision = BASE;
+  let recoveryMode = "network";
+  let historyPosts = 0;
+  const sent = [];
+  const states = [];
+  const host = { addEventListener(){}, removeEventListener(){} };
+  const sceneFor = revisionId => ({
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: "doc",
+    source_hash: SOURCE,
+    revision_id: revisionId,
+    pages: [{ page_id: PAGE, order: 0, width_emu: 1000, height_emu: 1000 }],
+    nodes: [{ node_id: A, page_id: PAGE, kind: "shape",
+      bounds: { x: 10, y: 10, width: 100, height: 100 },
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+      paint: { preset_shape: null, fill_rgb: [20, 20, 20], line: null } }],
+    stories: [], resources: [], fonts: [], diagnostics: [],
+  });
+  const service = {
+    async commit(request) {
+      sent.push(structuredClone(request));
+      currentRevision = CHILD; // The authoritative server already committed.
+      throw new Error("transport dropped after server commit");
+    },
+    async currentRichEditorState() {
+      if (recoveryMode === "network") throw new Error("current document unreachable");
+      const returnedRevision = recoveryMode === "stale" ? BASE : currentRevision;
+      const scene = sceneFor(returnedRevision);
+      if (recoveryMode === "wrong_source") scene.source_hash = "f".repeat(64);
+      return {
+        current_document: { protocol_version: "chaptera.current-document.v1",
+          document_id: "doc", source_hash: SOURCE, revision_id: returnedRevision },
+        reader_scene: scene,
+      };
+    },
+    async readerSceneForRevision(revisionId) { return sceneFor(revisionId); },
+    async undo() { historyPosts += 1; },
+    async redo() { historyPosts += 1; },
+  };
+  const shell = new RichReaderEditorShellV1({
+    host, keyboardTarget: host, service,
+    operationIdFactory: () => "move-exact-operation-id",
+    onState: state => states.push(state),
+  });
+  shell.readerScene = sceneFor(BASE);
+  shell.interactionScene = interaction();
+  shell._renderOverlay = () => {};
+  shell.gesture = {
+    update() {},
+    commit(operationId) {
+      return { protocol_version: "chaptera.commit-request.v1", document_id: "doc",
+        source_hash: SOURCE, base_revision_id: BASE, client_operation_id: operationId,
+        command: { kind: "move_node_to", node_id: A, x_emu: 50, y_emu: 50 } };
+    },
+  };
+  await assert.rejects(() => shell._commitGesture({ x_emu: 50, y_emu: 50 }), /transport dropped/);
+  assert.equal(shell.commitInFlight, false);
+  assert.equal(shell.stateReceipt().commit_uncertain, true);
+  assert.equal(shell.commitUncertain.clientOperationId, "move-exact-operation-id");
+  assert.deepEqual(shell.pendingCommitRequest, sent[0]);
+  assert.equal(states.at(-1).reason, "commit_ack_unknown");
+  assert.equal(states.at(-1).commit_uncertain, true);
+  await assert.rejects(() => shell.undo(), /history unavailable while commit outcome is uncertain/);
+  await assert.rejects(() => shell.redo(), /history unavailable while commit outcome is uncertain/);
+  await assert.rejects(() => shell._commitGesture({ x_emu: 60 }), /cannot commit another gesture/);
+  assert.equal(historyPosts, 0);
+  assert.equal(sent.length, 1);
+
+  for (const mode of ["network", "stale", "wrong_source"]) {
+    recoveryMode = mode;
+    await assert.rejects(() => shell.reconcileUncertainCommit());
+    assert.equal(shell.stateReceipt().commit_uncertain, true, "failed " + mode + " cannot unlock");
+    assert.deepEqual(shell.pendingCommitRequest, sent[0], "operation ID must survive " + mode);
+  }
+  assert.equal(shell.readerScene.revision_id, BASE);
+  // Only a source/doc/revision-exact authenticated current+Reader snapshot
+  // may unlock. It does not prove that this particular lost ACK succeeded.
+  recoveryMode = "confirmed";
+  shell.loadScenes = async scene => {
+    shell.readerScene = scene;
+    shell.interactionScene = interaction();
+  };
+  const recovered = await shell.reconcileUncertainCommit();
+  assert.equal(recovered.client_operation_id, "move-exact-operation-id");
+  assert.equal(recovered.observed_revision_id, CHILD);
+  assert.equal(recovered.original_commit_ack_proven, false);
+  assert.equal(shell.stateReceipt().commit_uncertain, false);
+  assert.equal(shell.readerScene.revision_id, CHILD);
+  assert.equal(shell.pendingCommitRequest, null);
+  assert.equal(states.at(-1).reason, "commit_authority_reconciled");
+  assert.equal(historyPosts, 0);
 });

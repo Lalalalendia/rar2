@@ -30,6 +30,18 @@ export function productEditorStatusView(state, readerScene = null) {
   const reasons = readerScene?.fidelity?.reasons;
   const fidelity = "Fidelity: " + (readerScene?.fidelity?.state ?? "unknown") +
     (Array.isArray(reasons) && reasons.length ? " — " + reasons.join(", ") : "");
+  if (state.commit_uncertain === true) {
+    if (state.commit_recovery_in_flight === true) {
+      return { status: "Checking exact server revision — editing locked…",
+        kind: "pending", fidelity };
+    }
+    return { status: "Save outcome unknown — editing locked. Recheck server revision.",
+      kind: "error", fidelity };
+  }
+  if (state.reason === "commit_authority_reconciled") {
+    return { status: "Server revision synchronized — verify the change before continuing",
+      kind: "ok", fidelity };
+  }
   if (state.reason === "commit_sent") {
     return { status: "Saving change…", kind: "pending", fidelity };
   }
@@ -47,6 +59,7 @@ export function productEditorStatusView(state, readerScene = null) {
       fidelity,
     };
   }
+  if (state.reason === "history_blocked_during_save") return { status: "Save still pending — retry Undo/Redo after confirmation", kind: "pending", fidelity };
   const historyAction = state.history_command === "redo" ? "Redo" : "Undo";
   if (state.reason === "history_sent") {
     return { status: historyAction === "Redo" ? "Redoing change…" : "Undoing change…", kind: "pending", fidelity };
@@ -92,6 +105,7 @@ export async function bootProductEditor({
   const host=documentObject.querySelector("#canvas");
   const undoButton=documentObject.querySelector("#undo-action");
   const redoButton=documentObject.querySelector("#redo-action");
+  const recheckButton=documentObject.querySelector("#reconcile-action");
   if(!status||!fidelity||!identity||!host) throw new Error("Chaptera Editor shell DOM is incomplete");
   identity.textContent=documentId;
 
@@ -128,11 +142,22 @@ export async function bootProductEditor({
       const view=productEditorStatusView(state,shell?.readerScene);
       statusText(status,view.status,view.kind);
       fidelity.textContent=view.fidelity;
-      if(undoButton) undoButton.disabled=state.history_in_flight===true;
-      if(redoButton) redoButton.disabled=state.history_in_flight===true;
+      const mutationLocked=state.history_in_flight===true||state.commit_in_flight===true||
+        state.commit_uncertain===true||state.commit_recovery_in_flight===true;
+      if(undoButton) undoButton.disabled=mutationLocked;
+      if(redoButton) redoButton.disabled=mutationLocked;
+      if(recheckButton){
+        recheckButton.hidden=state.commit_uncertain!==true;
+        recheckButton.disabled=state.commit_uncertain!==true||
+          state.commit_recovery_in_flight===true;
+      }
     },
   });
   await shell.start();
+  recheckButton?.addEventListener("click",()=>{
+    if(!shell.commitUncertain||shell.commitRecoveryInFlight) return;
+    void shell.reconcileUncertainCommit().catch(()=>{});
+  });
   for(const [button,command] of [[undoButton,"undo"],[redoButton,"redo"]]){
     button?.addEventListener("click",()=>{
       if(shell.historyInFlight) return;
