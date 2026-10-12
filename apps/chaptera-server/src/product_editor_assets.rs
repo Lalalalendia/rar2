@@ -388,9 +388,11 @@ mod tests {
 
     #[tokio::test]
     async fn product_text_protocol_is_an_embedded_csp_module() {
-        assert!(std::str::from_utf8(PRODUCT_SERVICE)
-            .unwrap()
-            .contains("./text-protocol-v1.mjs"));
+        assert!(
+            std::str::from_utf8(PRODUCT_SERVICE)
+                .unwrap()
+                .contains("./text-protocol-v1.mjs")
+        );
         let response = router::<()>()
             .oneshot(
                 Request::builder()
