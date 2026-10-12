@@ -1,0 +1,119 @@
+name: Reader PAGE LOGO source-resolved rectangle visual acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reader-logo-effective-rect-visual-ab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-logo-rect-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rectangle-visual:
+    name: Exact HEAD LO-proxy differential acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: target/logo-visual-rust
+      REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      READER_REAL_MANIFEST: ${{ github.workspace }}/target/logo-source-manifest.json
+      READER_REAL_OUTPUT: ${{ github.workspace }}/target/logo-reader-raster
+      READER_REFERENCE_RASTER_DPI: "144"
+      READER_WORKER_BINARY: ${{ github.workspace }}/target/logo-visual-rust/debug/chaptera
+      READER_WORKER_TIMEOUT_SECONDS: "120"
+      READER_WORKER_CPU_SECONDS: "90"
+      READER_WORKER_ADDRESS_SPACE_MB: "768"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Reacquire SHA-verified public PUB in temporary storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl -fsSL --retry 3 --max-time 45 \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            -o "$fixture"
+          echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  $fixture" | sha256sum -c -
+          test "$(stat -c%s "$fixture")" = "291840"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          temp = Path(os.environ["RUNNER_TEMP"])
+          manifest = {"schema": "chaptera.cloud-reader-real-fixtures.v1", "fixtures": [{
+              "name": "SampleNewsletter",
+              "sha256": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+              "bytes": 291840, "pages": 4, "require_render": True,
+              "require_shared_text": True,
+              "source_path": str(temp / "SampleNewsletter.pub"),
+          }]}
+          Path(os.environ["READER_REAL_MANIFEST"]).parent.mkdir(parents=True, exist_ok=True)
+          Path(os.environ["READER_REAL_MANIFEST"]).write_text(json.dumps(manifest), encoding="utf-8")
+          PY
+
+      - name: Build exact Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install controlled Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Capture exact Reader customer-page PNGs at 144 DPI
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Recover immutable #2639 fixed-before candidate PNGs
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38222584563
+          github-token: ${{ github.token }}
+          name: reader-logo-visual-after
+          path: target/logo-rect-baseline
+
+      - name: Recover pinned LO proxy PNG from successful #2639
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38222584563
+          github-token: ${{ github.token }}
+          name: reader-logo-0x31-visual-ab
+          path: target/logo-rect-reference
+
+      - name: Install pinned PNG raster comparator
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7"
+
+      - name: Assert unrelated pages unchanged and p4 closer to independent LO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/logo-rect-result
+          python tools/reader_logo_effective_rect_visual_ab_v1.py \
+            --baseline target/logo-rect-baseline/receipt.json \
+            --candidate target/logo-reader-raster/receipt.json \
+            --reference-page4 target/logo-rect-reference/libreoffice-customer-page-4.png \
+            --candidate-commit "$REPOSITORY_COMMIT_SHA" \
+            --output target/logo-rect-result/visual-ab.json
+          cp target/logo-reader-raster/SampleNewsletter-page-4.png target/logo-rect-result/reader-new-customer-page-4.png
+          cat target/logo-rect-result/visual-ab.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish source-safe p4 raster and exact numeric evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-logo-effective-rect-visual-ab
+          path: target/logo-rect-result/
+          if-no-files-found: warn
+          retention-days: 14
