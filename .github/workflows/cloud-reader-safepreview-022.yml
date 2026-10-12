@@ -362,6 +362,24 @@ jobs:
           set -euo pipefail
           node apps/cloud-reader/real-browser.test.mjs
 
+      # This deliberately exercises the *direct* isolated-worker branch used
+      # by Publisher Batch01. It is NOT a host-accepted Product/Guest scene.
+      - name: Render direct-worker Batch01 route on the exact same PUB022
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_REAL_MANIFEST: /tmp/chaptera-safe-preview-022/manifest.json
+          READER_ACCEPTED_SCENE_JSON: ""
+          READER_REAL_OUTPUT: /tmp/chaptera-safe-preview-022/browser-direct-worker
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: |
+          set -euo pipefail
+          # Direct route must never accidentally use a host scene.
+          test -z "$READER_ACCEPTED_SCENE_JSON"
+          node apps/cloud-reader/real-browser.test.mjs
+
       - name: Prove same-commit descriptor-only visual control in real Chromium
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -412,7 +430,7 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          from tools.cloud_reader_visual_fingerprint_v1 import image_grid, reference_grid, compare_grid
+          from tools.cloud_reader_visual_fingerprint_v1 import image_grid, reference_grid, compare_grid, sha256
           root = Path("/tmp/chaptera-safe-preview-022")
           browser = json.loads((root / "browser/receipt.json").read_text())
           assert browser["protocol"] == "chaptera.cloud-reader-real-scene-browser.v1"
@@ -439,6 +457,52 @@ jobs:
               image_grid(root / "browser-descriptor-control" / control_row["screenshots"][0]["filename"]),
               reference_grid(oracle["pages"][0]),
           )
+          # Third arm: independent real worker Scene, exactly as canonical
+          # Batch01 captures it. It intentionally skips the host-owned image
+          # admission and must never be reported as Product SafePreview.
+          direct_browser = json.loads(
+              (root / "browser-direct-worker/receipt.json").read_text()
+          )
+          assert direct_browser["protocol"] == browser["protocol"]
+          assert direct_browser["browser"] == browser["browser"], (
+              "direct and host routes used different Chromium versions"
+          )
+          assert direct_browser["repository_commit_sha"] == browser["repository_commit_sha"]
+          direct_row, = direct_browser["results"]
+          assert direct_row["scene_source"] == "isolated_worker_direct", (
+              "Batch01 route accidentally substituted a host-accepted scene"
+          )
+          assert direct_row["network_policy"] == "seccomp_default_deny"
+          assert direct_row["rendered"] is True and direct_row["pages"] == 1
+          assert direct_row["source_sha256"] == row["source_sha256"]
+          assert direct_row["source_byte_len"] == row["source_byte_len"]
+          assert direct_row["descriptor_only_resource_count"] >= 1, (
+              "direct worker unexpectedly exposed a non-descriptor PUB022 image"
+          )
+          direct_geo, = direct_row["page_geometry"]
+          hosted_geo, = row["page_geometry"]
+          assert (
+              direct_geo["width_emu"], direct_geo["height_emu"]
+          ) == (
+              hosted_geo["width_emu"], hosted_geo["height_emu"]
+          ), "direct/host PUB022 physical page geometry differs"
+          direct_shot, = direct_row["screenshots"]
+          direct_png = root / "browser-direct-worker" / direct_shot["filename"]
+          assert sha256(direct_png) == direct_shot["sha256"], (
+              "direct isolated worker Chromium screenshot identity drift"
+          )
+          direct = compare_grid(
+              image_grid(direct_png), reference_grid(oracle["pages"][0])
+          )
+          # No direct==client-image-off assertion: host projection could also
+          # change scene semantics. Publish both and flag any difference.
+          same_source_page_identity = (
+              direct_geo["page_identity_sha256"] ==
+              hosted_geo["page_identity_sha256"]
+          )
+          same_node_kinds = (
+              direct_row["node_kind_counts"] == row["node_kind_counts"]
+          )
           assert diff["changed_cell_count"] < baseline["changed_cell_count"], (
               "fresh host-derived JPEG must improve Publisher fidelity over "
               "same-head post-host descriptor-only visual control"
@@ -456,6 +520,16 @@ jobs:
             "historical_cross_commit_delta_cells":3817-diff["changed_cell_count"],
             "same_head_control_kind":"post_host_client_descriptor_only_intervention",
             "same_head_descriptor_control_changed_cells":baseline["changed_cell_count"],
+            "direct_worker_scene_source":direct_row["scene_source"],
+            "direct_worker_changed_cells":direct["changed_cell_count"],
+            "direct_worker_changed_cell_fraction":direct["changed_cell_fraction"],
+            "direct_worker_descriptor_only_count":direct_row["descriptor_only_resource_count"],
+            "direct_worker_minus_host_changed_cells":direct["changed_cell_count"]-diff["changed_cell_count"],
+            "direct_worker_minus_client_image_off_changed_cells":direct["changed_cell_count"]-baseline["changed_cell_count"],
+            "direct_worker_same_source_head_chromium_and_geometry":True,
+            "direct_worker_same_source_page_identity":same_source_page_identity,
+            "direct_worker_same_node_kind_counts":same_node_kinds,
+            "direct_worker_bypassed_host_admission":True,
             "same_head_improvement_cells":baseline["changed_cell_count"]-diff["changed_cell_count"],
             "same_head_exact_source_and_browser":True,
             "descriptor_only_resource_count":row["descriptor_only_resource_count"],
