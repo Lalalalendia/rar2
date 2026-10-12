@@ -57,6 +57,7 @@ const CONTRIBUTION_CAPABILITY_TTL: Duration = Duration::from_secs(5 * 60);
 const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str = "chaptera.reader-contribution-capability.v1";
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
+const TEMPORARY_EDIT_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
@@ -404,6 +405,18 @@ pub fn router(state: GuestReaderHttpState) -> Router {
         .with_state(state)
 }
 
+/// Mounted only on filesystem-backed Guest Reader instances. The temporary
+/// editor reuses its private upload and scene lifecycle without adding a
+/// second parser, auth provider or persistent document catalog.
+pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
+    Router::new()
+        .route(
+            "/v1/editor/temporary-sessions",
+            post(issue_temporary_edit_session),
+        )
+        .with_state(state)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IssueGuestSessionBody {
@@ -420,6 +433,8 @@ struct IssueGuestSessionResponse {
     upload_path: String,
     open_path: String,
     scene_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -499,6 +514,25 @@ async fn issue_session(
     headers: HeaderMap,
     Json(body): Json<IssueGuestSessionBody>,
 ) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
+    issue_session_with_prefix(state, client_ip, headers, body, "guest").await
+}
+
+async fn issue_temporary_edit_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    headers: HeaderMap,
+    Json(body): Json<IssueGuestSessionBody>,
+) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
+    issue_session_with_prefix(state, client_ip, headers, body, "tempedit").await
+}
+
+async fn issue_session_with_prefix(
+    state: GuestReaderHttpState,
+    client_ip: ClientIp,
+    headers: HeaderMap,
+    body: IssueGuestSessionBody,
+    id_prefix: &str,
+) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
     let started = Instant::now();
     let trace = ReaderObservabilityV1::context_from_headers(&headers);
     let now_ms = now_ms()?;
@@ -513,7 +547,7 @@ async fn issue_session(
         ));
     }
 
-    let session_id = random_id("guest")?;
+    let session_id = random_id(id_prefix)?;
     let upload_id = format!("guest-upload:{}", opaque_suffix(&session_id));
     let reservation_id = format!("guest-reservation:{}", opaque_suffix(&session_id));
     let access_token = random_token()?;
@@ -590,6 +624,7 @@ async fn issue_session(
         upload_path: format!("/v1/reader/guest-sessions/{session_id}/content"),
         open_path: format!("/v1/reader/guest-sessions/{session_id}/open"),
         scene_path: format!("/v1/reader/guest-sessions/{session_id}/scene"),
+        mode: is_temporary_edit_session(&session_id).then_some("temporary_edit"),
     }))
 }
 
@@ -1499,11 +1534,19 @@ impl SqliteGuestReaderSessionStore {
     ) -> Result<GuestReaderSession, GuestReaderError> {
         let observed = i64::try_from(observed_byte_len)
             .map_err(|_| GuestReaderError::internal("guest_observed_length_invalid"))?;
+        // The one-hour retention window starts at accepted upload completion,
+        // not at token issuance or an HTTP read. Guest Reader TTL is unchanged.
+        let accepted_expiry_ms = if is_temporary_edit_session(session_id) {
+            Some(add_duration(now_ms, TEMPORARY_EDIT_TTL)?)
+        } else {
+            None
+        };
         let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
             SET state='stored', observed_byte_len=?, storage_generation=?,
-                object_etag=?, updated_at_ms=?
+                object_etag=?, updated_at_ms=?,
+                expires_at_ms=COALESCE(?, expires_at_ms)
             WHERE session_id=? AND state='issued' AND expires_at_ms>?
             "#,
         )
@@ -1511,6 +1554,7 @@ impl SqliteGuestReaderSessionStore {
         .bind(generation.as_bytes())
         .bind(etag.as_bytes())
         .bind(now_ms)
+        .bind(accepted_expiry_ms)
         .bind(session_id.as_bytes())
         .bind(now_ms)
         .execute(&self.pool)
@@ -1895,6 +1939,13 @@ fn content_length(headers: &HeaderMap) -> Result<u64, GuestReaderError> {
         .ok_or_else(|| GuestReaderError::bad_request("content_length_invalid"))
 }
 
+fn is_temporary_edit_session(session_id: &str) -> bool {
+    let Some(suffix) = session_id.strip_prefix("tempedit:") else {
+        return false;
+    };
+    suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn random_id(prefix: &str) -> Result<String, GuestReaderError> {
     let mut bytes = [0_u8; 16];
     OsRng
@@ -2227,6 +2278,64 @@ mod tests {
 
         store.close().await;
         let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn temporary_editor_upload_acceptance_starts_one_hour_ttl() {
+        let path = migrated_path("tempedit-one-hour").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        assert!(is_temporary_edit_session(&temporary.session_id));
+        store.insert(&temporary).await.unwrap();
+
+        let stored = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 3_605_000);
+        assert_eq!(stored.updated_at_ms, 5_000);
+        let reread = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(reread.expires_at_ms, 3_605_000);
+        let before_deadline = store.mark_expired(&temporary.session_id, 3_604_999).await.unwrap();
+        assert!(!before_deadline);
+        let at_deadline = store.mark_expired(&temporary.session_id, 3_605_000).await.unwrap();
+        assert!(at_deadline);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn ordinary_guest_reader_upload_retains_its_original_expiry() {
+        let path = migrated_path("guest-reader-stable-ttl").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let reader = session(1_000);
+        assert!(!is_temporary_edit_session(&reader.session_id));
+        store.insert(&reader).await.unwrap();
+        let stored = store
+            .mark_stored(&reader.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 61_000);
+        let expired = store.mark_expired(&reader.session_id, 61_000).await.unwrap();
+        assert!(expired);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn temporary_edit_identity_requires_server_issued_shape() {
+        let valid = "tempedit:0123456789abcdef0123456789abcdef";
+        assert!(is_temporary_edit_session(valid));
+        assert!(!is_temporary_edit_session("tempedit:invalid"));
+        let ordinary = "guest:0123456789abcdef0123456789abcdef";
+        assert!(!is_temporary_edit_session(ordinary));
     }
 
     #[tokio::test]
