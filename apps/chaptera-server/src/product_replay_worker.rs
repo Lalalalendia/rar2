@@ -14,7 +14,8 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor,
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId,
+    open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,23 @@ pub struct IsolatedMoveNodeReceiptV1 {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct IsolatedStoryRangeIntentV1 {
+    pub story_id: String,
+    pub start_scalar: u32,
+    pub end_scalar: u32,
+    pub replacement_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedStoryRangeReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsolatedReaderSceneIntentV1 {
     pub revision_id: String,
     pub baseline_revision_id: String,
@@ -77,6 +95,7 @@ pub struct IsolatedReaderSceneReceiptV1 {
 
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 // An 8 MiB part stays well below the 32 MiB default per-file RLIMIT_FSIZE.
 // Preview samples never inflate result.json; all fixed sidecar slots are
@@ -248,6 +267,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_node: Option<IsolatedMoveNodeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_range: Option<IsolatedStoryRangeReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
     pub filesystem_confinement: bool,
 }
@@ -371,6 +392,24 @@ pub fn validate_product_replay_receipt(
             "isolated MoveNode receipt violates source and project identity",
         ));
     }
+    if let Some(text) = &receipt.story_range
+        && (receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.reader_scene.is_some()
+            || !matches!(text.operation, EditOperation::ReplaceStoryRange { .. })
+            || text.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&text.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated StoryRange project is not canonically hashable",
+                )
+            })? != text.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated StoryRange receipt violates source or project identity",
+        ));
+    }
     if let Some(scene) = &receipt.reader_scene {
         let payload = serde_json::to_vec(&scene.scene).map_err(|_| {
             ProductReplayWorkerError::new(
@@ -380,6 +419,7 @@ pub fn validate_product_replay_receipt(
         })?;
         if receipt.baseline_project.is_some()
             || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
             || !valid_revision_id(&scene.revision_id)
             || !valid_revision_id(&scene.baseline_revision_id)
             || scene.scene["protocol_version"] != READER_SCENE_V1
@@ -705,6 +745,7 @@ pub fn run_product_replay_worker(
     expected_project_sha256: Option<&str>,
     move_node_intent: Option<IsolatedMoveNodeIntentV1>,
     reader_scene_intent: Option<IsolatedReaderSceneIntentV1>,
+    story_intent_path: Option<&Path>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -716,6 +757,22 @@ pub fn run_product_replay_worker(
     }
     if let Some(expected_project_sha256) = expected_project_sha256 {
         require_sha256(expected_project_sha256)?;
+    }
+    if usize::from(move_node_intent.is_some())
+        + usize::from(reader_scene_intent.is_some())
+        + usize::from(story_intent_path.is_some())
+        > 1
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_identity_invalid",
+            "isolated Product worker admits only one mutation or Scene command",
+        ));
+    }
+    if story_intent_path.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_story_range_invalid",
+            "StoryRange requires an authorized exact base project",
+        ));
     }
     if move_node_intent.is_some() && project_path.is_none() {
         return Err(ProductReplayWorkerError::new(
@@ -824,6 +881,33 @@ pub fn run_product_replay_worker(
         }
         (None, None) => None,
         _ => unreachable!("paired project input validated before read"),
+    };
+
+    // The Story replacement is private input, never copied into process argv,
+    // CI receipts or command-line telemetry. Read only before seccomp deny.
+    let story_intent = if let Some(path) = story_intent_path {
+        let bytes = read_bounded(path, MAX_STORY_INTENT_BYTES)?;
+        let intent: IsolatedStoryRangeIntentV1 =
+            serde_json::from_slice(&bytes).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_story_range_invalid",
+                    "isolated StoryRange intent is not a typed private JSON envelope",
+                )
+            })?;
+        if intent.story_id.is_empty()
+            || intent.story_id.len() > 128
+            || intent.end_scalar < intent.start_scalar
+            || intent.replacement_text.len() > 8192
+            || intent.replacement_text.chars().any(|c| c.is_control())
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_story_range_invalid",
+                "isolated StoryRange exceeds bounded plain-text admission",
+            ));
+        }
+        Some(intent)
+    } else {
+        None
     };
 
     // No further filesystem operations are permitted after this point.
@@ -960,6 +1044,80 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let story_range = if let Some(intent) = story_intent {
+        // Only the canonical EditorSession sees PUB-derived Story text.
+        // Browser input cannot name or forge expected_before.
+        let story_id: StoryId =
+            serde_json::from_value(Value::String(intent.story_id)).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_story_range_invalid",
+                    "StoryRange target is not a canonical StoryId",
+                )
+            })?;
+        let story = session.graph().stories.get(&story_id).ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_story_range_rejected",
+                "isolated EditorSession has no requested Story",
+            )
+        })?;
+        let start = intent.start_scalar as usize;
+        let end = intent.end_scalar as usize;
+        if end > story.text.chars().count() {
+            return Err(ProductReplayWorkerError::new(
+                "product_story_range_rejected",
+                "requested scalar range exceeds the canonical Story",
+            ));
+        }
+        let expected_before = story.text.chars().skip(start).take(end - start).collect::<String>();
+        let operation = session
+            .replace_story_range(
+                story_id,
+                intent.start_scalar,
+                intent.end_scalar,
+                expected_before,
+                intent.replacement_text,
+            )
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_story_range_rejected",
+                    "isolated canonical EditorSession rejected the Story mutation",
+                )
+            })?;
+        if !matches!(operation, EditOperation::ReplaceStoryRange { .. }) {
+            return Err(ProductReplayWorkerError::new(
+                "product_story_range_invalid",
+                "isolated EditorSession emitted an unexpected mutation kind",
+            ));
+        }
+        let resulting_project = cloud_revision_project(&session.project());
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_story_range_invalid",
+                    "Story mutation could not be appended as an exact canonical revision",
+                )
+            })?;
+        if expected_project != resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_story_range_invalid",
+                "Story mutation differs from exact canonical event replay",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_story_range_invalid",
+                "Story mutation project cannot be canonically hashed",
+            )
+        })?;
+        Some(IsolatedStoryRangeReceiptV1 {
+            operation,
+            resulting_project,
+            resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
     let reader_scene = if let Some(intent) = reader_scene_intent {
         // This is the only execution point for the source-neutral Viewer.
         // It runs AFTER seccomp filesystem deny and under the no-network
@@ -1033,6 +1191,7 @@ pub fn run_product_replay_worker(
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
+        story_range,
         reader_scene,
         filesystem_confinement: true,
     };
@@ -1665,6 +1824,7 @@ mod tests {
             authoring_graph: graph,
             baseline_project: None,
             move_node: None,
+            story_range: None,
             reader_scene: None,
             filesystem_confinement: true,
         }
