@@ -33,17 +33,106 @@ PINNED_SHA, PINNED_BYTES, EXPECTED_IMAGES = PINNED[CASE_ID]
 TARGET = ROOT / "target" / ("product-oidc-multiimage-" + CASE_ID)
 
 
+# Only constants or safe numeric HTTP codes may escape the ephemeral browser log.
+# This is not an error-body exporter; source IDs, URLs, cookies and tracebacks
+# must never become GitHub log lines or downloadable diagnostic receipts.
+PUBLIC_SCENE_FAILURE_CODES = frozenset({
+    "redacted", "grant_missing", "grant_expired", "capability_denied",
+    "product_replay_worker_failed", "product_replay_worker_timeout",
+    "product_reader_safe_preview_invalid", "product_replay_receipt_invalid",
+    "product_replay_receipt_identity_mismatch", "reader_scene_projection_failed",
+    "revision_materialization_failed", "stale_revision",
+})
+OWNER_FAILURE_SIGNATURES = (
+    ("page.waitForURL: Timeout", "ingress_navigation_timeout"),
+    ("page.waitForResponse: Timeout", "product_http_response_timeout"),
+    ("page.waitForFunction: Timeout", "chromium_paint_timeout"),
+    ("authenticated Product HTTP did not preserve pinned source and current revision",
+     "source_or_revision_contract"),
+    ("pinned Product fixture does not admit its exact image count", "image_count_contract"),
+    ("Product image resource identity is missing or duplicated", "image_id_contract"),
+    ("Product host preview URL/MIME invalid", "image_mime_contract"),
+    ("Product host derivative exceeds cap or has invalid magic", "image_decode_cap"),
+    ("Product derived image does not belong to a Scene node", "image_node_binding"),
+    ("Product Scene size cap violated", "scene_size_cap"),
+    ("host preview lost its explicit partial color-fidelity disposition", "fidelity_disclosure"),
+    ("authenticated Product source images failed Chromium paint", "chromium_image_paint"),
+    ("browser displayed a non-host image URL", "external_image_denied"),
+    ("anonymous Product Reader request did not return 401", "anonymous_denial"),
+    ("real OIDC browser session not preserved", "oidc_session_contract"),
+    ("real Publisher 022 source identity mismatch", "source_identity_contract"),
+)
+
+
+def classify_owner_failure(private_log: str) -> dict[str, object]:
+    """No caller-controlled value survives this fixed-envelope classifier."""
+    match = re.search(
+        r"UI Product HTTP failed: current=(\d{3}) scene=(\d{3}) "
+        r"fixed_code=([a-z0-9_]{1,80})", private_log,
+    )
+    if match:
+        current = int(match.group(1))
+        scene = int(match.group(2))
+        return {
+            "failure_code": "product_http_denial",
+            "current_http_status": current if 100 <= current <= 599 else None,
+            "scene_http_status": scene if 100 <= scene <= 599 else None,
+            "public_error_code": (
+                match.group(3) if match.group(3) in PUBLIC_SCENE_FAILURE_CODES
+                else "redacted"
+            ),
+        }
+    for literal, code in OWNER_FAILURE_SIGNATURES:
+        if literal in private_log:
+            return {
+                "failure_code": code,
+                "current_http_status": None,
+                "scene_http_status": None,
+                "public_error_code": "redacted",
+            }
+    return {
+        "failure_code": "unclassified_browser_failure",
+        "current_http_status": None,
+        "scene_http_status": None,
+        "public_error_code": "redacted",
+    }
+
+
 def run_stage(name: str, command: list[str], env: dict[str, str]) -> None:
     result = subprocess.run(
         command, cwd=ROOT, env=env, capture_output=True, text=True, check=False,
     )
-    (TARGET / (name + ".log")).write_text(
-        result.stdout + "\n--- stderr ---\n" + result.stderr, encoding="utf-8",
-    )
+    private_log = result.stdout + "\n--- stderr ---\n" + result.stderr
+    (TARGET / (name + ".log")).write_text(private_log, encoding="utf-8")
     if result.returncode:
+        failure = (
+            classify_owner_failure(private_log)
+            if name == "owner-browser"
+            else {
+                "failure_code": "bounded_stage_failure",
+                "current_http_status": None,
+                "scene_http_status": None,
+                "public_error_code": "redacted",
+            }
+        )
+        # On failure this remains a source-neutral numeric/enum receipt.
+        # The existing fail-closed leak scan examines the private log too.
+        receipt = {
+            "schema": "chaptera.product-oidc-multiimage-failure.v1",
+            "fixture": CASE_ID,
+            "repository_commit_sha": env.get("CHAPTERA_HEAD_SHA", "unverified"),
+            **failure,
+            "source_or_pixel_artifact_uploaded": False,
+        }
+        (TARGET / "owner.json").write_text(
+            json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8",
+        )
         raise RuntimeError(
-            f"physical Product022 {name} failed (rc={result.returncode}); "
-            "inspect privacy-scanned runner log"
+            f"physical Product multi-image {CASE_ID} {name} failed "
+            f"(rc={result.returncode}); fixed_failure={failure['failure_code']} "
+            f"current_status={failure['current_http_status']} "
+            f"scene_status={failure['scene_http_status']} "
+            f"public_code={failure['public_error_code']}; private logs not uploaded"
         )
 
 
@@ -131,7 +220,10 @@ def main() -> int:
                 worker = launch(
                     "worker", [str(binary), "--config", str(config), "worker"],
                 )
-                handles["caddy"] = (TARGET / "caddy.log").open("w", encoding="utf-8")
+                # The ephemeral Caddy process can emit session/cookie material
+                # in reverse-proxy error diagnostics. Do not persist raw edge
+                # stdout/stderr or forward them into public CI; TLS readiness
+                # and browser HTTPS assertions are independent health evidence.
                 caddy = subprocess.Popen(
                     [
                         "docker", "run", "--rm", "--name", base.CONTAINER_NAME,
@@ -140,8 +232,8 @@ def main() -> int:
                         "--entrypoint", "caddy", args.caddy_image, "run",
                         "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
                     ],
-                    cwd=ROOT, stdout=handles["caddy"],
-                    stderr=subprocess.STDOUT, text=True,
+                    cwd=ROOT, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, text=True,
                 )
                 base.wait_tls(caddy)
 
