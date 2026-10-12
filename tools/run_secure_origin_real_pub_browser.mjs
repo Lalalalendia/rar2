@@ -391,6 +391,32 @@ try {
   if (!moveTarget || moveTarget.revision_id !== reopened.revision_id) {
     throw new Error("real imported PUB exposes no stable direct MoveNode target");
   }
+  // Hold the real MoveNode HTTP request at the network boundary. A user may
+  // press Undo before an ACK; the browser must not send a stale history edge.
+  const moveCommitPath = "/v1/documents/" + documentId + "/commit";
+  const historyPath = "/v1/documents/" + documentId + "/history";
+  const accidentalHistoryPosts = [];
+  page.on("request", request => {
+    if (request.method() === "POST" &&
+        decodeURIComponent(new URL(request.url()).pathname) === historyPath) {
+      accidentalHistoryPosts.push(1);
+    }
+  });
+  let releaseMoveCommit;
+  let commitIntercepted;
+  const commitEnteredGate = new Promise(resolve => { commitIntercepted = resolve; });
+  const commitGate = new Promise(resolve => { releaseMoveCommit = resolve; });
+  let interceptedCommits = 0;
+  const holdCommit = async route => {
+    if (route.request().method() === "POST" &&
+        decodeURIComponent(new URL(route.request().url()).pathname) === moveCommitPath) {
+      interceptedCommits += 1;
+      commitIntercepted();
+      await commitGate;
+    }
+    await route.continue();
+  };
+  await page.route("**/v1/documents/*/commit", holdCommit);
   const commitResponsePromise = page.waitForResponse(response => {
     if (response.request().method() !== "POST") return false;
     const path = decodeURIComponent(new URL(response.url()).pathname);
@@ -400,7 +426,35 @@ try {
   await page.mouse.down({ button: "left" });
   await page.mouse.move(moveTarget.end.x, moveTarget.end.y, { steps: 4 });
   await page.mouse.up({ button: "left" });
+  await commitEnteredGate;
+  let blockedHistoryDuringSave = false;
+  try {
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#status");
+      const undo = document.querySelector("#undo-action");
+      const redo = document.querySelector("#redo-action");
+      return status?.classList.contains("pending") &&
+        undo?.disabled === true && redo?.disabled === true;
+    }, null, { timeout: 15000 });
+    await page.keyboard.press("Control+z");
+    const held = await page.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent ?? null,
+      pending: document.querySelector("#status")?.classList.contains("pending") ?? false,
+      undo_disabled: document.querySelector("#undo-action")?.disabled ?? false,
+      redo_disabled: document.querySelector("#redo-action")?.disabled ?? false,
+    }));
+    blockedHistoryDuringSave = held.pending &&
+      held.status?.includes("Save still pending") &&
+      held.undo_disabled && held.redo_disabled &&
+      accidentalHistoryPosts.length === 0 && interceptedCommits === 1;
+    if (!blockedHistoryDuringSave) {
+      throw new Error("pending MoveNode allowed a stale Undo or falsely reported durable history");
+    }
+  } finally {
+    releaseMoveCommit();
+  }
   const commitResponse = await commitResponsePromise;
+  await page.unroute("**/v1/documents/*/commit", holdCommit);
   const accepted = await commitResponse.json().catch(() => null);
   if (commitResponse.status() !== 200 ||
       accepted?.protocol_version !== "chaptera.commit-accepted.v1" ||
@@ -412,6 +466,13 @@ try {
       JSON.stringify({ status: commitResponse.status(), accepted, moveTarget }));
   }
 
+  if (!blockedHistoryDuringSave || accidentalHistoryPosts.length !== 0) {
+    throw new Error("pending MoveNode sent history before authoritative save reconciliation");
+  }
+  await page.waitForFunction(() =>
+    document.querySelector("#undo-action")?.disabled === false &&
+    document.querySelector("#redo-action")?.disabled === false, null,
+    { timeout: 30000 });
   const movedCurrent = await currentDocumentReceipt(documentId);
   if (movedCurrent.status !== 200 || movedCurrent.document_id !== documentId ||
       movedCurrent.revision_id !== accepted.revision_id) {
@@ -668,6 +729,190 @@ try {
     original_revision_unchanged: true,
   };
 
+
+  // ACK-unknown negative, physically independent of the already-accepted
+  // original document. A second authenticated import of the SAME pinned real
+  // PUB ensures the downstream restart/export receipts remain untouched.
+  await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+  null, { timeout: 30000 });
+  await page.locator("#pub-file").setInputFiles({
+    name: "AckLossControl.pub",
+    mimeType: "application/x-mspublisher",
+    buffer: raw,
+  });
+  await page.waitForURL(url =>
+    /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
+  { timeout: 105000, waitUntil: "domcontentloaded" });
+  const ackLossDoc = decodeURIComponent(new URL(page.url()).pathname)
+    .replace("/editor/doc/", "");
+  if (!ackLossDoc || ackLossDoc === documentId) {
+    throw new Error("lost-ACK probe did not create an independent physical PUB project");
+  }
+  const ackLossBefore = await currentDocumentReceipt(ackLossDoc);
+  if (ackLossBefore.status !== 200 || !ackLossBefore.revision_id) {
+    throw new Error("lost-ACK control PUB lacks an authoritative baseline revision");
+  }
+  await verifyEditorPaint(ackLossBefore, "independent ACK-loss control open");
+  const ackLossTarget = await chooseRealMoveTarget(ackLossDoc);
+  if (!ackLossTarget || ackLossTarget.revision_id !== ackLossBefore.revision_id) {
+    throw new Error("lost-ACK control PUB lacks a stable physical pointer target");
+  }
+  const ackLossCommitPath = "/v1/documents/" + ackLossDoc + "/commit";
+  const ackLossHistoryPath = "/v1/documents/" + ackLossDoc + "/history";
+  const countRequests = (method, path) => calls.filter(call =>
+    call.method === method && decodeURIComponent(call.path) === path).length;
+  const initialHistory = countRequests("POST", ackLossHistoryPath);
+  const initialCommits = countRequests("POST", ackLossCommitPath);
+  let authoritativeAck = null;
+  let interceptedAckCount = 0;
+  const dropCommittedAck = async route => {
+    if (route.request().method() !== "POST" ||
+        decodeURIComponent(new URL(route.request().url()).pathname) !== ackLossCommitPath) {
+      await route.continue();
+      return;
+    }
+    interceptedAckCount += 1;
+    // Chromium maps edge.test -> loopback, but Playwright's Node-side
+    // route.fetch does NOT inherit Chromium's host-resolver rules.
+    // Preserve the original Caddy virtual host while connecting via the
+    // published local HTTPS endpoint. Never print the original request or
+    // upstream transport exception: it contains auth cookies and CSRF.
+    const original = new URL(route.request().url());
+    const upstreamAddress = new URL(original);
+    upstreamAddress.hostname = "127.0.0.1";
+    let upstream;
+    try {
+      upstream = await route.fetch({
+        url: upstreamAddress.toString(),
+        headers: { ...route.request().headers(), host: original.host },
+        timeout: 45000,
+      });
+    } catch {
+      await route.abort("failed").catch(() => {});
+      throw new Error("ACK-loss proxy failed before service acceptance (redacted)");
+    }
+    const result = await upstream.json().catch(() => null);
+    if (upstream.status() !== 200 ||
+        result?.protocol_version !== "chaptera.commit-accepted.v1" ||
+        result.document_id !== ackLossDoc ||
+        result.base_revision_id !== ackLossBefore.revision_id ||
+        !result.revision_id ||
+        result.revision_id === ackLossBefore.revision_id ||
+        !result.client_operation_id) {
+      throw new Error("ACK-loss control did not first obtain a real durable MoveNode 200");
+    }
+    authoritativeAck = {
+      revision_id: result.revision_id,
+      operation_id: result.client_operation_id,
+      status: upstream.status(),
+    };
+    // The server has fully committed and returned 200 to our proxy. The
+    // browser receives NO response, exactly the ACK-unknown transport case.
+    await route.abort("failed");
+  };
+  await page.route("**/v1/documents/*/commit", dropCommittedAck);
+  await page.mouse.move(ackLossTarget.start.x, ackLossTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(ackLossTarget.end.x, ackLossTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#status");
+    const retry = document.querySelector("#reconcile-action");
+    return status?.textContent?.includes("Save outcome unknown") &&
+      status?.classList.contains("error") &&
+      document.querySelector("#undo-action")?.disabled === true &&
+      document.querySelector("#redo-action")?.disabled === true &&
+      retry?.hidden === false && retry?.disabled === false;
+  }, null, { timeout: 30000 });
+  await page.unroute("**/v1/documents/*/commit", dropCommittedAck);
+  if (!authoritativeAck || interceptedAckCount !== 1 ||
+      countRequests("POST", ackLossCommitPath) !== initialCommits + 1) {
+    throw new Error("ACK-loss test did not observe exactly one server-accepted MoveNode");
+  }
+
+  // Neither keyboard history nor a second pointer gesture may escape the
+  // uncertain-save fence or silently use the stale pre-commit revision.
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+Shift+z");
+  await page.keyboard.press("Control+y");
+  await page.mouse.move(ackLossTarget.start.x, ackLossTarget.start.y);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(ackLossTarget.end.x, ackLossTarget.end.y, { steps: 4 });
+  await page.mouse.up({ button: "left" });
+  if (countRequests("POST", ackLossHistoryPath) !== initialHistory ||
+      countRequests("POST", ackLossCommitPath) !== initialCommits + 1) {
+    throw new Error("unconfirmed save emitted a stale history or duplicate MoveNode POST");
+  }
+
+  // The first explicitly requested GET /current fails: no stale success,
+  // no unlock and no mutation, even though the server has durably advanced.
+  let abortedCurrentReads = 0;
+  const denyCurrent = async route => {
+    if (decodeURIComponent(new URL(route.request().url()).pathname) ===
+        "/v1/documents/" + ackLossDoc + "/current") {
+      abortedCurrentReads += 1;
+      await route.abort("failed");
+    } else {
+      await route.continue();
+    }
+  };
+  await page.route("**/v1/documents/*/current", denyCurrent);
+  const failingRecheck = page.waitForRequest(request =>
+    request.method() === "GET" &&
+    decodeURIComponent(new URL(request.url()).pathname) ===
+      "/v1/documents/" + ackLossDoc + "/current",
+  { timeout: 30000 });
+  await page.locator("#reconcile-action").click();
+  await failingRecheck;
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Save outcome unknown") &&
+    document.querySelector("#reconcile-action")?.disabled === false &&
+    document.querySelector("#undo-action")?.disabled === true &&
+    document.querySelector("#redo-action")?.disabled === true,
+  null, { timeout: 30000 });
+  await page.unroute("**/v1/documents/*/current", denyCurrent);
+  if (abortedCurrentReads < 1 ||
+      countRequests("POST", ackLossHistoryPath) !== initialHistory) {
+    throw new Error("failed authoritative recheck unlocked or mutated an unknown save");
+  }
+
+  // Only a fresh authenticated matching /current AND Reader Scene with a
+  // different revision can reconcile. The UI deliberately does not claim
+  // that the lost original HTTP ACK was observed.
+  await page.locator("#reconcile-action").click();
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#status");
+    return status?.textContent?.includes("Server revision synchronized") &&
+      document.querySelector("#reconcile-action")?.hidden === true &&
+      document.querySelector("#undo-action")?.disabled === false &&
+      document.querySelector("#redo-action")?.disabled === false;
+  }, null, { timeout: 30000 });
+  const ackLossCurrent = await currentDocumentReceipt(ackLossDoc);
+  const ackLossNode = await readerNodeReceipt(ackLossDoc, ackLossTarget.node_id);
+  if (ackLossCurrent.status !== 200 ||
+      ackLossCurrent.revision_id !== authoritativeAck.revision_id ||
+      ackLossNode.revision_id !== authoritativeAck.revision_id ||
+      !ackLossNode.bounds ||
+      (ackLossNode.bounds.x === ackLossTarget.before_bounds.x &&
+       ackLossNode.bounds.y === ackLossTarget.before_bounds.y) ||
+      countRequests("POST", ackLossHistoryPath) !== initialHistory) {
+    throw new Error("real lost-ACK reconciliation did not recover exact server revision/geometry");
+  }
+  const lostCommitAckEvidence = {
+    claim: true,
+    independent_real_pub: true,
+    server_accepted_before_browser_ack_loss: true,
+    accepted_commit_status: authoritativeAck.status,
+    original_operation_id_preserved: true,
+    history_mutations_while_unknown: 0,
+    duplicate_move_mutations_while_unknown: 0,
+    failed_refetch_kept_editing_locked: true,
+    explicit_current_and_reader_reconciled: true,
+    fabricated_original_ack: false,
+  };
+
   if (process.env.CHAPTERA_SECURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.CHAPTERA_SECURE_SCREENSHOT, fullPage: true });
   }
@@ -714,6 +959,9 @@ try {
     reloaded_editor_paint: reopenedPaint,
     moved_editor_paint: movedPaint,
     edited_editor_paint: editedPaint,
+    pending_move_history_fence_claim: true,
+    lost_commit_ack_fence_claim: true,
+    lost_commit_ack_fence: lostCommitAckEvidence,
     real_move_commit: true,
     move_commit: moveCommit,
     malformed_source_rejection_claim: true,

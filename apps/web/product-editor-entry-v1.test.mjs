@@ -92,3 +92,36 @@ test("Redo status distinguishes pending/rejected/uncertain from a confirmed revi
     assert.doesNotMatch(view.status, /Revision sha256:undo/);
   }
 });
+
+test("Pending move save does not show a successful Undo", () => {
+  const view = productEditorStatusView({reason:"history_blocked_during_save",revision_id:"sha256:old"});
+  assert.equal(view.kind, "pending");
+  assert.match(view.status, /Save still pending/);
+  assert.doesNotMatch(view.status, /^Revision /);
+});
+
+test("ambiguous save takes precedence over stale revision success and requires manual recheck", () => {
+  const oldRevision = "sha256:" + "a".repeat(64);
+  const failed = productEditorStatusView({
+    reason: "commit_error", revision_id: oldRevision, commit_uncertain: true,
+  });
+  assert.equal(failed.kind, "error");
+  assert.match(failed.status, /Save outcome unknown/);
+  assert.match(failed.status, /editing locked/);
+  assert.doesNotMatch(failed.status, /Revision sha256/);
+  const inRecovery = productEditorStatusView({
+    reason: "scene_loaded", revision_id: oldRevision,
+    commit_uncertain: true, commit_recovery_in_flight: true,
+  });
+  assert.equal(inRecovery.kind, "pending");
+  assert.match(inRecovery.status, /Checking exact server revision/);
+  assert.doesNotMatch(inRecovery.status, /Revision sha256/);
+  const exact = productEditorStatusView({
+    reason: "commit_authority_reconciled",
+    revision_id: "sha256:" + "b".repeat(64),
+    commit_uncertain: false, commit_recovery_in_flight: false,
+  });
+  assert.equal(exact.kind, "ok");
+  assert.match(exact.status, /Server revision synchronized/);
+  assert.doesNotMatch(exact.status, /Saved/);
+});
