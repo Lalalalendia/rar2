@@ -7,6 +7,10 @@ on:
       - "docs/reader-product-publisher-49-111-contract.md"
       - ".github/workflows/reader-product-49-111-contract.yml"
   workflow_dispatch:
+concurrency:
+  group: reader-product-score-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 jobs:
