@@ -313,6 +313,33 @@ test("commit obtains server CSRF and uses document-scoped canonical route", asyn
   assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
 });
 
+test("successful commit ACK must match the exact document, source, base and client operation", async () => {
+  const mutationFields = {
+    document_id: "20000000-0000-4000-8000-000000000009",
+    source_hash: "f".repeat(64),
+    base_revision_id: UNDONE,
+    client_operation_id: "other-operation",
+  };
+  for (const [field, value] of Object.entries(mutationFields)) {
+    let commits = 0;
+    const { fetchImpl } = recorder((url) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/session") return json(session());
+      if (path === "/v1/documents/" + DOC + "/commit") {
+        commits += 1;
+        return json({ ...accepted(), [field]: value });
+      }
+      throw new Error("unexpected path " + path);
+    });
+    const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+      documentId: DOC,
+      fetchImpl,
+    });
+    await assert.rejects(service.commit(commitRequest()), /commit accepted identity mismatch/, field);
+    assert.equal(commits, 1, "mismatched ACK must not retry or duplicate a commit: " + field);
+  }
+});
+
 test("Undo uses authenticated history route, CSRF, and supported commit telemetry class", async () => {
   const { calls, fetchImpl } = recorder((url, options) => {
     const path = new URL(url).pathname;
