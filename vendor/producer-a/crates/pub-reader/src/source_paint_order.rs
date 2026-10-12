@@ -133,11 +133,23 @@ pub(super) fn source_page_paint_orders_v1(
         // broaden the ordinary 0x30 ellipse paint admission here.
         let page_logo_ellipse =
             page_logo && node.payload.officeart_shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
+        // A PAGE LOGO rectangle is already admitted only with source-resolved
+        // solid fill/color and explicit shape-local visibility; retain its
+        // exact top-level carrier rank without affecting ordinary GROUPs.
+        let page_logo_rectangle = page_logo
+            && node.payload.officeart_shape_type
+                == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
+            && node.payload.effective_paint.as_ref().is_some_and(|paint| {
+                paint.fill.solid.as_ref().is_some_and(|value| value.value)
+                    && paint.fill.visible.as_ref().is_some_and(|value| value.value)
+                    && paint.fill.color_rgb.is_some()
+            });
         if !admit_grouped_paint_participant(
             node.payload.story_frame.is_some(),
             node.payload.image_slot.is_some(),
             solid_rectangle,
         ) && !page_logo_ellipse
+            && !page_logo_rectangle
         {
             continue;
         }
