@@ -518,7 +518,7 @@ test("one arrow nudge creates one canonical MoveNode, preserving operation/scene
   };
   const result1 = await shell.nudgeSelectedNode({ x_emu: 12700, y_emu: 0 });
   assert.equal(result1.result.revision_id, HEAD1);
-  const result2 = await shell.nudgeSelectedNode({ x_emu: 0, y_emu: -127000 });
+  const result2 = await shell.nudgeSelectedNode({ x_emu: 0, y_emu: 127000 });
   assert.equal(result2.result.revision_id, HEAD2);
   assert.equal(shell.stateReceipt().commit_request_count, 2);
   assert.equal(shell.stateReceipt().selected_node_id, A);
@@ -526,7 +526,7 @@ test("one arrow nudge creates one canonical MoveNode, preserving operation/scene
   assert.equal(shell.stateReceipt().commit_uncertain, false);
   assert.deepEqual(sent.map(x => x.command), [
     { kind: "move_node_to", node_id: A, x_emu: 50700, y_emu: 64000 },
-    { kind: "move_node_to", node_id: A, x_emu: 50700, y_emu: -63000 },
+    { kind: "move_node_to", node_id: A, x_emu: 50700, y_emu: 191000 },
   ]);
   assert.deepEqual(sent.map(x => x.client_operation_id), ["nudge-1", "nudge-2"]);
   assert.deepEqual(sent.map(x => x.base_revision_id), [BASE, HEAD1]);
