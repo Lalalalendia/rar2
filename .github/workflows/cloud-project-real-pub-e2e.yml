@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - "apps/web/chaptera-cloud-workspace-session-v1.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.test.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.test.mjs"
+      - "apps/web/product-editor-entry-v1.mjs"
+      - "apps/web/product-editor-entry-v1.test.mjs"
+      - "apps/web/product-editor.html"
       - "apps/web/chaptera-cloud-source-ingress-v1.mjs"
       - "apps/web/cloud-project-new-v1.mjs"
       - "apps/web/cloud-project-new.html"
