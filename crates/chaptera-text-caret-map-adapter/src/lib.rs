@@ -14,6 +14,7 @@ pub const CARET_MAP_VERSION_V1: &str = "chaptera.resolved-text-caret-map.v1";
 pub const SELECTION_GEOMETRY_VERSION_V1: &str = "chaptera.selection-geometry.v1";
 pub const MAX_SAFE_EMU: i64 = 9_007_199_254_740_991;
 pub const MIN_SAFE_EMU: i64 = -MAX_SAFE_EMU;
+pub const SHAPING_EXPLICIT_AUTHORITY_SOURCE: &str = "shaping_explicit_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaretMapError {
@@ -48,6 +49,12 @@ pub struct InternalCaretStopV1 {
     pub scalar_boundary: u32,
     pub page_x_emu: i64,
     pub frame_x_emu: i64,
+    #[serde(default = "default_internal_caret_authority_source")]
+    pub authority_source: String,
+}
+
+fn default_internal_caret_authority_source() -> String {
+    SHAPING_EXPLICIT_AUTHORITY_SOURCE.to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +107,8 @@ pub struct CaretStopV1 {
     pub frame_y_top_emu: i64,
     pub frame_y_bottom_emu: i64,
     pub affinities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +277,12 @@ fn validate_cluster(
         }
         safe_emu(stop.page_x_emu, "internal.page_x_emu")?;
         safe_emu(stop.frame_x_emu, "internal.frame_x_emu")?;
+        if stop.authority_source.is_empty() {
+            return Err(CaretMapError::new(
+                "invalid_layout",
+                "internal caret authority_source is required",
+            ));
+        }
         if !(cluster.page_x_start_emu..=cluster.page_x_end_emu).contains(&stop.page_x_emu) {
             return Err(CaretMapError::new(
                 "invalid_layout",
@@ -358,6 +373,7 @@ fn build_caret_stops(lines: &[ResolvedLineFragmentV1]) -> Vec<CaretStopV1> {
     let mut stops = Vec::new();
     for line in lines {
         let mut candidates: BTreeMap<(u32, i64, i64), BTreeSet<&'static str>> = BTreeMap::new();
+        let mut internal_authority_by_key: BTreeMap<(u32, i64, i64), String> = BTreeMap::new();
         for cluster in &line.clusters {
             candidates
                 .entry((
@@ -376,14 +392,13 @@ fn build_caret_stops(lines: &[ResolvedLineFragmentV1]) -> Vec<CaretStopV1> {
                 .or_default()
                 .insert("upstream");
             for internal in &cluster.internal_caret_stops {
-                candidates
-                    .entry((
-                        internal.scalar_boundary,
-                        internal.page_x_emu,
-                        internal.frame_x_emu,
-                    ))
-                    .or_default()
-                    .insert("internal");
+                let key = (
+                    internal.scalar_boundary,
+                    internal.page_x_emu,
+                    internal.frame_x_emu,
+                );
+                candidates.entry(key).or_default().insert("internal");
+                internal_authority_by_key.insert(key, internal.authority_source.clone());
             }
         }
         for (ordinal, ((scalar, page_x, frame_x), affinities)) in candidates.into_iter().enumerate()
@@ -408,6 +423,9 @@ fn build_caret_stops(lines: &[ResolvedLineFragmentV1]) -> Vec<CaretStopV1> {
                 frame_y_top_emu: line.frame_y_top_emu,
                 frame_y_bottom_emu: line.frame_y_bottom_emu,
                 affinities: ordered,
+                authority_source: internal_authority_by_key
+                    .get(&(scalar, page_x, frame_x))
+                    .cloned(),
             });
         }
     }
@@ -783,27 +801,38 @@ pub fn selection_geometry_v1(
 }
 
 pub fn caret_map_to_value_v1(map: &ResolvedTextCaretMapV1) -> Value {
+    let caret_stops = map
+        .caret_stops
+        .iter()
+        .map(|stop| {
+            let mut row = json!({
+                "stop_id": stop.stop_id,
+                "scalar_boundary": stop.scalar_boundary,
+                "page_id": stop.page_id,
+                "frame_id": stop.frame_id,
+                "line_id": stop.line_id,
+                "flow_ordinal": stop.flow_ordinal,
+                "page_x_emu": stop.page_x_emu,
+                "page_y_top_emu": stop.page_y_top_emu,
+                "page_y_bottom_emu": stop.page_y_bottom_emu,
+                "frame_x_emu": stop.frame_x_emu,
+                "frame_y_top_emu": stop.frame_y_top_emu,
+                "frame_y_bottom_emu": stop.frame_y_bottom_emu,
+                "affinities": stop.affinities,
+            });
+            if let Some(authority_source) = &stop.authority_source {
+                row["authority_source"] = Value::String(authority_source.clone());
+            }
+            row
+        })
+        .collect::<Vec<_>>();
     json!({
         "protocol_version": map.protocol_version,
         "layout_revision_id": map.layout_revision_id,
         "story_id": map.story_id,
         "story_scalar_len": map.story_scalar_len,
         "lines": map.lines,
-        "caret_stops": map.caret_stops.iter().map(|stop| json!({
-            "stop_id": stop.stop_id,
-            "scalar_boundary": stop.scalar_boundary,
-            "page_id": stop.page_id,
-            "frame_id": stop.frame_id,
-            "line_id": stop.line_id,
-            "flow_ordinal": stop.flow_ordinal,
-            "page_x_emu": stop.page_x_emu,
-            "page_y_top_emu": stop.page_y_top_emu,
-            "page_y_bottom_emu": stop.page_y_bottom_emu,
-            "frame_x_emu": stop.frame_x_emu,
-            "frame_y_top_emu": stop.frame_y_top_emu,
-            "frame_y_bottom_emu": stop.frame_y_bottom_emu,
-            "affinities": stop.affinities,
-        })).collect::<Vec<_>>(),
+        "caret_stops": caret_stops,
         "materialized_ranges": map.materialized_ranges.iter()
             .map(|r| json!([r.start_scalar,r.end_scalar])).collect::<Vec<_>>(),
     })
@@ -990,11 +1019,49 @@ mod tests {
             scalar_boundary: 1,
             page_x_emu: 7,
             frame_x_emu: 7,
+            authority_source: SHAPING_EXPLICIT_AUTHORITY_SOURCE.to_owned(),
         });
         let supported = build(vec![line("l0", 0, None, None, vec![c])], 2);
         let stop = resolve_story_position_v1(&supported, 1, None, None).unwrap();
         assert_eq!(stop.affinities, vec!["internal".to_owned()]);
         assert_eq!(stop.page_x_emu, 7);
+        assert_eq!(
+            stop.authority_source.as_deref(),
+            Some(SHAPING_EXPLICIT_AUTHORITY_SOURCE)
+        );
+        let value = caret_map_to_value_v1(&supported);
+        let encoded_stop = value["caret_stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["scalar_boundary"] == 1)
+            .unwrap();
+        assert_eq!(
+            encoded_stop["authority_source"],
+            SHAPING_EXPLICIT_AUTHORITY_SOURCE
+        );
+    }
+
+    #[test]
+    fn empty_internal_authority_source_fails_closed() {
+        let mut c = cluster(0, 2, 0, 20);
+        c.internal_caret_stops.push(InternalCaretStopV1 {
+            scalar_boundary: 1,
+            page_x_emu: 7,
+            frame_x_emu: 7,
+            authority_source: String::new(),
+        });
+        assert_eq!(
+            build_resolved_text_caret_map_v1(CaretMapBuildInputV1 {
+                layout_revision_id: "layout:1".to_owned(),
+                story_id: "story:1".to_owned(),
+                story_scalar_len: 2,
+                lines: vec![line("l0", 0, None, None, vec![c])],
+            })
+            .unwrap_err()
+            .code,
+            "invalid_layout"
+        );
     }
 
     #[test]

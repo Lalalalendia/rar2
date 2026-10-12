@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 mod break_policy;
 mod effective_table_layout;
+mod internal_caret;
 mod resolve;
 mod shaped_flow;
 mod shaping;
@@ -30,6 +31,11 @@ pub use break_policy::{
 pub use effective_table_layout::{
     BoundedEffectiveTableResolveError, EffectiveTableLayoutInputV1,
     resolve_bounded_effective_table_cells,
+};
+pub use internal_caret::{
+    GDEF_FORMAT1_AUTHORITY_SOURCE, INTERNAL_CARET_AUTHORITY_REVISION, InternalCaretAuthorityError,
+    InternalCaretAuthorityResultV1, InternalCaretStopAuthorityV1, UnsupportedInternalCaretV1,
+    resolve_internal_carets_ltr,
 };
 pub use resolve::{
     BoundedLayoutEnvironment, BoundedResolvedScene, ResolveBlocked, ResolveDiagnostic,
