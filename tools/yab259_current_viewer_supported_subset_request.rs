@@ -260,6 +260,9 @@ struct MappingSummary {
     table_cell_physical_first_line_fit_count: usize,
     table_cell_baseline_false_reject_count: usize,
     table_cell_layout_inconsistent_count: usize,
+    table_text_ab_emitted_cell_count: usize,
+    table_text_ab_emitted_run_count: usize,
+    table_text_ab_residual_cell_count: usize,
     table_uniform_cell_text_inset_count: usize,
     table_uniform_vertical_alignment_count: usize,
     derived_table_fill_node_count: usize,
@@ -747,6 +750,246 @@ mod table_cell_first_line_observation_tests {
         candidate.story_scalar_end = Some(15);
         assert_eq!(observed_table_cell_physical_fit_v1(&candidate, 10), None);
     }
+
+    #[test]
+    fn baseline_ab_arms_reuse_one_physical_fit_without_changing_glyphs() {
+        let mut sample = cell(75, 110, 100);
+        sample.typography = vec![CurrentTypographyRun {
+            scalar_start: 10,
+            scalar_end: 14,
+            text_size_emu: 100,
+            color_rgb: Some([12, 34, 56]),
+        }];
+        let table = CurrentTable {
+            cells: vec![sample],
+            uniform_cell_text_inset_emu: Some(10),
+            uniform_cell_vertical_alignment: Some(CurrentTableVerticalAlignment::Top),
+            borders: Vec::new(),
+        };
+        let font = CurrentFont {
+            resource_id: "pinned:test".to_owned(),
+            fingerprint_sha256: "a".repeat(64),
+            face_index: 0,
+            bytes: vec![1],
+        };
+        let owner = NodeId::from_canonical(CanonicalId::from_bytes([2; 16]));
+        let bounds = RectEmu::new(
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+            LengthEmu::new(400),
+            LengthEmu::new(100),
+        );
+        for (arm, expected_y) in [
+            (TableTextBaselineArmV1::LegacyFontSize, 110),
+            (TableTextBaselineArmV1::PhysicalFirstLineExtent, 85),
+        ] {
+            let mut runs = Vec::new();
+            let mut glyphs = BTreeSet::new();
+            let mut summary = MappingSummary::default();
+            assert!(append_single_line_table_text_ab_v1(
+                &table,
+                owner,
+                bounds,
+                &Affine2D::identity(),
+                &font,
+                &mut runs,
+                &mut glyphs,
+                &mut summary,
+                arm,
+            ).expect("bounded research TABLE text arm"));
+            assert_eq!(summary.table_text_ab_emitted_cell_count, 1);
+            assert_eq!(summary.table_text_ab_emitted_run_count, 1);
+            assert_eq!(summary.table_text_ab_residual_cell_count, 0);
+            assert_eq!(glyphs.into_iter().collect::<Vec<_>>(), vec![1]);
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].baseline_y.get(), expected_y);
+            assert_eq!(runs[0].fill_rgb, [12, 34, 56]);
+        }
+    }
+}
+
+/// Research-only Carlton AB selector. Absent in the ordinary fixed-output path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableTextBaselineArmV1 {
+    LegacyFontSize,
+    PhysicalFirstLineExtent,
+}
+
+fn table_text_baseline_arm_v1() -> Result<Option<TableTextBaselineArmV1>> {
+    match std::env::var("CHAPTERA_TABLE_TEXT_BASELINE_AB_V1") {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value == "legacy-font-size" => Ok(Some(TableTextBaselineArmV1::LegacyFontSize)),
+        Ok(value) if value == "physical-first-line" => {
+            Ok(Some(TableTextBaselineArmV1::PhysicalFirstLineExtent))
+        }
+        _ => bail!("unsupported bounded TABLE text baseline experiment selector"),
+    }
+}
+
+fn table_cell_content_bounds_v1(cell: &CurrentTableCell, inset_emu: i64) -> Option<RectEmu> {
+    if inset_emu < 0 {
+        return None;
+    }
+    let bounds = cell.bounds?;
+    let double_inset = inset_emu.checked_mul(2)?;
+    let width = bounds.width.get().checked_sub(double_inset)?;
+    let height = bounds.height.get().checked_sub(double_inset)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(RectEmu::new(
+        LengthEmu::new(bounds.x.get().checked_add(inset_emu)?),
+        LengthEmu::new(bounds.y.get().checked_add(inset_emu)?),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn append_single_line_table_text_ab_v1(
+    table: &CurrentTable,
+    owner: NodeId,
+    owner_bounds: RectEmu,
+    owner_transform: &Affine2D,
+    font: &CurrentFont,
+    text_runs: &mut Vec<FixedTextRun>,
+    used_glyph_ids: &mut BTreeSet<u32>,
+    summary: &mut MappingSummary,
+    baseline_arm: TableTextBaselineArmV1,
+) -> Result<bool> {
+    let nonempty_count = table.cells.iter().filter(|cell| !cell.text.is_empty()).count();
+    if owner_transform != &Affine2D::identity() {
+        summary.table_text_ab_residual_cell_count += nonempty_count;
+        return Ok(false);
+    }
+    let Some(inset_emu) = table.uniform_cell_text_inset_emu.filter(|inset| *inset >= 0) else {
+        summary.table_text_ab_residual_cell_count += nonempty_count;
+        return Ok(false);
+    };
+
+    let mut mapped_any = false;
+    for cell in table.cells.iter().filter(|cell| !cell.text.is_empty()) {
+        let Some(content_bounds) = table_cell_content_bounds_v1(cell, inset_emu) else {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        };
+        let Some(layout) = cell.layout.as_ref() else {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        };
+        let CurrentTextLayoutDisposition::SharedResolved {
+            font_resource_id,
+            font_fingerprint_sha256,
+            font_size_emu,
+            line_height_emu,
+        } = &layout.disposition
+        else {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        };
+        if font_resource_id != &font.resource_id
+            || font_fingerprint_sha256 != &font.fingerprint_sha256
+            || *font_size_emu <= 0
+            || *line_height_emu <= 0
+            || layout.lines.len() != 1
+        {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        }
+
+        let line = &layout.lines[0];
+        let (Some(cell_start), Some(cell_end)) = (cell.story_scalar_start, cell.story_scalar_end)
+        else {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        };
+        if line.text.is_empty()
+            || !line.spans.is_empty()
+            || line.scalar_start != cell_start
+            || line.scalar_end != cell_end
+            || line.scalar_start >= line.scalar_end
+            || line.measured_width_emu <= 0
+            || line.measured_width_emu > content_bounds.width.get()
+            || observed_table_cell_physical_fit_v1(cell, inset_emu).is_none()
+            || line.x_offset_emu < 0
+            || line.x_offset_emu > content_bounds.width.get() - line.measured_width_emu
+        {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        }
+        let Some(shaping) = &line.shaping else {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        };
+        if shaping.units_per_em == 0
+            || shaping.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
+            || shaping.environment.font_size_emu.get() != *font_size_emu
+            || shaping.environment.face_index != font.face_index
+            || shaping.environment.layout.font_set_fingerprint != font.fingerprint_sha256
+            || shaping.environment.layout.resource_fingerprint != font.resource_id
+        {
+            summary.table_text_ab_residual_cell_count += 1;
+            continue;
+        }
+        let fill_rgb = match color_range_disposition(
+            &cell.typography,
+            line.scalar_start,
+            line.scalar_end,
+        ) {
+            ColorRangeDisposition::Resolved(color) => color,
+            _ => {
+                summary.table_text_ab_residual_cell_count += 1;
+                continue;
+            }
+        };
+
+        let base_x = checked_sub(
+            content_bounds.x.get(),
+            owner_bounds.x.get(),
+            "TABLE text content x offset",
+        )?;
+        let base_y = checked_sub(
+            content_bounds.y.get(),
+            owner_bounds.y.get(),
+            "TABLE text content y offset",
+        )?;
+        let baseline_x = checked_add(base_x, line.x_offset_emu, "TABLE text baseline x")?;
+        let baseline_y = checked_add(
+            checked_add(
+                base_y,
+                layout.vertical_offset_emu,
+                "TABLE text vertical offset",
+            )?,
+            match baseline_arm {
+                TableTextBaselineArmV1::LegacyFontSize => shaping.environment.font_size_emu.get(),
+                TableTextBaselineArmV1::PhysicalFirstLineExtent => cell
+                    .single_line_natural_extent_emu
+                    .expect("physical first-line layout was admitted"),
+            },
+            "TABLE text baseline y",
+        )?;
+
+        used_glyph_ids.extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
+        text_runs.push(FixedTextRun {
+            node_id: owner,
+            scalar_base: line.scalar_start,
+            logical_text: line.text.clone(),
+            shaped: BoundedShapedText {
+                environment: shaping.environment.clone(),
+                units_per_em: shaping.units_per_em,
+                glyphs: shaping.glyphs.clone(),
+                total_x_advance: LengthEmu::new(line.measured_width_emu),
+            },
+            baseline_x: LengthEmu::new(baseline_x),
+            baseline_y: LengthEmu::new(baseline_y),
+            fill_rgb,
+        });
+        summary.table_text_ab_emitted_cell_count += 1;
+        summary.table_text_ab_emitted_run_count += 1;
+        summary.mapped_text_run_count += 1;
+        mapped_any = true;
+    }
+
+    Ok(mapped_any)
 }
 
 fn append_table_paint_nodes_v1(
@@ -852,6 +1095,7 @@ fn main() -> Result<()> {
         .context("read current Viewer fixed-PDF packet")?;
     let input: CurrentViewerInput =
         serde_json::from_str(&raw).context("parse current Viewer fixed-PDF packet")?;
+    let table_text_experiment = table_text_baseline_arm_v1()?;
     if input.protocol_version != INPUT_VERSION {
         bail!("unsupported current Viewer fixed-PDF input protocol");
     }
@@ -946,6 +1190,25 @@ fn main() -> Result<()> {
                     &mut node_paints,
                     &mut summary,
                 )?;
+                if let Some(arm) = table_text_experiment {
+                    let glyphs = used_glyph_ids_by_resource
+                        .entry(input.font.resource_id.clone())
+                        .or_default();
+                    let mapped_any = append_single_line_table_text_ab_v1(
+                        table,
+                        resolved_node_id,
+                        node.bounds,
+                        &node.transform,
+                        &input.font,
+                        &mut text_runs,
+                        glyphs,
+                        &mut summary,
+                        arm,
+                    )?;
+                    if mapped_any {
+                        mapped_resource_nodes.insert(resolved_node_id);
+                    }
+                }
                 residual_reasons
                     .entry(resolved_node_id)
                     .or_default()

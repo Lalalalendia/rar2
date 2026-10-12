@@ -109,6 +109,24 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("let mut text_runs = Vec::<FixedTextRun>::new()", text)
         self.assertNotIn("table_cell_first_line_observation_tests::emit", text)
 
+    def test_table_first_baseline_ab_is_research_opt_in_and_retains_unmodified_default(self) -> None:
+        text = MAPPER.read_text(encoding="utf-8")
+        workflow = (
+            ROOT / ".github" / "workflows" / "carlton-current-viewer-supported-subset-pdf.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('std::env::var("CHAPTERA_TABLE_TEXT_BASELINE_AB_V1")', text)
+        self.assertIn("Err(std::env::VarError::NotPresent) => Ok(None)", text)
+        self.assertIn("if let Some(arm) = table_text_experiment", text)
+        self.assertIn("observed_table_cell_physical_fit_v1(cell, inset_emu).is_none()", text)
+        self.assertIn("TableTextBaselineArmV1::LegacyFontSize", text)
+        self.assertIn("TableTextBaselineArmV1::PhysicalFirstLineExtent", text)
+        self.assertIn("baseline_ab_arms_reuse_one_physical_fit_without_changing_glyphs", text)
+        self.assertNotIn("line.line_height_emu > content_bounds.height.get()", text)
+        self.assertIn("Measure research-only TABLE first-baseline A/B", workflow)
+        self.assertIn("table_text_baseline_ab=", workflow)
+        self.assertIn("production_table_text_enabled", workflow)
+        self.assertIn("if: always()", workflow)
+
     def test_runner_defaults_to_exact_alpha_but_retains_explicit_reject_control(self) -> None:
         text = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_alpha_smask_pdf_donor", text)

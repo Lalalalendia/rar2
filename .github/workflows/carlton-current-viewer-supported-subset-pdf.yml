@@ -537,19 +537,116 @@ jobs:
             throw "supported-subset receipt leaked local source path"
           }
 
+      - name: Measure research-only TABLE first-baseline A/B
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($arm in @("legacy-font-size", "physical-first-line")) {
+            $env:CHAPTERA_TABLE_TEXT_BASELINE_AB_V1 = $arm
+            try {
+              $prefix = Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "table-text-ab-$arm"
+              python tools/run_yab259_current_viewer_supported_subset_pdf.py --yab-checkout "$env:CHAPTERA_YAB259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$prefix-request.private.json" --mapping-output "$prefix-mapping.json" --pdf-output "$prefix.pdf" --renderer-result-output "$prefix-renderer.json"
+              if ($LASTEXITCODE -ne 0) { throw "TABLE text $arm research render failed" }
+            } finally {
+              Remove-Item Env:\CHAPTERA_TABLE_TEXT_BASELINE_AB_V1 -ErrorAction SilentlyContinue
+            }
+          }
+
+          @'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path.cwd() / "tools"))
+          from pdf_reference_diff_v1 import compare_pdfs
+
+          root = pathlib.Path(os.environ["CHAPTERA_CARLTON_SUPPORTED_ROOT"])
+          reference = pathlib.Path(os.environ["CHAPTERA_CARLTON_REFERENCE"])
+          baseline = json.loads(
+              pathlib.Path(os.environ["CHAPTERA_SUPPORTED_DIFF"]).read_text(encoding="utf-8")
+          )
+          baseline_fractions = [
+              page["diff"]["significant_fraction"] for page in baseline["pages"]
+          ]
+          receipt = {
+              "schema": "chaptera.carlton-table-text-baseline-ab.research.v1",
+              "source_hash": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+              "ordinary_pdf_fractions": baseline_fractions,
+              "arms": {},
+              "production_table_text_enabled": False,
+              "not_publisher_verified_baseline_law": True,
+          }
+          failures = []
+          for arm in ("legacy-font-size", "physical-first-line"):
+              prefix = root / f"table-text-ab-{arm}"
+              mapped = json.loads(pathlib.Path(f"{prefix}-mapping.json").read_text(encoding="utf-8"))["mapping"]
+              renderer = json.loads(pathlib.Path(f"{prefix}-renderer.json").read_text(encoding="utf-8"))["renderer_result"]["summary"]
+              pdf = pathlib.Path(f"{prefix}.pdf")
+              observed = compare_pdfs(str(pdf), str(reference))
+              fractions = [page["diff"]["significant_fraction"] for page in observed["pages"]]
+              emitted = mapped["table_text_ab_emitted_cell_count"]
+              residual = mapped["table_text_ab_residual_cell_count"]
+              record = {
+                  "emitted_cells": emitted,
+                  "emitted_runs": mapped["table_text_ab_emitted_run_count"],
+                  "residual_nonempty_cells": residual,
+                  "physical_fit": mapped["table_cell_physical_first_line_fit_count"],
+                  "false_baseline_rejects": mapped["table_cell_baseline_false_reject_count"],
+                  "inconsistent": mapped["table_cell_layout_inconsistent_count"],
+                  "page_significant_fractions": fractions,
+                  "page_3_delta_vs_ordinary": fractions[2] - baseline_fractions[2] if len(fractions) == 3 else None,
+                  "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                  "renderer_node_painted": renderer["node_painted"],
+                  "renderer_node_unsupported": renderer["node_unsupported"],
+              }
+              receipt["arms"][arm] = record
+              if (emitted, residual) != (10, 4):
+                  failures.append(f"{arm}: admitted TABLE text differs from expected bounded 10/4")
+              if len(fractions) != 3 or fractions[:2] != baseline_fractions[:2]:
+                  failures.append(f"{arm}: unexpected pages 1/2 visual drift")
+              if record["inconsistent"]:
+                  failures.append(f"{arm}: unexpected inconsistent TABLE layout")
+          receipt_path = root / "table-text-baseline-ab.receipt.json"
+          receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print("table_text_baseline_ab=" + json.dumps(receipt, sort_keys=True))
+          if failures:
+              raise SystemExit("; ".join(failures))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "TABLE text baseline A/B measurement failed" }
+
       - name: Stage retained measurement artifacts
+        if: always()
         shell: pwsh
         run: |
           $out = "target/carlton-supported-subset"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "$env:CHAPTERA_SUPPORTED_PDF" "$out/carlton-current-edited-supported-subset.pdf"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_MAPPING" "$out/supported-mapping.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_RENDERER" "$out/supported-renderer.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_DIFF" "$out/supported-reference-diff.json"
-          Copy-Item "$env:CHAPTERA_SUPPORTED_RECEIPT" "$out/carlton-supported-subset.receipt.json"
+          $ordinary = @(
+            @{ Source = $env:CHAPTERA_SUPPORTED_PDF; Name = "carlton-current-edited-supported-subset.pdf" },
+            @{ Source = $env:CHAPTERA_SUPPORTED_MAPPING; Name = "supported-mapping.json" },
+            @{ Source = $env:CHAPTERA_SUPPORTED_RENDERER; Name = "supported-renderer.json" },
+            @{ Source = $env:CHAPTERA_SUPPORTED_DIFF; Name = "supported-reference-diff.json" },
+            @{ Source = $env:CHAPTERA_SUPPORTED_RECEIPT; Name = "carlton-supported-subset.receipt.json" }
+          )
+          foreach ($item in $ordinary) {
+            if ($item.Source -and (Test-Path $item.Source)) {
+              Copy-Item $item.Source (Join-Path $out $item.Name)
+            }
+          }
+          foreach ($arm in @("legacy-font-size", "physical-first-line")) {
+            $pdf = Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "table-text-ab-$arm.pdf"
+            $mapping = Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "table-text-ab-$arm-mapping.json"
+            if (Test-Path $pdf) { Copy-Item $pdf "$out/table-text-ab-$arm.pdf" }
+            if (Test-Path $mapping) { Copy-Item $mapping "$out/table-text-ab-$arm-mapping.json" }
+          }
+          $abReceipt = Join-Path $env:CHAPTERA_CARLTON_SUPPORTED_ROOT "table-text-baseline-ab.receipt.json"
+          if (Test-Path $abReceipt) { Copy-Item $abReceipt "$out/table-text-baseline-ab.receipt.json" }
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: carlton-current-viewer-supported-subset
           path: target/carlton-supported-subset
-          if-no-files-found: error
+          if-no-files-found: warn
