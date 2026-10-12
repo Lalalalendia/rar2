@@ -266,6 +266,45 @@ def main() -> int:
                 if worker.poll() is not None:
                     raise RuntimeError("isolated validation worker terminated during Product022 upload")
 
+                # Real host-admitted Product Scene vs the same Publisher PDF.
+                # Only image delivery differs between Chromium captures.
+                # Scenes and PNGs never leave this isolated job.
+                visual_dir = work / "chromium"
+                visual_env = browser_env.copy()
+                visual_env.update({
+                    "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
+                    "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
+                    "CHAPTERA_PRODUCT_VISUAL_ID": CASE_ID,
+                    "REPOSITORY_COMMIT_SHA": args.head_sha,
+                })
+                run_stage(
+                    "product-visual",
+                    ["node", str(ROOT / "apps" / "cloud-reader" /
+                                  "product-safe-preview-022-browser.test.mjs")],
+                    visual_env,
+                )
+                raw_compare = work / "publisher-comparison.json"
+                run_stage(
+                    "publisher-compare",
+                    [
+                        sys.executable,
+                        str(ROOT / "tools" / "reader_safe_preview_visual_022.py"),
+                        str(ROOT / "tools" / "corpus" / "receipts" /
+                            "publisher-visual-golden-batch-01-fingerprint-v1.json"),
+                        str(visual_dir), str(raw_compare), args.head_sha, CASE_ID,
+                    ],
+                    visual_env,
+                )
+                comparison = json.loads(raw_compare.read_text(encoding="utf-8"))
+                if (comparison.get("fixture") != CASE_ID or
+                        comparison.get("repository_commit_sha") != args.head_sha or
+                        comparison.get("host_derived_image_count") != EXPECTED_IMAGES):
+                    raise RuntimeError("Product Publisher physical visual receipt mismatch")
+                (TARGET / "publisher-comparison.json").write_text(
+                    json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+
                 owner_report = json.loads(
                     (TARGET / "owner.json").read_text(encoding="utf-8")
                 )
@@ -291,6 +330,10 @@ def main() -> int:
                     "browser_painted_resources": owner_report["browser_painted_resources"],
                     "anonymous_scene_status": 401,
                     "partial_fidelity_disclosed": True,
+                    "publisher_same_head_visual_ablation": True,
+                    "coarse_grid_changed_before": comparison["changed_cell_before"],
+                    "coarse_grid_changed_after": comparison["changed_cell_after"],
+                    "coarse_grid_improvement": comparison["changed_cell_improvement"],
                     "publisher_exact_oracle_claim": False,
                     "external_s3_claim": False,
                     "deployed_production_claim": False,
