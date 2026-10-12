@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - "tools/run_product_oidc_worst_census_acceptance.py"
+      - "tools/reader_product_49_111_probe.py"
+      - "apps/cloud-reader/product-host-visual-pages.test.mjs"
       - "tools/run_secure_origin_product_worst_browser.mjs"
       - ".github/workflows/cloud-product-worst-census.yml"
   workflow_dispatch:
@@ -52,8 +54,10 @@ jobs:
       - name: Syntax and mandatory kernel sandbox preflight
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          python -m pip install --disable-pip-version-check "Pillow==11.3.0"
+          python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_49_111_probe.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
           node --check tools/run_secure_origin_product_worst_browser.mjs
+          node --check apps/cloud-reader/product-host-visual-pages.test.mjs
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "real syscall sandbox required"
@@ -124,6 +128,8 @@ jobs:
           path: |
             target/product-oidc-worst-census-${{ matrix.id }}/summary.json
             target/product-oidc-worst-census-${{ matrix.id }}/owner.json
+            target/product-oidc-worst-census-${{ matrix.id }}/physical-document.json
+            target/product-oidc-worst-census-${{ matrix.id }}/visual-privacy-check.json
             target/product-oidc-worst-census-${{ matrix.id }}/privacy-scan.json
           if-no-files-found: warn
           retention-days: 14
