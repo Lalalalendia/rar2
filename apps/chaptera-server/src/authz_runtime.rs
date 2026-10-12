@@ -2113,7 +2113,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(denied_replay.code, "grant_missing");
         assert_eq!(
-            revisions.load_document_edges("document:revision").await.unwrap().len(),
+            revisions
+                .load_document_edges("document:revision")
+                .await
+                .unwrap()
+                .len(),
             1
         );
 
