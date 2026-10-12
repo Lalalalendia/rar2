@@ -1,0 +1,102 @@
+name: Publisher-first Reader vs LO 49/111 fixed-cohort rerank
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/reader-publisher-lo-49-111-rerank.yml
+      - tools/reader_publisher_lo_49_111_scoreboard_v1.py
+      - tools/test_reader_publisher_lo_49_111_scoreboard_v1.py
+      - tools/corpus/receipts/publisher-lo-t999-49-111-frozen-v1.json
+      - docs/reader-publisher-lo-49-111-rerank.md
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/reader-publisher-lo-49-111-rerank.yml
+      - tools/reader_publisher_lo_49_111_scoreboard_v1.py
+      - tools/test_reader_publisher_lo_49_111_scoreboard_v1.py
+      - tools/corpus/receipts/publisher-lo-t999-49-111-frozen-v1.json
+      - docs/reader-publisher-lo-49-111-rerank.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-lo-49-111-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-free-contract:
+    name: Frozen LO 49/111 contract (no new visual claims)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify pinned science benchmark and negative controls
+        run: |
+          python tools/test_reader_publisher_lo_49_111_scoreboard_v1.py
+          python tools/reader_publisher_lo_49_111_scoreboard_v1.py --help
+
+  exact-reader-batch01:
+    name: Reuse real 55 PUB / 162 Publisher grid pages
+    needs: source-free-contract
+    uses: ./.github/workflows/publisher-visual-golden-batch01.yml
+    permissions:
+      contents: read
+      actions: read
+
+  fixed-49-111-scoreboard:
+    name: Exact SHA 49/111 Reader-vs-frozen-LO ordinal ranking
+    needs: exact-reader-batch01
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download only source-free physical Publisher Batch01 receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: publisher-visual-golden-batch01-receipt
+          path: target/reader-vs-lo-49-111
+      - name: Strict same-cohort Publisher/LO/Reader ranking
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/reader_publisher_lo_49_111_scoreboard_v1.py \
+            --reader-summary target/reader-vs-lo-49-111/summary.json \
+            --frozen-lo tools/corpus/receipts/publisher-lo-t999-49-111-frozen-v1.json \
+            --publisher-fingerprint tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            --publisher-pairs tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            --expected-reader-sha "${{ github.sha }}" \
+            --out target/reader-vs-lo-49-111/fixed-cohort-ranking.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          report=json.loads(Path('target/reader-vs-lo-49-111/fixed-cohort-ranking.json').read_text())
+          sha=report['reader_checkout_sha']
+          p=report['current_pages']; d=report['current_documents']
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write(f'## Fixed 49 PUB / 39 documents / 111 ordinal pages\n')
+              f.write(f'- Reader tested checkout SHA: `{sha}`\n')
+              f.write(f'- Pages: LibreOffice {p["libreoffice_wins"]}, Reader {p["reader_wins"]}, near {p["near_ties"]}\n')
+              f.write(f'- Documents: LibreOffice {d["libreoffice_wins"]}, Reader {d["reader_wins"]}, near {d["near_ties"]}\n')
+              f.write('- Publisher PDF is a previously signed 64x64 visual reference, **not** pixel-exact / source-semantic authority.\n')
+              f.write('- LO comparison is frozen at 24.2.7.2, **not** rerun at this SHA. No papering over unknown native PDF surface stage.\n')
+          PY
+      - name: Upload source-free numerical benchmark only
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-reader-lo-fixed-49-111-numeric
+          path: target/reader-vs-lo-49-111/fixed-cohort-ranking.json
+          if-no-files-found: error
+          retention-days: 30
