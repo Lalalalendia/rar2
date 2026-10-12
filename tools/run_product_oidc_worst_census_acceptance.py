@@ -282,6 +282,84 @@ def main() -> int:
                     raise RuntimeError("Product worst fixture OIDC/HTTPS/Chromium receipt not admitted")
                 if worker.poll() is not None or server.poll() is not None:
                     raise RuntimeError("isolated Product service stopped during worst-document census")
+                # Measure the genuine authenticated Product Scene, not the
+                # direct/Guest worker route. The private scene is from the
+                # real HTTPS/OIDC owner browser that completed above.
+                visual_dir = work / ("publisher-product-pages-" + CASE_ID)
+                visual_env = browser_env.copy()
+                visual_env.update({
+                    "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
+                    "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
+                    "CHAPTERA_PRODUCT_VISUAL_SOURCE_SHA256": PINNED_SHA,
+                    "CHAPTERA_PRODUCT_VISUAL_PAGES": str(EXPECTED_PAGES),
+                    "REPOSITORY_COMMIT_SHA": args.head_sha,
+                })
+                run_stage(
+                    "product-visual-browser",
+                    ["node", str(ROOT / "apps" / "cloud-reader" /
+                                  "product-host-visual-pages.test.mjs")],
+                    visual_env,
+                )
+                raw_score = work / "product-publisher-score.json"
+                run_stage(
+                    "product-visual-publisher-score",
+                    [
+                        sys.executable,
+                        str(ROOT / "tools" / "reader_product_49_111_probe.py"),
+                        CASE_ID + "_" + PINNED_SHA[:16],
+                        str(ROOT / "tools" / "corpus" / "receipts" /
+                            "publisher-visual-golden-batch-01-fingerprint-v1.json"),
+                        str(ROOT / "tools" / "corpus" / "receipts" /
+                            "publisher-visual-golden-batch-01-pairs.csv"),
+                        str(ROOT / "tools" / "corpus" / "receipts" /
+                            "publisher-lo-t999-49-111-frozen-v1.json"),
+                        str(visual_dir), str(raw_score), args.head_sha,
+                    ],
+                    visual_env,
+                )
+                comparison = json.loads(raw_score.read_text(encoding="utf-8"))
+                if (comparison.get("schema") !=
+                        "chaptera.product-49-111-physical-document.v1"
+                        or comparison.get("fixture") != CASE_ID + "_" + PINNED_SHA[:16]
+                        or comparison.get("pub_sha256") != PINNED_SHA
+                        or comparison.get("product_page_count") != EXPECTED_PAGES
+                        or len(comparison.get("pages", [])) != EXPECTED_PAGES
+                        or comparison.get("checks", {}).get("privacy_scan_passed") is not False):
+                    raise RuntimeError("real Product Publisher visual comparison receipt invalid")
+
+                # Emit physical Product proof only AFTER unchanged fail-closed
+                # privacy scan of real server/worker/OIDC/browser test logs.
+                # Raw scene/Publisher/Chromium PNGs live under temporary work,
+                # never in GitHub's retained artifact directory.
+                scan_inputs = sorted(
+                    p for p in TARGET.iterdir()
+                    if p.suffix in (".log", ".json") and p.is_file()
+                )
+                if not scan_inputs:
+                    raise RuntimeError("missing physical logs for Product privacy audit")
+                scan = subprocess.run(
+                    [sys.executable, str(ROOT / "tools" / "security_leak_scan_v1.py"),
+                     *[str(p) for p in scan_inputs],
+                     "--forbid-literal", "Pinned020.pub",
+                     "--forbid-literal", "Pinned026.pub",
+                     "--forbid-literal", "Pinned043.pub",
+                     "--forbid-literal", "chaptera-local-only-secret",
+                     "--json-out", str(TARGET / "visual-privacy-check.json")],
+                    cwd=ROOT, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, check=False,
+                )
+                if scan.returncode:
+                    raise RuntimeError("physical Product Publisher visual privacy audit failed")
+                physical_document = {
+                    k: v for k, v in comparison.items()
+                    if k not in ("schema", "numeric_metrics")
+                }
+                physical_document["checks"]["privacy_scan_passed"] = True
+                (TARGET / "physical-document.json").write_text(
+                    json.dumps(physical_document, sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
                 summary = {
                     "schema": "chaptera.product-oidc-worst-census-physical.v1",
                     "repository_head_sha": args.head_sha,
@@ -301,7 +379,13 @@ def main() -> int:
                     "fidelity_state": owner_report["fidelity_state"],
                     "fidelity_reason_count": owner_report["fidelity_reason_count"],
                     "anonymous_scene_status": 401,
-                    "real_publisher_visual_a_b": False,
+                    "real_publisher_visual_a_b": True,
+                    "publisher_product_visual_page_count": EXPECTED_PAGES,
+                    "publisher_product_changed_cell_sum": comparison["numeric_metrics"]["changed_cell_sum"],
+                    "frozen_libreoffice_changed_cell_sum": comparison["numeric_metrics"]["frozen_lo_cell_sum"],
+                    "historic_direct_worker_changed_cell_sum": comparison["numeric_metrics"]["historical_direct_cell_sum"],
+                    "publisher_product_page_winners_vs_lo": comparison["numeric_metrics"]["page_winners_vs_frozen_lo"],
+                    "publisher_product_per_page_cells": [p["changed_cell_count"] for p in comparison["pages"]],
                     "publisher_exact_oracle_claim": False,
                     "full_product_49_111_score": False,
                     "external_s3_claim": False,
