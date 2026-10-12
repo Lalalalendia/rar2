@@ -99,6 +99,7 @@ jobs:
             --caddy-image caddy:2.10.2-alpine
 
       - name: Fail closed on Product Editor acceptance privacy leaks
+        id: b02_privacy_scan
         if: always()
         shell: bash
         run: |
@@ -116,8 +117,9 @@ jobs:
           fi
           python tools/security_leak_scan_v1.py             "${args[@]}"             --forbid-literal "SampleNewsletter.pub"             --forbid-literal "TruncatedNewsletter.pub"             --forbid-literal "$RUNNER_TEMP/chaptera-real-pub/SampleNewsletter.pub"             --forbid-literal "chaptera-local-only-secret"             --forbid-literal "chaptera-secure-origin"             --json-out target/cloud-real-pub-ingress/security-leak-scan.json
 
+      # A failed/missing privacy scan must never publish raw browser/server logs.
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && steps.b02_privacy_scan.outcome == 'success' }}
         with:
           name: cloud-b02-real-pub-source-http
           path: |
