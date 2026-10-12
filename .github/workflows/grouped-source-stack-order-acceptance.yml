@@ -70,3 +70,8 @@ jobs:
         env:
           CHAPTERA_LOGO_GROUP_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test logo_group_source_probe -- --ignored --exact exact_public_newsletter_logo_0x31_baseline --nocapture
+
+      - name: Audit exact Newsletter PAGE381 source-only top-band candidates
+        env:
+          CHAPTERA_NEWSLETTER_BAND_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test newsletter_banner_source_probe -- --ignored --exact exact_newsletter_top_band_source_attribution --nocapture
