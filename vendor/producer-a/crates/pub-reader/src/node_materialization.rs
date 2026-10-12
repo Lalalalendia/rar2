@@ -99,13 +99,30 @@ pub(super) fn materialize_mature_nodes(
         };
         let image_slot = exact_image_slot(shape, seq_num, diagnostics);
         let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let page_owned_logo_group =
+            is_page_owned_logo_group(parent_seq, references, page_seq_to_id);
         let exact_grouped_primitive_shape_type = if raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_none()
         {
             if has_default_ellipse_geometry(shape) {
                 Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
-            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape) {
+            } else if super::paint_projection::has_bounded_grouped_solid_rectangle(shape)
+                || (page_owned_logo_group
+                    && dgg_defaults_unambiguous
+                    && resolve_bounded_effective_officeart_paint(
+                        shape,
+                        dgg_defaults,
+                        color_scheme.map(|scheme| &scheme.scheme),
+                        admits_normative_2d_paint_defaults(shape),
+                    )
+                    .as_ref()
+                    .is_some_and(|effective| {
+                        super::paint_projection::has_bounded_logo_effective_solid_rectangle(
+                            shape, effective,
+                        )
+                    }))
+            {
                 Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             } else {
                 None
@@ -115,7 +132,7 @@ pub(super) fn materialize_mature_nodes(
         };
         let grouped_projection = if direct_page.is_none()
             && (references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-                || is_page_owned_logo_group(parent_seq, references, page_seq_to_id))
+                || page_owned_logo_group)
             && (exact_story_identity.is_some()
                 || exact_grouped_image_identity
                 || exact_grouped_primitive_shape_type.is_some())
