@@ -71,7 +71,7 @@ jobs:
           CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,18"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
 
-      - name: Audit Newsletter PAGE381 OfficeArt fill and line owner candidates
+      - name: Verify PAGE381 physical magenta line 405 color and horizontal geometry
         env:
           CHAPTERA_NEWSLETTER_BAND_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test newsletter_banner_source_probe -- --ignored --exact exact_newsletter_top_band_source_attribution --nocapture
