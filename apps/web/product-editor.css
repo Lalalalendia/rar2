@@ -31,3 +31,16 @@ main{min-height:0;display:grid;grid-template-columns:220px 1fr}
 .history-actions button:focus-visible{outline:2px solid #3669dd;outline-offset:2px}
 .history-actions button:disabled{cursor:wait;opacity:.55}
 .history-note{font-size:11px;line-height:1.4;color:#667081}
+
+.story-text-panel{display:flex;flex-direction:column;gap:7px;border-top:1px solid #d9dde5;margin-top:12px;padding-top:12px}
+.story-text-panel p,.story-limitation{margin:0;color:#667081;font-size:11px;line-height:1.45}
+.story-text-panel label{font-size:11px;font-weight:600;color:#353b48}
+.story-text-panel select,.story-text-panel textarea{max-width:100%;width:100%;font:inherit;font-size:12px;border:1px solid #c0c7d3;border-radius:5px;padding:6px;background:#fff;color:#17191d}
+.story-text-panel textarea{resize:vertical;min-height:92px;line-height:1.5}
+.story-text-panel button{font:inherit;font-size:12px;padding:7px 10px;background:#fff;color:#202735;border:1px solid #c0c7d3;border-radius:5px;cursor:pointer}
+.story-text-panel button:disabled{opacity:.55;cursor:default}
+.story-text-panel :is(select,textarea,button):focus-visible{outline:2px solid #3669dd;outline-offset:2px}
+#story-status{font-size:11px;overflow-wrap:anywhere}
+#story-status.error{color:#a61b1b}
+#story-status.ok{color:#176b3a}
+@media(max-width:760px){.story-text-panel{max-width:100%}}
