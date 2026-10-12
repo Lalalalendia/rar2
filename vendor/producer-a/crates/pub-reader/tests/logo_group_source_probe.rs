@@ -94,6 +94,39 @@ fn exact_public_newsletter_logo_0x31_baseline() {
         }
     }
 
+    // Raw source FOPT census for the still-omitted LOGO rectangles. This is
+    // measurement only: property values do not authorize paint projection.
+    // Include parent carriers and the ellipse as physical context controls.
+    for seq in [385_u32, 387, 406, 408, 410, 411] {
+        let shape = shape_for(seq);
+        let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
+        let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags);
+        println!(
+            "LOGO_RECT_SOURCE seq={seq} shape_type={shape_type:?} fsp_flags={fsp_flags:?} fopt_records={} child_anchor={}",
+            shape.fopts.len(),
+            shape.child_anchor.is_some()
+        );
+        for record in &shape.fopts {
+            for property in &record.properties {
+                let id = property.property_id();
+                if !matches!(
+                    id,
+                    0x0180 | 0x0181 | 0x0182 | 0x01BF | 0x01C0 | 0x01C1
+                        | 0x01CB | 0x01CE | 0x01FF
+                ) {
+                    continue;
+                }
+                println!(
+                    "LOGO_RECT_FOPT seq={seq} record=0x{:04x} property=0x{id:04x} op=0x{:08x} bid={} complex={}",
+                    record.rec_type,
+                    property.op,
+                    property.f_bid(),
+                    property.f_complex(),
+                );
+            }
+        }
+    }
+
     let build = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
         .expect("real mature-0x2c Reader SourceGraph");
     let page_id = derive_pub_page_id(&source_hash, 381).unwrap();
