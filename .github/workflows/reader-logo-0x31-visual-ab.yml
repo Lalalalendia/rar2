@@ -31,8 +31,8 @@ jobs:
     env:
       CARGO_TARGET_DIR: target/logo-visual-rust
       REPOSITORY_COMMIT_SHA: ${{ matrix.source_ref }}
-      READER_REAL_MANIFEST: ${{ runner.temp }}/logo-source-manifest.json
-      READER_REAL_OUTPUT: ${{ runner.temp }}/logo-reader-raster
+      READER_REAL_MANIFEST: ${{ github.workspace }}/target/logo-source-manifest.json
+      READER_REAL_OUTPUT: ${{ github.workspace }}/target/logo-reader-raster
       READER_REFERENCE_RASTER_DPI: "144"
       READER_WORKER_BINARY: ${{ github.workspace }}/target/logo-visual-rust/debug/chaptera
       READER_WORKER_TIMEOUT_SECONDS: "120"
@@ -72,7 +72,8 @@ jobs:
               "require_shared_text": True,
               "source_path": str(temp / "SampleNewsletter.pub"),
           }]}
-          (temp / "logo-source-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+          Path(os.environ["READER_REAL_MANIFEST"]).parent.mkdir(parents=True, exist_ok=True)
+          Path(os.environ["READER_REAL_MANIFEST"]).write_text(json.dumps(manifest), encoding="utf-8")
           PY
 
       - name: Build exact Reader worker
@@ -92,8 +93,8 @@ jobs:
         with:
           name: reader-logo-visual-${{ matrix.arm }}
           path: |
-            ${{ runner.temp }}/logo-reader-raster/receipt.json
-            ${{ runner.temp }}/logo-reader-raster/SampleNewsletter-page-*.png
+            target/logo-reader-raster/receipt.json
+            target/logo-reader-raster/SampleNewsletter-page-*.png
           if-no-files-found: error
           retention-days: 7
 
