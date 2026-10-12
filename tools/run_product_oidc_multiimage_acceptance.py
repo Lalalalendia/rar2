@@ -277,6 +277,39 @@ def main() -> int:
                         or owner_report.get("anonymous_scene_status") != 401
                         or owner_report.get("fidelity_state") != "partial"):
                     raise RuntimeError("Product multi-image real HTTP/Chromium receipt not admitted")
+                # Compare the very same authenticated Product Scene against
+                # the frozen Publisher PDF, with an image-off negative control.
+                # Raw Scene and Chromium PNG files live only in work/tmp.
+                visual_dir = work / ("product-publisher-ab-" + CASE_ID)
+                visual_env = browser_env.copy()
+                visual_env.update({
+                    "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
+                    "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
+                    "REPOSITORY_COMMIT_SHA": args.head_sha,
+                })
+                run_stage(
+                    "product-publisher-ab-browser",
+                    ["node", str(ROOT / "apps" / "cloud-reader" /
+                                 "product-safe-preview-multiimage-browser.test.mjs")],
+                    visual_env,
+                )
+                visual_report_path = work / "publisher-visual.json"
+                run_stage(
+                    "product-publisher-ab-score",
+                    [sys.executable, str(ROOT / "tools" /
+                         "reader_safe_preview_visual_multiimage.py"),
+                     CASE_ID,
+                     str(ROOT / "tools" / "corpus" / "receipts" /
+                         "publisher-visual-golden-batch-01-fingerprint-v1.json"),
+                     str(visual_dir), str(visual_report_path), args.head_sha],
+                    visual_env,
+                )
+                visual_report = json.loads(visual_report_path.read_text(encoding="utf-8"))
+                if (visual_report.get("fixture") != CASE_ID
+                        or visual_report.get("repository_head_sha") != args.head_sha
+                        or visual_report.get("host_owned_image_count") != EXPECTED_IMAGES
+                        or visual_report.get("same_source_scene_head_and_browser") is not True):
+                    raise RuntimeError("Product 001/023 Publisher visual A/B evidence invalid")
                 if worker.poll() is not None or server.poll() is not None:
                     raise RuntimeError("isolated Product server or worker died during image acceptance")
 
@@ -292,6 +325,15 @@ def main() -> int:
                     "anonymous_scene_status": 401,
                     "partial_fidelity_disclosed": True,
                     "publisher_exact_oracle_claim": False,
+                    "publisher_64x64_visual_ab_measured": True,
+                    "publisher_64x64_changed_without_images":
+                        visual_report["chromium_64x64_changed_without_images"],
+                    "publisher_64x64_changed_with_images":
+                        visual_report["chromium_64x64_changed_with_images"],
+                    "publisher_64x64_image_effect":
+                        visual_report["chromium_64x64_net_improvement"],
+                    "publisher_64x64_image_improvement_observed":
+                        visual_report["visual_improvement_observed"],
                     "external_s3_claim": False,
                     "deployed_production_claim": False,
                     "source_or_pixel_artifact_uploaded": False,
