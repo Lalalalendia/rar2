@@ -6,6 +6,11 @@ on:
       - ".github/workflows/reader-logo-effective-fill-visual.yml"
       - "tools/reader_logo_effective_fill_visual_v1.py"
       - "tools/test_reader_logo_0x31_visual_ab_v1.py"
+  push:
+    branches: [measure-logo-fill-2644]
+    paths:
+      - ".github/workflows/reader-logo-effective-fill-visual.yml"
+      - "tools/reader_logo_effective_fill_visual_v1.py"
   workflow_dispatch:
 
 permissions:
