@@ -1,0 +1,133 @@
+name: CLOUD-PRODUCT-OIDC-022 real authenticated JPEG Publisher acceptance
+
+on:
+  pull_request:
+    paths:
+      - "tools/run_product_oidc_022_acceptance.py"
+      - "tools/run_product_oidc_022_cross_browser.mjs"
+      - "tools/run_product_oidc_022_restart_browser.mjs"
+      - "tools/run_secure_origin_product_022_browser.mjs"
+      - ".github/workflows/cloud-product-oidc-022.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-oidc-022-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  real-product-oidc-022:
+    name: SourceIngress / OIDC / isolated Product / Publisher 022
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      EXACT_022_SHA: 7079ad60fd8109796b84286d294cb490051a1517d8e52ac61e7c416dbd04428c
+      EXACT_022_BYTES: "5012480"
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate source-safe runner and real syscall sandbox
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_product_oidc_022_acceptance.py tools/run_secure_origin_real_pub.py tools/chaptera_local_oidc.py tools/migration_pdf_worker_isolation.py
+          node --check tools/run_secure_origin_product_022_browser.mjs
+          node --check tools/run_product_oidc_022_cross_browser.mjs
+          node --check tools/run_product_oidc_022_restart_browser.mjs
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "real seccomp required"
+          PY
+          docker version
+
+      - name: Retrieve immutable original Publisher PUB022
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: ${{ runner.temp }}/product-oidc-022/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Pin exact original Publisher source SHA and bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/product-oidc-022/pinned1050/materialized/native/$EXACT_022_SHA.pub"
+          test -f "$fixture"
+          printf '%s  %s\n' "$EXACT_022_SHA" "$fixture" | sha256sum --check
+          test "$(stat -c %s "$fixture")" = "$EXACT_022_BYTES"
+
+      - name: Build canonical Chaptera HTTP service and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Install real Chromium and pinned Publisher comparator
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+
+      - name: Physical OIDC upload, Product JPEG, second principal, restart and Publisher A/B
+        env:
+          CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python tools/run_product_oidc_022_acceptance.py \
+            --binary target/debug/chaptera \
+            --fixture "$RUNNER_TEMP/product-oidc-022/pinned1050/materialized/native/$EXACT_022_SHA.pub" \
+            --fixture-sha256 "$EXACT_022_SHA" \
+            --head-sha "$CHAPTERA_HEAD_SHA" \
+            --caddy-image caddy:2.10.2-alpine
+
+      - name: Fail closed on source/cookie/pixel identity in CI logs
+        id: product_022_privacy
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/product-oidc-022
+          args=()
+          for file in target/product-oidc-022/*.log target/product-oidc-022/*.json; do
+            if [ -f "$file" ]; then args+=("$file"); fi
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::no Product 022 source-neutral receipt or runner log"
+            exit 1
+          fi
+          python tools/security_leak_scan_v1.py \
+            "${args[@]}" \
+            --forbid-literal "Pinned022.pub" \
+            --forbid-literal "chaptera-local-only-secret" \
+            --forbid-literal "$RUNNER_TEMP/product-oidc-022/pinned1050" \
+            --json-out target/product-oidc-022/privacy-scan.json
+
+      # Full request logs can contain private document IDs even when the
+      # fail-closed leak scanner reports no raw PUB or secret material.
+      # Scan logs on the runner but never publish them as artifacts.
+      - name: Upload only source-neutral measured receipts
+        if: ${{ always() && steps.product_022_privacy.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-oidc-022-publisher-source-neutral
+          path: |
+            target/product-oidc-022/summary.json
+            target/product-oidc-022/owner.json
+            target/product-oidc-022/cross.json
+            target/product-oidc-022/restart.json
+            target/product-oidc-022/privacy-scan.json
+          if-no-files-found: warn
+          retention-days: 14
