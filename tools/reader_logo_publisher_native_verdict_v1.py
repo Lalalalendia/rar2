@@ -15,6 +15,7 @@ import re
 import stat
 import tempfile
 import zipfile
+import uuid
 from pathlib import Path, PurePosixPath
 
 import fitz
@@ -45,6 +46,56 @@ REFERENCE_PAGES = {
 }
 MAX_PDF_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+
+# Independent cdm-source-id-v1 derivation; mirror the exact Rust pub-model
+# namespace/framing rather than guessing PAGE381's fourth customer-page index.
+SOURCE_DERIVED_NAMESPACE_V1 = uuid.UUID("c02ce21c-d044-56b2-95d9-25a9289c1d1f")
+PAGE381_SOURCE_OBJECT_KEY = "contents/0x2c/seq/381"
+
+
+def derive_pub_source_id(source_sha256: str, source_object_key: str, semantic_role: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        raise ValueError("source-derived identity requires a lowercase 64-hex source SHA")
+    components = ("pub-rs", source_object_key, semantic_role)
+    if any(not item for item in components):
+        raise ValueError("source-derived identity requires nonempty canonical components")
+    framed = bytearray(b"\\x01")
+    framed.extend(bytes.fromhex(source_sha256))
+    for item in components:
+        encoded = item.encode("utf-8")
+        framed.extend(len(encoded).to_bytes(4, "big"))
+        framed.extend(encoded)
+    digest = hashlib.sha1(SOURCE_DERIVED_NAMESPACE_V1.bytes + framed).digest()
+    return str(uuid.UUID(bytes=digest[:16], version=5))
+
+
+def verify_page381_customer_page4_join(base_capture: dict, candidate_capture: dict) -> str:
+    """Fail closed unless both captured browser p4 pages are the source-derived PAGE381."""
+    expected = derive_pub_source_id(SOURCE_SHA256, PAGE381_SOURCE_OBJECT_KEY, "cdm.page")
+    for label, capture in (("baseline", base_capture), ("candidate", candidate_capture)):
+        geometry = capture.get("fixture", {}).get("page_geometry")
+        if not isinstance(geometry, list) or len(geometry) != PAGE_COUNT:
+            raise ValueError(f"{label}: missing four exact browser page identities")
+        matches = []
+        for index, page in enumerate(geometry):
+            if not isinstance(page, dict) or page.get("order") != index:
+                raise ValueError(f"{label}: customer page order mismatch")
+            page_id = page.get("page_id")
+            try:
+                canonical = isinstance(page_id, str) and str(uuid.UUID(page_id)) == page_id
+            except ValueError:
+                canonical = False
+            if not canonical:
+                raise ValueError(f"{label}: missing canonical source-derived page ID")
+            expected_digest = hashlib.sha256(page_id.encode("utf-8")).hexdigest()
+            if page.get("page_identity_sha256") != expected_digest:
+                raise ValueError(f"{label}: PAGE identity digest does not match browser page ID")
+            if page_id == expected:
+                matches.append(index)
+        if matches != [3]:
+            raise ValueError(f"{label}: physical PAGE381 is not uniquely customer page 4")
+    return expected
 
 
 def require_exact_publisher_bundle(bundle: Path) -> None:
@@ -145,6 +196,7 @@ def evaluate(
     a = checked_capture(candidate_receipt, candidate_commit)
     if b["page_ids"] != a["page_ids"]:
         raise ValueError("source customer PAGE identity or order drift")
+    page381_id = verify_page381_customer_page4_join(b, a)
     if a["fixture"]["nodes"] != b["fixture"]["nodes"] + expected_added_nodes:
         raise ValueError("expected exact node-count change not observed")
 
@@ -200,6 +252,7 @@ def evaluate(
             "schema": SCHEMA,
             "fixture": "SampleNewsletter",
             "source_pub_sha256": SOURCE_SHA256,
+            "physical_source_page381_id": page381_id,
             "baseline_commit": baseline_commit,
             "candidate_commit": candidate_commit,
             "browser_raster_dpi": DPI,
@@ -227,6 +280,7 @@ def evaluate(
                 "pub_source_identity_checked_from_both_reader_receipts": True,
                 "per_pair_pub_and_pdf_identity_inside_zip_verified": False,
                 "all_four_customer_page_source_ids_unchanged": True,
+                "physical_page381_to_customer_page4_identity_verified": True,
                 "libreoffice_used_as_reference": False,
                 "publisher_pixels_authoritative_for_visual_comparison_only": True,
                 "publisher_pixels_not_pub_semantic_authority": True,
