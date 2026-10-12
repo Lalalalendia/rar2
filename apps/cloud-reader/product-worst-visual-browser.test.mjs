@@ -16,7 +16,20 @@ const cases = {
   "043": { source: "e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b", pages: 2 },
 };
 const id = process.env.CHAPTERA_PRODUCT_MULTI_ID;
-const expected = cases[id];
+const planPath = process.env.CHAPTERA_PRODUCT_CASE_PLAN;
+const pinnedPlan = planPath ? JSON.parse(await readFile(planPath, "utf8")) : null;
+if (pinnedPlan && (pinnedPlan.id !== id ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.source_sha256 ?? "") ||
+    !Number.isSafeInteger(pinnedPlan.pages) ||
+    !(pinnedPlan.pages > 0 && pinnedPlan.pages <= 100))) {
+  throw new Error("Product visual case plan must be an exact pinned eligible fixture");
+}
+const expected = pinnedPlan
+  ? {source: pinnedPlan.source_sha256, pages: pinnedPlan.pages} : cases[id];
+if (pinnedPlan && cases[id] &&
+    (expected.source !== cases[id].source || expected.pages !== cases[id].pages)) {
+  throw new Error("Product visual case plan differs from established pilot");
+}
 const scenePath = process.env.CHAPTERA_PREVIEW_PROBE_SCENE_OUT;
 const outputPath = process.env.CHAPTERA_PREVIEW_BROWSER_OUTPUT;
 const head = process.env.REPOSITORY_COMMIT_SHA;
@@ -28,12 +41,17 @@ const scene = JSON.parse(await readFile(resolve(scenePath), "utf8"));
 assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
 assert.equal(scene.source_hash, expected.source);
 assert.equal(scene.pages?.length, expected.pages, "pinned Publisher PAGE count drift");
-assert.equal(scene.fidelity?.state, "partial", "unproved color must remain Partial");
+assert.ok(["supported", "partial"].includes(scene.fidelity?.state),
+  "real Product fidelity disposition required");
 const images = new Set(["image/png", "image/jpeg"]);
 const accepted = (scene.resources ?? []).filter(r =>
   images.has(r.mime) && r.availability === "inline_data_url" &&
   typeof r.inline_data_url === "string");
 assert.ok(accepted.length <= 96, "bounded host-owned image resources required");
+if (accepted.length) {
+  assert.equal(scene.fidelity.state, "partial",
+    "unproved color on admitted host images must remain Partial");
+}
 assert.equal(new Set(accepted.map(r => r.resource_id)).size, accepted.length,
   "duplicate Product resource IDs");
 
@@ -169,6 +187,7 @@ try {
     external_url_request_count: 0,
     page_error_count: 0,
     host_resource_count: accepted.length,
+    fidelity_state: scene.fidelity.state,
     before, after,
   };
   await writeFile(join(resolve(outputPath), "browser-receipt.json"),
