@@ -926,7 +926,6 @@ pub(super) fn effective_table_bounds_with_history(
     Some(bounds)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
