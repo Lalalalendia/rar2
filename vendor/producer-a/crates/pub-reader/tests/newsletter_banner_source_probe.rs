@@ -78,6 +78,8 @@ fn exact_newsletter_top_band_source_attribution() {
     let mut direct_magenta = 0usize;
     let mut effective_magenta = 0usize;
     let mut page_magenta = 0usize;
+    let mut effective_magenta_line = 0usize;
+    let mut page_magenta_line = 0usize;
     let mut projected_page_nodes = 0usize;
 
     // Owner is derived from the Contents parent chain, not guessed from pixels.
@@ -122,9 +124,21 @@ fn exact_newsletter_top_band_source_attribution() {
             .and_then(|paint| paint.fill.color_rgb.as_ref())
             .map(|c| c.value);
         let effective_is_magenta = resolved_rgb == Some(MAGENTA_RGB);
+        let line_rgb = effective.as_ref()
+            .and_then(|paint| paint.line.color_rgb.as_ref())
+            .map(|c| c.value);
+        let line_visible = effective.as_ref()
+            .and_then(|paint| paint.line.visible.as_ref())
+            .map(|c| (c.value, c.authority));
+        let line_width = effective.as_ref()
+            .and_then(|paint| paint.line.width_emu.as_ref())
+            .map(|c| (c.value, c.authority));
+        let line_is_magenta = line_rgb == Some(MAGENTA_RGB);
         direct_magenta += usize::from(local_magenta);
         effective_magenta += usize::from(effective_is_magenta);
         page_magenta += usize::from(owner_page381 && (local_magenta || effective_is_magenta));
+        effective_magenta_line += usize::from(line_is_magenta);
+        page_magenta_line += usize::from(owner_page381 && line_is_magenta);
         let node_id = derive_pub_node_id(&source_hash, *seq).unwrap();
         let projected = build.graph.nodes.get(&node_id)
             .filter(|n| n.header.parent_id == page_id.into_canonical());
@@ -132,7 +146,7 @@ fn exact_newsletter_top_band_source_attribution() {
 
         // Print page-owned shapes and any source magenta candidate anywhere.
         // Do not leak PUB bytes, Story text, or external PDF data.
-        if owner_page381 || local_magenta || effective_is_magenta {
+        if owner_page381 || local_magenta || effective_is_magenta || line_is_magenta {
             let ca = shape.client_anchor.as_ref().map(|anchor| anchor.fields.iter()
                 .filter(|f| matches!(f.id, 0x2001 | 0x2002 | 0x2003 | 0x2004))
                 .map(|f| format!("{:04x}={:08x}", f.id, f.value)).collect::<Vec<_>>());
@@ -140,8 +154,8 @@ fn exact_newsletter_top_band_source_attribution() {
                 .map(|a| [a.x_left, a.y_top, a.x_right, a.y_bottom]);
             let bounds = projected.map(|n| format!("{:?}", n.header.bounds));
             println!(
-                "NEWSLETTER_BAND_CANDIDATE seq={} escher_rank={ordinal} raw_type={raw_type:?} owner_chain={chain:?} on_page381={} shape_type={shape_type:?} fsp_flags={fsp_flags:?} local_fopt={colors:?} local_magenta={} effective_rgb={resolved_rgb:?} effective_magenta={} child_anchor={child:?} client_anchor={ca:?} projected_bounds={bounds:?}",
-                seq, owner_page381, local_magenta, effective_is_magenta,
+                "NEWSLETTER_BAND_CANDIDATE seq={} escher_rank={ordinal} raw_type={raw_type:?} owner_chain={chain:?} on_page381={} shape_type={shape_type:?} fsp_flags={fsp_flags:?} local_fopt={colors:?} local_magenta={} effective_fill_rgb={resolved_rgb:?} effective_magenta={} effective_line_rgb={line_rgb:?} line_magenta={} line_visible={line_visible:?} line_width_emu={line_width:?} child_anchor={child:?} client_anchor={ca:?} projected_bounds={bounds:?}",
+                seq, owner_page381, local_magenta, effective_is_magenta, line_is_magenta,
             );
         }
     }
@@ -150,7 +164,7 @@ fn exact_newsletter_top_band_source_attribution() {
     assert!(page_owned > 0, "no source shape ownership for PAGE381");
     assert!(projected_page_nodes > 0, "no Reader geometry for PAGE381");
     println!(
-        "NEWSLETTER_BAND_SOURCE_DISPOSITION page381={PAGE381} scanned={scanned} owned={page_owned} reader_nodes={projected_page_nodes} magenta_local_all={direct_magenta} magenta_effective_all={effective_magenta} magenta_owned_page381={page_magenta} native_publisher_stripe_proven=false"
+        "NEWSLETTER_BAND_SOURCE_DISPOSITION page381={PAGE381} scanned={scanned} owned={page_owned} reader_nodes={projected_page_nodes} magenta_fill_local_all={direct_magenta} magenta_fill_effective_all={effective_magenta} magenta_fill_owned_page381={page_magenta} magenta_line_effective_all={effective_magenta_line} magenta_line_owned_page381={page_magenta_line} native_publisher_stripe_proven=false"
     );
     // No positive assertion about the stripe: LO is a proxy and may have
     // painted effects that the native Publisher does not.
