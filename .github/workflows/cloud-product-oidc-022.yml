@@ -115,7 +115,10 @@ jobs:
             --forbid-literal "$RUNNER_TEMP/product-oidc-022/pinned1050" \
             --json-out target/product-oidc-022/privacy-scan.json
 
-      - name: Upload only source-neutral measured receipts and scanned logs
+      # Full request logs can contain private document IDs even when the
+      # fail-closed leak scanner reports no raw PUB or secret material.
+      # Scan logs on the runner but never publish them as artifacts.
+      - name: Upload only source-neutral measured receipts
         if: ${{ always() && steps.product_022_privacy.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
@@ -126,6 +129,5 @@ jobs:
             target/product-oidc-022/cross.json
             target/product-oidc-022/restart.json
             target/product-oidc-022/privacy-scan.json
-            target/product-oidc-022/*.log
           if-no-files-found: warn
           retention-days: 14
