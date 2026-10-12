@@ -46,6 +46,9 @@ try {
   });
 
   await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
+  null, { timeout: 30000 });
   await page.locator("#pub-file").waitFor({ state: "visible", timeout: 30000 });
   await page.locator("#pub-file").setInputFiles({
     name: "Sample3.pub", mimeType: "application/x-mspublisher", buffer: raw,
@@ -196,10 +199,15 @@ try {
   }
   if (errors.length) throw new Error("real Story browser reported JavaScript errors");
 
+  // Use the actual Chromium network stack: its test-only DNS mapping for
+  // edge.test is not inherited by Node's APIRequestContext transport.
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true });
-  const denied = await anonymous.request.get(origin + "/v1/documents/" +
-    encodeURIComponent(documentId) + "/current");
-  if (denied.status() !== 401 && denied.status() !== 403) {
+  const anonPage = await anonymous.newPage();
+  const denied = await anonPage.goto(origin + "/v1/documents/" +
+    encodeURIComponent(documentId) + "/current", {
+      waitUntil: "domcontentloaded", timeout: 30000,
+    });
+  if (!denied || (denied.status() !== 401 && denied.status() !== 403)) {
     throw new Error("anonymous browser unexpectedly read durable Story");
   }
   await anonymous.close();
