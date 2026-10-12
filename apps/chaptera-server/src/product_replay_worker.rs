@@ -14,8 +14,7 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId,
-    open_mature_0x2c_editor,
+    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -891,13 +890,12 @@ pub fn run_product_replay_worker(
     // CI receipts or command-line telemetry. Read only before seccomp deny.
     let story_intent = if let Some(path) = story_intent_path {
         let bytes = read_bounded(path, MAX_STORY_INTENT_BYTES)?;
-        let intent: IsolatedStoryRangeIntentV1 =
-            serde_json::from_slice(&bytes).map_err(|_| {
-                ProductReplayWorkerError::new(
-                    "product_story_range_invalid",
-                    "isolated StoryRange intent is not a typed private JSON envelope",
-                )
-            })?;
+        let intent: IsolatedStoryRangeIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_story_range_invalid",
+                "isolated StoryRange intent is not a typed private JSON envelope",
+            )
+        })?;
         if intent.story_id.is_empty()
             || intent.story_id.len() > 128
             || intent.end_scalar < intent.start_scalar
@@ -1436,7 +1434,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_project_sha256,
         )?;
-        if receipt.baseline_project.is_some() || receipt.move_node.is_some() || receipt.story_range.is_some() {
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "Reader scene worker returned baseline or geometry mutation",
@@ -1515,7 +1516,10 @@ impl IsolatedProductReplayProducer {
             source_bytes.len() as u64,
             expected_base_sha256,
         )?;
-        if receipt.baseline_project.is_some() || receipt.reader_scene.is_some() || receipt.story_range.is_some() {
+        if receipt.baseline_project.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.story_range.is_some()
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "isolated MoveNode response unexpectedly included a baseline or Reader scene",
@@ -1651,8 +1655,8 @@ impl IsolatedProductReplayProducer {
                 "isolated StoryRange worker returned no mutation",
             )
         })?;
-        let story_id: StoryId =
-            serde_json::from_value(Value::String(intent.story_id.clone())).map_err(|_| {
+        let story_id: StoryId = serde_json::from_value(Value::String(intent.story_id.clone()))
+            .map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_story_range_invalid",
                     "requested StoryId is not canonical",
