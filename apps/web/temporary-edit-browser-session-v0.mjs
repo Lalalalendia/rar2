@@ -155,7 +155,7 @@ export class TemporaryEditBrowserSessionV0 {
     };
     if (token) headers["x-chaptera-reader-session"] = token;
     if (contentType) headers["content-type"] = contentType;
-    const response = await this.fetchImpl(path, {
+    const response = await this.fetchImpl.call(globalThis, path, {
       method, headers, body, signal,
       credentials: "omit", cache: "no-store", redirect: "error",
       referrerPolicy: "no-referrer",
