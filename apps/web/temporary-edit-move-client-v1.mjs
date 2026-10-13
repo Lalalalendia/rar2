@@ -106,7 +106,7 @@ export class TemporaryGuestMoveClientV1 {
   }
 
   async #request(action, method = "GET", body = null) {
-    const response = await this.#fetch(this.#path(action), {
+    const response = await this.#fetch.call(globalThis, this.#path(action), {
       method,
       headers: {
         "accept": "application/json",
@@ -258,8 +258,8 @@ export class TemporaryGuestMoveClientV1 {
       canonical_authoring_revision_id: head.canonical_authoring_revision_id,
       report_only: String(reportOnly),
     });
-    const response = await this.#fetch(
-      this.#path("exports/" + target) + "?" + query.toString(),
+    const response = await this.#fetch.call(
+      globalThis, this.#path("exports/" + target) + "?" + query.toString(),
       {
         method: "GET",
         headers: {
