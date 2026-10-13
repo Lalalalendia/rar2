@@ -545,6 +545,86 @@ def main() -> int:
         if expired_revisions or expired_bindings:
             raise AssertionError("TTL deletion retained private canonical revision bytes")
 
+        # A separate real-PUB source proves user-triggered cleanup while the
+        # session is still live; TTL expiration above remains independently tested.
+        delete_issue_status, delete_raw = call(
+            "POST", "/v1/editor/temporary-sessions",
+            body_json={"expected_byte_len": fixture.stat().st_size},
+        )
+        checked(delete_issue_status, 200, "early-delete capability issuance")
+        delete_issue = json.loads(delete_raw)
+        delete_id = delete_issue["session_id"]
+        delete_token = delete_issue["access_token"]
+        if not delete_id.startswith("tempedit:") or len(delete_token) != 64:
+            raise AssertionError("early-delete issued invalid guest identity")
+        delete_path = f"/v1/editor/temporary-sessions/{delete_id}"
+        delete_private = [f"x-chaptera-reader-session: {delete_token}"]
+        checked(call("DELETE", delete_path)[0], 401, "delete requires own private capability")
+        checked(call("DELETE", delete_path, headers=[
+            "x-chaptera-reader-session: " + secrets.token_hex(32)
+        ])[0], 404, "foreign bearer cannot delete source")
+        checked(call("PUT", delete_issue["upload_path"], upload=fixture,
+                     headers=delete_private)[0], 200, "early-delete source upload")
+        new_open_status, new_open_raw = call(
+            "POST", delete_issue["open_path"], headers=delete_private,
+        )
+        checked(new_open_status, 200, "early-delete real PUB open")
+        new_open = json.loads(new_open_raw)
+        if new_open.get("classification") not in {"supported", "partial"}:
+            raise AssertionError("early-delete source unexpectedly not Reader eligible")
+        if new_open.get("source_sha256") != expected_hash:
+            raise AssertionError("early-delete original source identity mismatch")
+        new_source_files = [
+            candidate for candidate in (work / "blob-store").rglob("*")
+            if candidate.is_file() and candidate.stat().st_size == fixture.stat().st_size
+            and live.sha256_file(candidate) == expected_hash
+        ]
+        if len(new_source_files) != 1:
+            raise AssertionError("early-delete original source not physically present")
+        new_physical_source = new_source_files[0]
+        with sqlite3.connect(db) as conn:
+            active_before_delete = conn.execute(
+                "SELECT COUNT(*) FROM reader_guest_sessions "
+                "WHERE session_id=? AND state='opened' AND expires_at_ms>?",
+                (delete_id.encode(), int(time.time() * 1000)),
+            ).fetchone()[0]
+        if active_before_delete != 1:
+            raise AssertionError("early-delete target was not a live opened session")
+        delete_headers = work / "early-delete-response-headers.txt"
+        delete_status, _ = call(
+            "DELETE", delete_path, headers=delete_private,
+            dump_headers=delete_headers,
+        )
+        checked(delete_status, 204, "explicit physical early-delete acknowledgement")
+        if live.parse_header_file(delete_headers).get("cache-control") != "no-store":
+            raise AssertionError("early-delete response was cacheable")
+        for action in (
+            f"/v1/editor/temporary-sessions/{delete_id}/current",
+            f"/v1/editor/temporary-sessions/{delete_id}/scene",
+            delete_issue["scene_path"],
+        ):
+            checked(call("GET", action, headers=delete_private)[0],
+                    404, "deleted capability retained a private Reader endpoint")
+        checked(call("DELETE", delete_path, headers=delete_private)[0],
+                404, "deleted private capability resurrected on duplicate request")
+        if new_physical_source.exists():
+            raise AssertionError("user deletion retained quarantined original PUB bytes")
+        with sqlite3.connect(db) as conn:
+            early_remaining = conn.execute(
+                "SELECT COUNT(*) FROM reader_guest_sessions WHERE session_id=?",
+                (delete_id.encode(),),
+            ).fetchone()[0]
+            early_edges = conn.execute(
+                "SELECT COUNT(*) FROM revision_edges WHERE document_id=?",
+                (delete_id.encode(),),
+            ).fetchone()[0]
+            early_bindings = conn.execute(
+                "SELECT COUNT(*) FROM revision_identity_bindings WHERE document_id=?",
+                (delete_id.encode(),),
+            ).fetchone()[0]
+        if early_remaining or early_edges or early_bindings:
+            raise AssertionError("user delete did not purge private session/revision rows")
+
         receipt = {
             "schema": "chaptera.tempedit-canonical-current-https.v1",
             "source_sha256": expected_hash, "source_byte_len": fixture.stat().st_size,
@@ -565,6 +645,10 @@ def main() -> int:
             "revised_reader_scene_proven": True, "revised_node_id": chosen_id,
             "editable_unavailable_targets": unavailable_formats,
             "edited_artifact_receipts": export_receipts,
+            "early_delete_proven": True, "early_delete_status": delete_status,
+            "early_delete_rows_after_purge": early_remaining,
+            "early_delete_physical_original_removed": True,
+            "early_delete_foreign_capability_rejected": True,
             "persistent_export_artifacts": False, "v0_go": False,
         }
         (out / "receipt.json").write_text(
