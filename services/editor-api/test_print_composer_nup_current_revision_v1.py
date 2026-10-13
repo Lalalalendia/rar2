@@ -91,5 +91,12 @@ class CurrentRevisionBindingTests(unittest.TestCase):
                 validate_current_fixed_pdf_receipt_v2(
                     receipt=degraded,source_bytes=SRC,project_bytes=PROJECT,fixed_pdf_bytes=blob)
 
+def load_tests(loader, standard_tests, pattern):
+    """Keep the guest current-PDF witness in the existing bounded CI owner."""
+    from test_guest_nup_boundaries_v1 import GuestNineUpBoundaries
+    standard_tests.addTests(loader.loadTestsFromTestCase(GuestNineUpBoundaries))
+    return standard_tests
+
+
 if __name__=="__main__":
     unittest.main()
