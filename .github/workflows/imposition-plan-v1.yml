@@ -5,11 +5,17 @@ on:
     paths:
       - "services/editor-api/imposition_plan_v1.py"
       - "services/editor-api/test_imposition_plan_v1.py"
+      - "services/editor-api/print_composer_nup_v1.py"
+      - "services/editor-api/test_print_composer_nup_v1.py"
       - ".github/workflows/imposition-plan-v1.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -19,6 +25,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run deterministic imposition planner tests
+      - name: Check canonical planner and exact A4 nine-copy geometry
         working-directory: services/editor-api
-        run: python -m unittest -v test_imposition_plan_v1
+        run: python -m unittest -v test_imposition_plan_v1 test_print_composer_nup_v1
