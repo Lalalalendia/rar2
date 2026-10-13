@@ -674,7 +674,6 @@ struct TemporaryEditorMoveNodeAccepted {
     scene_refresh: &'static str,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemporaryEditorStoryRangeRequest {
@@ -737,7 +736,11 @@ fn validate_temporary_story_range_request(
         || request.command.story_id.chars().any(char::is_control)
         || request.command.end_scalar < request.command.start_scalar
         || request.command.replacement_text.len() > 8192
-        || request.command.replacement_text.chars().any(char::is_control)
+        || request
+            .command
+            .replacement_text
+            .chars()
+            .any(char::is_control)
     {
         return Err(GuestReaderError::bad_request(
             "temporary_editor_story_intent_invalid",
@@ -3573,7 +3576,6 @@ mod tests {
         assert!(validate_temporary_export_query("odg", &malformed).is_err());
     }
 
-
     #[test]
     fn temporary_story_range_admits_only_bounded_private_canonical_intent() {
         let id = "tempedit:0123456789abcdef0123456789abcdef";
@@ -3617,9 +3619,13 @@ mod tests {
         request.base_revision_id = "sha256:bad".to_owned();
         assert!(validate_temporary_story_range_request(&request, id).is_err());
         request.base_revision_id = format!("sha256:{}", "b".repeat(64));
-        assert!(validate_temporary_story_range_request(
-            &request, "guest:0123456789abcdef0123456789abcdef"
-        ).is_err());
+        assert!(
+            validate_temporary_story_range_request(
+                &request,
+                "guest:0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
     }
 
     #[test]
