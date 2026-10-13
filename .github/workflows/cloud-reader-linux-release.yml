@@ -17,6 +17,18 @@ on:
       - "apps/web/interaction-v1.mjs"
       - "apps/web/observability-v1.mjs"
       - "apps/chaptera-server/**"
+      # The temporary guest editor is compiled into chaptera via include_bytes!. 
+      # Web-only edits therefore require a new immutable Linux binary packet.
+      - "apps/web/temporary-editor-preview.html"
+      - "apps/web/temporary-editor-preview.mjs"
+      - "apps/web/temporary-editor-preview.css"
+      - "apps/web/temporary-edit-browser-session-v0.mjs"
+      - "apps/web/temporary-edit-move-client-v1.mjs"
+      - "apps/web/interaction-v1.mjs"
+      - "apps/web/reader-scene-editor-interaction-v1.mjs"
+      - "apps/web/reader-scene-editor-adapter-v1.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.mjs"
+      - "apps/web/observability-v1.mjs"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
       - "deploy/systemd/chaptera-reader.service"
