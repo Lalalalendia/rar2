@@ -42,6 +42,23 @@ const page = await browser.newPage({
   viewport: {width: 1280, height: 900},
 });
 const requests = [], responses = [], errors = [], openReplyDiagnostics = [];
+const transportFailures = [];
+page.on("requestfailed", request => {
+  if (!request.url().startsWith(origin)) return;
+  const failed = request.failure()?.errorText ?? "";
+  // Metadata-only diagnostic: no URLs, session identifiers, headers, bodies.
+  const reason = failed.includes("ERR_CONTENT_LENGTH_MISMATCH") ? "length_mismatch"
+    : failed.includes("ERR_HTTP2_PROTOCOL_ERROR") ? "http2_transport"
+    : failed.includes("ERR_CONNECTION_RESET") ? "connection_reset"
+    : failed.includes("ERR_ABORTED") ? "aborted"
+    : failed.includes("ERR_FAILED") ? "transport_failed" : "other";
+  const pathname = new URL(request.url()).pathname;
+  transportFailures.push({
+    action: pathname.endsWith("/open") ? "open"
+      : pathname.endsWith("/scene") ? "scene" : "other",
+    method: request.method(), reason,
+  });
+});
 page.on("pageerror", error => errors.push(error.name || "pageerror"));
 page.on("request", request => {
   if (request.url().startsWith(origin)) {
@@ -66,7 +83,11 @@ page.on("response", response => {
               .includes(value.classification) ? value.classification : null;
           } else parse = typeof value;
         } catch { /* metadata only */ }
-        return {mime: (response.headers()["content-type"] || "").slice(0, 60),
+        const headers = response.headers();
+        return {mime: (headers["content-type"] || "").slice(0, 60),
+          encoding: (headers["content-encoding"] || "none").slice(0, 24),
+          length_header: /^\d{1,12}$/.test(headers["content-length"] || "")
+            ? Number(headers["content-length"]) : null,
           bytes: bytes.length, parse, keys, classification};
       }).catch(error => ({read_error: error.name || "unknown"})));
     }
@@ -182,7 +203,8 @@ try {
       String(await page.locator("#temporary-status").textContent()).slice(0, 160) +
       " status=" + JSON.stringify(responses.slice(-12)) +
       " open_reply_metadata=" + JSON.stringify(diagnostic.map(item =>
-        item.status === "fulfilled" ? item.value : {read_error: "rejected"})));
+        item.status === "fulfilled" ? item.value : {read_error: "rejected"})) +
+      " transport_failures=" + JSON.stringify(transportFailures.slice(-8)));
   }
   const saved = await page.evaluate(() => {
     const item = JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0") || "null");
