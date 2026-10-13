@@ -94,15 +94,26 @@ def main() -> int:
     proxy: subprocess.Popen[str] | None = None
     token: str | None = None
 
+    rate_retries = 0
+
     def call(method: str, path: str, *, headers: list[str] | None = None, **other):
-        return live.curl_request(
-            https_port=httpsport,
-            method=method,
-            path=path,
-            output=response,
-            headers=headers,
-            **other,
-        )
+        nonlocal rate_retries
+        for attempt in range(8):
+            status, raw = live.curl_request(
+                https_port=httpsport,
+                method=method,
+                path=path,
+                output=response,
+                headers=headers,
+                **other,
+            )
+            if status != 429 or attempt == 7:
+                return status, raw
+            # Keep adversarial cases inside the real 30/minute burst-six
+            # ReaderSessionOpen admission, rather than weakening live policy.
+            rate_retries += 1
+            time.sleep(2.2)
+        raise AssertionError("temporary private reader admission did not converge")
 
     try:
         live.run([str(args.chaptera.resolve()), "--config", str(config), "migrate", "up"], env=env)
@@ -377,6 +388,7 @@ def main() -> int:
             "exact_replay_ttl_unchanged": True,
             "foreign_mutation_capability_rejected": True,
             "failed_and_stale_ops_rejected": True,
+            "bounded_rate_retries": rate_retries,
             "private_revision_rows_after_ttl": expired_revisions,
             "private_canonical_bindings_after_ttl": expired_bindings,
             "edited_download_proven": False, "v0_go": False,

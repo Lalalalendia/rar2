@@ -785,8 +785,21 @@ async fn temporary_editor_current(
     state
         .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
         .await?;
-    let session = state.authorized_session(&session_id, &headers, now).await?;
+    temporary_editor_current_inner(&state, &session_id, &headers).await
+}
+
+/// Shared private canonical Current replay. HTTP GET and Guest mutation each
+/// charge one rate-limit admission, never two admissions for the same action.
+async fn temporary_editor_current_inner(
+    state: &GuestReaderHttpState,
+    session_id: &str,
+    headers: &HeaderMap,
+) -> Result<GuestJson<TemporaryEditorCurrentResponse>, GuestReaderError> {
+    let session = state
+        .authorized_session(session_id, headers, now_ms()?)
+        .await?;
     require_temporary_editor_current_session(&session)?;
+    let now = now_ms()?;
     let backend = state
         .temporary_editor
         .as_ref()
@@ -900,7 +913,7 @@ async fn temporary_editor_current(
     }
     Ok(GuestJson(TemporaryEditorCurrentResponse {
         protocol_version: "chaptera.temporary-editor-current.v1",
-        document_id: session_id,
+        document_id: session_id.to_owned(),
         source_hash: source_hash.to_owned(),
         revision_id,
         revision_cursor,
@@ -967,13 +980,8 @@ async fn temporary_editor_move_node(
 
     // Current uses the existing isolated worker and the existing contiguous
     // RevisionStream replay; no untrusted PUB parser runs inside Axum.
-    let GuestJson(current) = temporary_editor_current(
-        State(state.clone()),
-        Extension(client_ip),
-        Path(session_id.clone()),
-        headers.clone(),
-    )
-    .await?;
+    let GuestJson(current) =
+        temporary_editor_current_inner(&state, &session_id, &headers).await?;
     if request.base_revision_id != current.revision_id {
         return Err(GuestReaderError::conflict(
             "temporary_editor_stale_revision",
