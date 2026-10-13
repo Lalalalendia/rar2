@@ -4,6 +4,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
+import {
+  storyTextForTextarea,
+  textareaTextToCanonicalStory,
+} from "../apps/web/product-editor-entry-v1.mjs";
 
 const origin = process.env.CHAPTERA_SECURE_ORIGIN;
 const fixture = process.env.CHAPTERA_STORY_PUB_FIXTURE;
@@ -136,10 +140,16 @@ try {
     throw new Error("real pinned PUB exposes no browser-editable canonical plain Story");
   }
   const priorText = await page.locator("#story-input").inputValue();
+  const priorCanonical = baseline.authoring_graph?.stories?.[selected.storyId]?.text;
+  if (typeof priorCanonical !== "string" ||
+      storyTextForTextarea(priorCanonical) !== priorText) {
+    throw new Error("Story textarea projection differs from canonical source text");
+  }
   const scalars = [...priorText];
   if (!scalars.length) throw new Error("selected Story has no text for physical range edit");
   const replacement = scalars[0] === "Q" ? "R" : "Q";
   const desired = replacement + scalars.slice(1).join("");
+  const desiredCanonical = textareaTextToCanonicalStory(priorCanonical, desired);
   if (desired === priorText) throw new Error("test Story edit must change exactly one scalar");
   await page.locator("#story-input").fill(desired);
   const acceptedResponse = page.waitForResponse(response =>
@@ -191,14 +201,14 @@ try {
   null, { timeout: 120000 });
   const current = await readProduct();
   if (current.revision_id !== receipt.revision_id ||
-      current.authoring_graph?.stories?.[selected.storyId]?.text !== desired) {
+      current.authoring_graph?.stories?.[selected.storyId]?.text !== desiredCanonical) {
     throw new Error("fresh canonical current did not preserve the edited Story text");
   }
   const scene = await readScene(receipt.revision_id);
   if (!scene.stories?.some(story =>
-    story.story_id === selected.storyId && story.text === desired) ||
+    story.story_id === selected.storyId && story.text === desiredCanonical) ||
       !originalScene.stories?.some(story => story.story_id === selected.storyId &&
-        story.text === priorText)) {
+        story.text === priorCanonical)) {
     throw new Error("real Reader text projection did not follow immutable Story revision");
   }
 
@@ -214,7 +224,7 @@ try {
   }
   const reopened = await readProduct();
   if (reopened.revision_id !== receipt.revision_id ||
-      reopened.authoring_graph?.stories?.[selected.storyId]?.text !== desired) {
+      reopened.authoring_graph?.stories?.[selected.storyId]?.text !== desiredCanonical) {
     throw new Error("fresh Product reopened an inconsistent Story revision");
   }
   if (errors.length) throw new Error("real Story browser reported JavaScript errors");

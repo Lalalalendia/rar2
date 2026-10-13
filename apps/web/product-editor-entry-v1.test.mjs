@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   documentIdFromEditorPath, loginUrlForReturnPath, productEditorStatusView,
-  sourcePlainStoryCandidates, oneShotStoryIntent,
+  sourcePlainStoryCandidates, oneShotStoryIntent, storyTextForTextarea,
+  textareaTextToCanonicalStory,
 } from "./product-editor-entry-v1.mjs";
 
 const DOC="10000000-0000-4000-8000-000000000001";
@@ -155,7 +156,7 @@ test("unknown Undo/Redo outcome remains visibly locked until server history rech
   assert.doesNotMatch(recovered.status, /Saved/);
 });
 
-test("Story inspector admits only single-line plain framed source Stories", () => {
+test("Story inspector admits plain framed text with only an immutable terminal marker", () => {
   const graph = {
     nodes: {
       a: {payload: {story_frame: {story_id: "plain"}}},
@@ -163,16 +164,32 @@ test("Story inspector admits only single-line plain framed source Stories", () =
       c: {payload: {story_frame: {story_id: "table"}}},
       d: {payload: {table: {story_id: "table"}}},
       e: {payload: {story_frame: {story_id: "multiline"}}},
+      f: {payload: {story_frame: {story_id: "terminal"}}},
+      g: {payload: {story_frame: {story_id: "empty"}}},
     },
     stories: {
       plain: {text: "ABC", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       rich: {text: "Rich", runs: [{source: "import"}]},
       table: {text: "Cell"},
       multiline: {text: "First\r\nSecond", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      terminal: {text: "Title\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      empty: {text: "\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       unframed: {text: "No frame"},
     },
   };
-  assert.deepEqual(sourcePlainStoryCandidates(graph), [{story_id: "plain", text: "ABC"}]);
+  assert.deepEqual(sourcePlainStoryCandidates(graph), [
+    {story_id: "plain", text: "ABC"},
+    {story_id: "terminal", text: "Title\r"},
+  ]);
+});
+
+test("textarea projection preserves the source terminal paragraph marker", () => {
+  assert.equal(storyTextForTextarea("Title\r"), "Title");
+  assert.equal(storyTextForTextarea("Title\r\n"), "Title");
+  assert.equal(textareaTextToCanonicalStory("Title\r", "Qitle"), "Qitle\r");
+  assert.throws(() => storyTextForTextarea("First\rSecond"), /terminal paragraph marker/);
+  assert.throws(() => textareaTextToCanonicalStory("Title\r", "New\nTitle"),
+    /no new paragraphs/);
 });
 
 test("one-shot Story diff uses Unicode scalar positions and no client authoritative before", () => {
@@ -191,6 +208,18 @@ test("one-shot Story diff uses Unicode scalar positions and no client authoritat
   assert.equal("expected_before" in intent.command, false);
   assert.equal("typing_format" in intent.command, false);
   assert.equal("depends_on_client_operation_id" in intent, false);
+  const terminal = oneShotStoryIntent({
+    documentId: DOC,
+    sourceHash: "a".repeat(64),
+    baseRevisionId: "sha256:" + "b".repeat(64),
+    storyId: "40000000-0000-4000-8000-000000000002",
+    canonicalText: "ABC\r",
+    observedText: "AYC",
+    clientOperationId: "product-story-terminal-test",
+  });
+  assert.equal(terminal.command.start_scalar, 1);
+  assert.equal(terminal.command.end_scalar, 2);
+  assert.equal(terminal.command.replacement_text, "Y");
   assert.throws(() => oneShotStoryIntent({
     documentId: DOC,sourceHash:"a".repeat(64),baseRevisionId:"sha256:"+"b".repeat(64),
     storyId:"story",canonicalText:"abc",observedText:"abc",clientOperationId:"story-test",

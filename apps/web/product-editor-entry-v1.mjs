@@ -6,6 +6,32 @@ import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
 
 const HAS_CONTROL = /\p{Cc}/u;
 
+function terminalParagraphMarker(text) {
+  if (text.endsWith("\r\n")) return "\r\n";
+  if (text.endsWith("\r")) return "\r";
+  if (text.endsWith("\n")) return "\n";
+  return "";
+}
+
+export function storyTextForTextarea(canonicalText) {
+  if (typeof canonicalText !== "string") throw new TypeError("canonical Story text is required");
+  const marker = terminalParagraphMarker(canonicalText);
+  const body = marker ? canonicalText.slice(0, -marker.length) : canonicalText;
+  if (!body.length || HAS_CONTROL.test(body)) {
+    throw new Error("first Story writer requires non-empty text with only a terminal paragraph marker");
+  }
+  return body;
+}
+
+export function textareaTextToCanonicalStory(canonicalText, observedText) {
+  if (typeof observedText !== "string") throw new TypeError("observed Story text is required");
+  if (HAS_CONTROL.test(observedText)) {
+    throw new Error("first Story writer admits no new paragraphs/control characters");
+  }
+  storyTextForTextarea(canonicalText);
+  return observedText + terminalParagraphMarker(canonicalText);
+}
+
 export function sourcePlainStoryCandidates(graph) {
   if (!graph || typeof graph !== "object") return [];
   const frames = new Set();
@@ -19,7 +45,9 @@ export function sourcePlainStoryCandidates(graph) {
   }
   return Object.entries(graph.stories ?? {}).filter(([id, story]) =>
     typeof id === "string" && frames.has(id) && !tableOwned.has(id) &&
-    typeof story?.text === "string" && !HAS_CONTROL.test(story.text) &&
+    typeof story?.text === "string" && (() => {
+      try { storyTextForTextarea(story.text); return true; } catch { return false; }
+    })() &&
     ["runs", "paragraphs", "fields", "hyperlinks"].every((part) =>
       !Array.isArray(story[part]) || story[part].length === 0
     )
@@ -31,8 +59,9 @@ export function oneShotStoryIntent({
   documentId, sourceHash, baseRevisionId, storyId, canonicalText, observedText,
   clientOperationId,
 }) {
-  const range = diffObservedTextToScalarReplacement(canonicalText, observedText);
-  if (canonicalText === observedText) throw new Error("Story has no text change to save");
+  const desiredCanonicalText = textareaTextToCanonicalStory(canonicalText, observedText);
+  const range = diffObservedTextToScalarReplacement(canonicalText, desiredCanonicalText);
+  if (canonicalText === desiredCanonicalText) throw new Error("Story has no text change to save");
   if (range.replacement_text.length > 8192 || HAS_CONTROL.test(range.replacement_text)) {
     throw new Error("first Story writer admits no new paragraphs/control characters");
   }
@@ -257,7 +286,7 @@ export async function bootProductEditor({
       const selected=candidates.find((candidate)=>candidate.story_id===storyId);
       if(!selected||!context) return;
       context={...context,story_id:selected.story_id,canonical_text:selected.text};
-      storyInput.value=selected.text;
+      storyInput.value=storyTextForTextarea(selected.text);
       storyInput.disabled=false;
       storyApply.disabled=false;
     };
@@ -365,7 +394,7 @@ export async function bootProductEditor({
           }
           const scene=await service.readerSceneForRevision(accepted.revision_id);
           const actual=current.authoring_graph?.stories?.[context.story_id]?.text;
-          const desired=storyInput.value;
+          const desired=textareaTextToCanonicalStory(context.canonical_text,storyInput.value);
           if(actual!==desired){
             throw new Error("Reopened Story text differs from submitted text");
           }
@@ -378,7 +407,7 @@ export async function bootProductEditor({
             revision_id:current.revision_id,story_id:confirmed.story_id,
             canonical_text:confirmed.text,
           };
-          storyInput.value=confirmed.text;
+          storyInput.value=storyTextForTextarea(confirmed.text);
           textState("Exact server revision and reopened Story text confirmed.","ok");
           lockDocument(false);
         }catch(error){
