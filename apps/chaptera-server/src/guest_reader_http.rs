@@ -973,9 +973,10 @@ async fn temporary_editor_scene(
             "temporary_editor_source_identity_mismatch",
         ));
     }
-    let _permit = backend.admission.clone().try_acquire_owned().map_err(|_| {
-        GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
-    })?;
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
     let source_bytes = read_exact_temporary_editor_source(&state, &session).await?;
     let project_hash = project_sha256(&current.project)
         .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
