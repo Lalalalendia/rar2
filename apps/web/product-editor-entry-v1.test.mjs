@@ -156,7 +156,7 @@ test("unknown Undo/Redo outcome remains visibly locked until server history rech
   assert.doesNotMatch(recovered.status, /Saved/);
 });
 
-test("Story inspector admits plain framed text with only an immutable terminal marker", () => {
+test("Story inspector admits plain framed text with unambiguous Publisher separators", () => {
   const graph = {
     nodes: {
       a: {payload: {story_frame: {story_id: "plain"}}},
@@ -166,6 +166,7 @@ test("Story inspector admits plain framed text with only an immutable terminal m
       e: {payload: {story_frame: {story_id: "multiline"}}},
       f: {payload: {story_frame: {story_id: "terminal"}}},
       g: {payload: {story_frame: {story_id: "empty"}}},
+      h: {payload: {story_frame: {story_id: "mixed"}}},
     },
     stories: {
       plain: {text: "ABC", runs: [], paragraphs: [], fields: [], hyperlinks: []},
@@ -174,10 +175,12 @@ test("Story inspector admits plain framed text with only an immutable terminal m
       multiline: {text: "First\r\nSecond", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       terminal: {text: "Title\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       empty: {text: "\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      mixed: {text: "First\r\nSecond\nThird", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       unframed: {text: "No frame"},
     },
   };
   assert.deepEqual(sourcePlainStoryCandidates(graph), [
+    {story_id: "multiline", text: "First\r\nSecond"},
     {story_id: "plain", text: "ABC"},
     {story_id: "terminal", text: "Title\r"},
   ]);
@@ -185,9 +188,15 @@ test("Story inspector admits plain framed text with only an immutable terminal m
 
 test("textarea projection preserves the source terminal paragraph marker", () => {
   assert.equal(storyTextForTextarea("Title\r"), "Title");
-  assert.equal(storyTextForTextarea("Title\r\n"), "Title");
+  assert.equal(storyTextForTextarea("Title\r\n"), "Title\n");
+  assert.equal(textareaTextToCanonicalStory("Title\r\n", "Qitle\n"), "Qitle\r\n");
   assert.equal(textareaTextToCanonicalStory("Title\r", "Qitle"), "Qitle\r");
-  assert.throws(() => storyTextForTextarea("First\rSecond"), /terminal paragraph marker/);
+  assert.equal(storyTextForTextarea("First\rSecond\r"), "First\nSecond");
+  assert.equal(textareaTextToCanonicalStory("First\rSecond\r", "Qirst\nSecond"),
+    "Qirst\rSecond\r");
+  assert.throws(() => textareaTextToCanonicalStory("First\rSecond\r", "FirstSecond"),
+    /no new paragraphs/);
+  assert.throws(() => storyTextForTextarea("First\r\nSecond\nThird"), /mixed Publisher/);
   assert.throws(() => textareaTextToCanonicalStory("Title\r", "New\nTitle"),
     /no new paragraphs/);
 });

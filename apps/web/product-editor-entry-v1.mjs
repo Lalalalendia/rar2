@@ -2,34 +2,32 @@ import { BrowserObservabilityV1 } from "./observability-v1.mjs";
 import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
 import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
 import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
+import {
+  prepareStoryTextForTextarea,
+  restoreStoryTextFromTextarea,
+} from "./story-line-endings-v1.mjs";
 
 
 const HAS_CONTROL = /\p{Cc}/u;
 
-function terminalParagraphMarker(text) {
-  if (text.endsWith("\r\n")) return "\r\n";
-  if (text.endsWith("\r")) return "\r";
-  if (text.endsWith("\n")) return "\n";
-  return "";
-}
-
 export function storyTextForTextarea(canonicalText) {
-  if (typeof canonicalText !== "string") throw new TypeError("canonical Story text is required");
-  const marker = terminalParagraphMarker(canonicalText);
-  const body = marker ? canonicalText.slice(0, -marker.length) : canonicalText;
-  if (!body.length || HAS_CONTROL.test(body)) {
-    throw new Error("first Story writer requires non-empty text with only a terminal paragraph marker");
-  }
-  return body;
+  const profile = prepareStoryTextForTextarea(canonicalText);
+  if (!profile.value.length) throw new Error("first Story writer requires non-empty text");
+  return profile.value;
 }
 
 export function textareaTextToCanonicalStory(canonicalText, observedText) {
   if (typeof observedText !== "string") throw new TypeError("observed Story text is required");
-  if (HAS_CONTROL.test(observedText)) {
+  if ([...observedText].some(char => char !== "\n" && HAS_CONTROL.test(char))) {
     throw new Error("first Story writer admits no new paragraphs/control characters");
   }
-  storyTextForTextarea(canonicalText);
-  return observedText + terminalParagraphMarker(canonicalText);
+  const profile = prepareStoryTextForTextarea(canonicalText);
+  if (!profile.value.length) throw new Error("first Story writer requires non-empty text");
+  const newlineCount = text => [...text].filter(char => char === "\n").length;
+  if (newlineCount(observedText) !== newlineCount(profile.value)) {
+    throw new Error("first Story writer admits no new paragraphs/control characters");
+  }
+  return restoreStoryTextFromTextarea(observedText, profile);
 }
 
 export function sourcePlainStoryCandidates(graph) {
