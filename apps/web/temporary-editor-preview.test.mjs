@@ -171,7 +171,9 @@ test("unconfirmed DELETE keeps session recovery and never announces deletion", a
     },
   });
   await controller.start(file);
+  nodes["temporary-pages"].childrenCleared = false;
   await controller.deleteServer();
+  assert.equal(nodes["temporary-pages"].childrenCleared, true);
   assert.equal(nodes["temporary-delete"].hidden, false);
   assert.ok(storage.getItem("chaptera.temporary-edit.v0"));
   assert.match(nodes["temporary-status"].textContent, /Удаление не подтверждено/);
