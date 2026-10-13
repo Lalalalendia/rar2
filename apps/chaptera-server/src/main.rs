@@ -355,7 +355,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             None if config.storage.provider == "filesystem" => {
                                 // With AuthN but no source/project API, expose only the
                                 // guest temporary preview. Never mount Product pages.
-                                guest_router.merge(product_editor_assets::temporary_preview_router())
+                                guest_router
+                                    .merge(product_editor_assets::temporary_preview_router())
                             }
                             None => guest_router,
                         });
@@ -381,14 +382,15 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                     .await?;
                 } else if config.cloud_reader_guest.is_some() {
                     let blob_store = BlobStoreRuntime::open(&config).await?;
-                    let mut product_router = build_guest_reader_router(&config, &secrets, &blob_store)
-                        .await?
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                "cloud_reader_guest configuration disappeared during startup",
-                            )
-                        })?;
+                    let mut product_router =
+                        build_guest_reader_router(&config, &secrets, &blob_store)
+                            .await?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cloud_reader_guest configuration disappeared during startup",
+                                )
+                            })?;
                     if config.storage.provider == "filesystem" {
                         // Anonymous Temporary Edit V0 needs its read-only web
                         // preview even when AuthN/SourceIngress are disabled.
