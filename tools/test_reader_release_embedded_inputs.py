@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".github/workflows/cloud-reader-linux-release.yml"
 EMBEDDED = ROOT / "apps/chaptera-server/src/product_editor_assets.rs"
+LEGACY_PRODUCTION_DEPLOY = ROOT / ".github/workflows/cloud-reader-deploy.yml"
 
 # All exposed Temporary Editor modules are include_bytes! in the Chaptera Rust
 # release binary. Source-only UI edits must trigger a *new* immutable packet.
@@ -81,6 +82,16 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
             r'\s+echo "::error::[^\n]+\n'
             r'\s+exit 1\n'
             r'\s+fi\n',
+        )
+
+
+    def test_legacy_rar2_auto_production_deploy_is_removed(self):
+        # Production deployment authority lives in chaptera-site and requires an
+        # operator-pinned immutable release SHA. rar2 must only build releases;
+        # release completion must never mutate the real host automatically.
+        self.assertFalse(
+            LEGACY_PRODUCTION_DEPLOY.exists(),
+            "rar2 must not auto-deploy production; use chaptera-site pinned deploy",
         )
 
 
