@@ -229,7 +229,9 @@ try {
   } catch {
     const state = await page.locator("#temporary-status").textContent();
     throw Error("physical browser MoveNode failed with UI status: " +
-      String(state).slice(0,180));
+      String(state).slice(0,180) + " http=" +
+      JSON.stringify(observed.responses.slice(-18)) +
+      " page_errors=" + JSON.stringify(browserErrors));
   }
   await settleResponses();
   const nextHead = observed.current.at(-1);
@@ -374,9 +376,17 @@ try {
   // followed by the exact changed canonical revision. No GET extends TTL.
   await page.reload({waitUntil:"domcontentloaded"});
   await page.locator("#temporary-resume").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#temporary-status")?.textContent.includes(
-      "Открыта редактируемая ревизия"), null,{timeout:170000});
+  try {
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-status")?.textContent.includes(
+        "Открыта редактируемая ревизия"), null,{timeout:170000});
+  } catch {
+    const state = await page.locator("#temporary-status").textContent();
+    throw Error("physical browser resume failed with UI status: " +
+      String(state).slice(0,180) + " http=" +
+      JSON.stringify(observed.responses.slice(-18)) +
+      " page_errors=" + JSON.stringify(browserErrors));
+  }
   await settleResponses();
   const reopened = observed.scenes.at(-1);
   assert.equal(reopened.revision_id,accepted.revision_id);
