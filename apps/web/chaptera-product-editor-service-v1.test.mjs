@@ -949,3 +949,130 @@ test("replayed exact commit ACK remains accepted without another POST", async ()
   assert.equal(result.revision_id, CHILD);
   assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
 });
+
+test("Product StoryRange uses exact authenticated text route without browser before-state", async () => {
+  const storyId = "40000000-0000-4000-8000-000000000001";
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-001",
+    command: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      replacement_text: "Q",
+    },
+  };
+  const resultBody = {
+    ...accepted(),
+    client_operation_id: intent.client_operation_id,
+    canonical_operation: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      expected_before: "A",
+      replacement_text: "Q",
+    },
+  };
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/story-commit") {
+      assert.deepEqual(JSON.parse(options.body), intent);
+      return json(resultBody);
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const saved = await service.commitStoryRange(intent);
+  assert.equal(saved.revision_id, CHILD);
+  assert.equal(saved.canonical_operation.replacement_text, "Q");
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.deepEqual(calls.map((c) => c.path), [
+    "/v1/session", "/v1/documents/" + DOC + "/story-commit",
+  ]);
+});
+
+test("StoryRange refuses mismatched success ACK without issuing another mutation", async () => {
+  const storyId = "40000000-0000-4000-8000-000000000001";
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-002",
+    command: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      replacement_text: "Y",
+    },
+  };
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/story-commit") {
+      return json({
+        ...accepted(),
+        client_operation_id: intent.client_operation_id,
+        canonical_operation: {
+          kind: "replace_story_range",
+          story_id: storyId,
+          start_scalar: 0,
+          end_scalar: 1,
+          replacement_text: "forged",
+        },
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(() => service.commitStoryRange(intent), /Story commit accepted identity mismatch/);
+  assert.equal(calls.filter((c) => c.path.endsWith("/story-commit")).length, 1);
+});
+
+test("StoryRange rejects unsupported browser-controlled state before any network mutation", async () => {
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-003",
+    command: {
+      kind: "replace_story_range",
+      story_id: "40000000-0000-4000-8000-000000000001",
+      start_scalar: 0,
+      end_scalar: 0,
+      replacement_text: "text",
+    },
+  };
+  const { calls, fetchImpl } = recorder(() => {
+    throw new Error("unexpected network request");
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    command: {...intent.command, expected_before: "forged"},
+  }), /unknown|unsupported|additional|field|Story|intent/i);
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    command: {...intent.command, replacement_text: "line\nparagraph"},
+  }), /bounded plain Story replacements/);
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    depends_on_client_operation_id: "previous-story-op",
+  }), /pending Story operation chains/);
+  assert.equal(calls.length, 0);
+});

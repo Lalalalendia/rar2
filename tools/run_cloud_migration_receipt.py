@@ -49,7 +49,7 @@ def main() -> int:
 
         assert before["state"] == "pending"
         assert before["current_version"] == 0
-        expected_target_version = 20
+        expected_target_version = 21
         expected_versions = list(range(1, expected_target_version + 1))
         assert before["target_version"] == expected_target_version
         assert before["pending_versions"] == expected_versions
@@ -88,6 +88,25 @@ def main() -> int:
             }:
                 if required not in tables:
                     raise SystemExit(f"migration chain did not materialize {required}")
+
+            # New migrations must extend the same operator-migration receipt.
+            # Do not report a green version number if private TTL/purge
+            # triggers were not created by the physical migration chain.
+            triggers = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger'"
+                )
+            }
+            for required_trigger in {
+                "tempedit_revision_accept_guard",
+                "tempedit_revision_commit_renews",
+                "tempedit_session_delete_revisions",
+            }:
+                if required_trigger not in triggers:
+                    raise SystemExit(
+                        f"migration chain did not materialize {required_trigger}"
+                    )
 
             physical_blob_columns = {
                 row[1]

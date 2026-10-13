@@ -77,6 +77,7 @@ fn main() -> ExitCode {
         move_node_id,
         move_x_emu,
         move_y_emu,
+        story_intent_json,
         scene_revision_id,
         scene_baseline_revision_id,
     } = &cli.command
@@ -105,6 +106,7 @@ fn main() -> ExitCode {
             expected_project_sha256.as_deref(),
             move_intent,
             scene_intent,
+            story_intent_json.as_deref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -350,6 +352,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                     {
                         product_router = Some(match product_router {
                             Some(router) => router.merge(guest_router),
+                            None if config.storage.provider == "filesystem" => {
+                                // With AuthN but no source/project API, expose only the
+                                // guest temporary preview. Never mount Product pages.
+                                guest_router
+                                    .merge(product_editor_assets::temporary_preview_router())
+                            }
                             None => guest_router,
                         });
                     }
@@ -374,14 +382,22 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                     .await?;
                 } else if config.cloud_reader_guest.is_some() {
                     let blob_store = BlobStoreRuntime::open(&config).await?;
-                    let product_router = build_guest_reader_router(&config, &secrets, &blob_store)
-                        .await?
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                "cloud_reader_guest configuration disappeared during startup",
-                            )
-                        })?;
+                    let mut product_router =
+                        build_guest_reader_router(&config, &secrets, &blob_store)
+                            .await?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cloud_reader_guest configuration disappeared during startup",
+                                )
+                            })?;
+                    if config.storage.provider == "filesystem" {
+                        // Anonymous Temporary Edit V0 needs its read-only web
+                        // preview even when AuthN/SourceIngress are disabled.
+                        // The restricted router denies all Product Editor pages.
+                        product_router =
+                            product_router.merge(product_editor_assets::temporary_preview_router());
+                    }
                     drop(secrets);
 
                     let assembled = ports_with_guest_reader(revision_stream, blob_store);
