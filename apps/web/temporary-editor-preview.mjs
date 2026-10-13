@@ -137,13 +137,17 @@ export async function bootTemporaryEditorPreview({
     if (deleteButton) deleteButton.hidden = !client.hasSavedSession();
     if (editorEnabled) {
       actions.hidden = !moveClient;
-      const canDownload = !busy && !editBusy && moveClient &&
+      const canExport = !busy && !editBusy && moveClient &&
         !moveClient.status.pending_reconciliation &&
         !moveClient.status.refresh_required &&
-        canonicalCurrent?.revision_cursor > 0;
-      idmlButton.disabled = !canDownload;
-      odgButton.disabled = !canDownload;
-      if (pdfButton) pdfButton.disabled = !canDownload;
+        canonicalCurrent !== null;
+      const canDownloadEdited = canExport && canonicalCurrent.revision_cursor > 0;
+      idmlButton.disabled = !canDownloadEdited;
+      odgButton.disabled = !canDownloadEdited;
+      if (pdfButton) {
+        pdfButton.disabled = !canExport;
+        pdfButton.textContent = canDownloadEdited ? "Скачать изменённый PDF" : "Скачать PDF";
+      }
     }
   }
 
@@ -217,7 +221,7 @@ export async function bootTemporaryEditorPreview({
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = partialFidelity
         ? "Открыта редактируемая ревизия — Needs review / Partial: отображение неполное. Перемещайте только поддерживаемые объекты, проверяйте LossReport перед использованием выгрузки."
-        : "Открыта редактируемая ревизия. Перетащите поддерживаемый объект. Изменение подтверждает сервер.";
+        : "PUB открыт. PDF можно скачать без правки. Для изменения переместите поддерживаемый объект; результат подтверждает сервер.";
     } else {
       status.textContent = description.message;
     }
@@ -396,19 +400,22 @@ export async function bootTemporaryEditorPreview({
     editBusy = true;
     controls();
     try {
-      status.textContent = "Проверка потерь и подготовка изменённого " + target.toUpperCase() + "…";
+      const isBaselinePdf = target === "pdf" && canonicalCurrent.revision_cursor === 0;
+      const outputLabel = isBaselinePdf ? "PDF исходной версии" :
+        "изменённого " + target.toUpperCase();
+      status.textContent = "Проверка потерь и подготовка " + outputLabel + "…";
       const report = await moveClient.exportEdited(target, { reportOnly: true });
       // Explicit disclosure before the response bytes are offered for download.
       const losses = report.loss_report?.counts;
       status.textContent = "Отчёт об экспорте: " +
         (losses && typeof losses === "object" ? JSON.stringify(losses) : "частично поддерживаемый формат") +
-        ". Скачивание изменённой ревизии…";
+        (isBaselinePdf ? ". Скачивание PDF без правки…" : ". Скачивание изменённой ревизии…");
       const result = await moveClient.exportEdited(target);
       const blobUrl = URL.createObjectURL(result.blob);
       try {
         const anchor = documentObject.createElement("a");
         anchor.href = blobUrl;
-        anchor.download = "chaptera-edited." + target;
+        anchor.download = isBaselinePdf ? "chaptera-original.pdf" : "chaptera-edited." + target;
         anchor.hidden = true;
         documentObject.body.appendChild(anchor);
         anchor.click();
@@ -416,7 +423,8 @@ export async function bootTemporaryEditorPreview({
       } finally {
         globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       }
-      status.textContent = "Скачан " + target.toUpperCase() + " из изменённой ревизии. Потери: " +
+      status.textContent = "Скачан " + (isBaselinePdf ? "PDF исходной версии" :
+        target.toUpperCase() + " из изменённой ревизии") + ". Потери: " +
         (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") +
         (partialFidelity ? ". Needs review / Partial: обязательно проверьте экспорт." : ".");
     } catch {

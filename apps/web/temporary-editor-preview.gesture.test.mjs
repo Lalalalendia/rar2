@@ -53,6 +53,7 @@ function fakeDom() {
     "temporary-start", "temporary-resume", "temporary-forget",
     "temporary-status", "temporary-expiry", "temporary-pages",
     "temporary-export-actions", "temporary-download-idml", "temporary-download-odg",
+    "temporary-download-pdf",
   ];
   const nodes = {};
   for (const id of ids) {
@@ -166,6 +167,10 @@ test("real guest UI pointer drag posts once and renders exact revised Scene", as
   await controller.start({ name: "example.pub", size: 1729 });
   assert.equal(renders.length, 1);
   assert.equal(renders[0].revision_id, beforeRev);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false,
+    "baseline PDF can be downloaded without a MoveNode");
+  assert.equal(dom.nodes["temporary-download-pdf"].textContent, "Скачать PDF");
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
   dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
   dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(150, 260));
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
@@ -176,6 +181,8 @@ test("real guest UI pointer drag posts once and renders exact revised Scene", as
   assert.equal(renders[1].nodes[0].bounds.y, 260);
   assert.match(dom.nodes["temporary-status"].textContent, /Правка сохранена/);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false);
+  assert.equal(dom.nodes["temporary-download-pdf"].textContent, "Скачать изменённый PDF");
   assert.ok(network.calls.every(x => !x.url.includes(token)));
 });
 
@@ -192,6 +199,8 @@ test("click-only selection never writes a revision", async () => {
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
   assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false,
+    "click-only selection must not create an edit to unlock PDF");
 });
 
 test("partial real source retains a visible Needs review fence during edit", async () => {
@@ -226,4 +235,5 @@ test("unsupported upload never requests authoring state or permits a move", asyn
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
   assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, true);
 });

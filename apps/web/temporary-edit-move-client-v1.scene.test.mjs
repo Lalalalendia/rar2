@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { TemporaryGuestMoveClientV1 } from "./temporary-edit-move-client-v1.mjs";
 
 const id = "tempedit:" + "a".repeat(32);
@@ -78,7 +79,38 @@ test("edited export report is exact private revision and cannot read baseline", 
   const baseline = harness([json(current)]);
   await baseline.client.refresh();
   await assert.rejects(baseline.client.exportEdited("idml"), /temporary_export_current_required/);
+  await assert.rejects(baseline.client.exportEdited("odg"), /temporary_export_current_required/);
 });
+
+test("pristine PUB exports real PDF bytes with exact source/revision and no MoveNode", async () => {
+  const bytes = new TextEncoder().encode("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const report = {
+    protocol_version: "chaptera.temporary-edited-export-report.v1",
+    source_hash: source, revision_id: beforeRevision,
+    canonical_authoring_revision_id: canon,
+    target: "pdf", is_baseline: true, artifact_sha256: digest,
+    loss_report: { counts: { blocking: 0, moved_nodes: 0 } },
+  };
+  const pdf = new Response(bytes, { status: 200, headers: {
+    "content-type": "application/pdf",
+    "x-chaptera-edit-revision": beforeRevision,
+    "x-chaptera-export-sha256": digest,
+  }});
+  const { client, calls } = harness([json(current), json(report), pdf]);
+  await client.refresh();
+  assert.equal((await client.exportEdited("pdf", { reportOnly: true })).is_baseline, true);
+  const result = await client.exportEdited("pdf");
+  assert.equal(result.sha256, digest);
+  assert.equal(result.revision_id, beforeRevision);
+  assert.equal((await result.blob.arrayBuffer()).byteLength, bytes.byteLength);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.slice(1).every(({ url, opts }) =>
+    url.includes("/exports/pdf?") && opts.method === "GET" &&
+    opts.headers["x-chaptera-reader-session"] === bearer &&
+    !url.includes(bearer) && opts.cache === "no-store"));
+});
+
 test("export refuses a report for another revision", async () => {
   const modified = { ...current, revision_cursor: 1, revision_id: afterRevision };
   const { client } = harness([json(modified), json({

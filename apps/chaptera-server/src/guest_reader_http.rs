@@ -1324,6 +1324,12 @@ fn validate_temporary_export_query(
     Ok(())
 }
 
+/// A pristine temporary session can be exported as a fixed PDF without a
+/// synthetic edit. Editable formats still require an accepted revision.
+fn temporary_export_admits_revision(target: &str, revision_cursor: i64) -> bool {
+    revision_cursor > 0 || (target == "pdf" && revision_cursor == 0)
+}
+
 /// A one-shot edited Revision download. Output is never materialized into a
 /// durable user Project, derived-BlobStore artifact or S3 service. Worker
 /// scratch files are torn down before the response bytes reach Axum.
@@ -1351,7 +1357,7 @@ async fn temporary_editor_edited_export(
             "temporary_editor_export_stale_revision",
         ));
     }
-    if current.revision_cursor == 0 {
+    if !temporary_export_admits_revision(&target, current.revision_cursor) {
         return Err(GuestReaderError::unprocessable(
             "temporary_editor_export_requires_accepted_edit",
         ));
@@ -1410,9 +1416,17 @@ async fn temporary_editor_edited_export(
         .load_document_edges(&session_id)
         .await
         .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
-    if edges.last().map(|edge| edge.child_revision.as_str()) != Some(query.revision_id.as_str())
-        || edges.last().map(|edge| edge.child_cursor) != Some(current.revision_cursor)
-    {
+    // The unedited head has no SQLite edges. An empty stream is accepted only
+    // for the exact canonical baseline identity; never invent a MoveNode.
+    let exact_head = if current.revision_cursor == 0 {
+        current.revision_id == current.baseline_revision_id && edges.is_empty()
+    } else {
+        edges.last().is_some_and(|edge| {
+            edge.child_revision == query.revision_id
+                && edge.child_cursor == current.revision_cursor
+        })
+    };
+    if !exact_head {
         return Err(GuestReaderError::conflict(
             "temporary_editor_export_stale_revision",
         ));
@@ -1426,6 +1440,7 @@ async fn temporary_editor_edited_export(
             "canonical_authoring_revision_id": query.canonical_authoring_revision_id,
             "source_hash": current.source_hash,
             "target": target,
+            "is_baseline": current.revision_cursor == 0,
             "artifact_sha256": output.artifact_sha256,
             "loss_report_sha256": output.loss_report_sha256,
             "loss_report": output.loss_report,
@@ -1443,6 +1458,10 @@ async fn temporary_editor_edited_export(
         "odg" => (
             "application/vnd.oasis.opendocument.graphics",
             "attachment; filename=\"chaptera-edited.odg\"",
+        ),
+        "pdf" if current.revision_cursor == 0 => (
+            "application/pdf",
+            "attachment; filename=\"chaptera-original.pdf\"",
         ),
         "pdf" => (
             "application/pdf",
@@ -3225,6 +3244,17 @@ mod tests {
             report_only: true,
         };
         assert!(validate_temporary_export_query("odg", &malformed).is_err());
+    }
+
+    #[test]
+    fn pristine_temporary_export_allows_pdf_only_without_creating_a_revision() {
+        assert!(temporary_export_admits_revision("pdf", 0));
+        assert!(!temporary_export_admits_revision("idml", 0));
+        assert!(!temporary_export_admits_revision("odg", 0));
+        assert!(!temporary_export_admits_revision("pdf", -1));
+        for target in ["pdf", "idml", "odg"] {
+            assert!(temporary_export_admits_revision(target, 1));
+        }
     }
 
     #[test]
