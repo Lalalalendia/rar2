@@ -14,6 +14,8 @@ function arg(name) {
   return process.argv[i + 1];
 }
 const origin = arg("origin");
+// Explicit, allowlisted public-host mode; default remains the local Caddy test.
+const publicOrigin = process.argv.includes("--public-origin");
 const fixture = resolve(arg("fixture"));
 const fixtureHash = arg("fixture-sha256");
 const receiptPath = resolve(arg("out"));
@@ -23,7 +25,8 @@ const exportTarget = process.argv.includes("--target") ? arg("target") : "idml";
 if (exportTarget !== "idml" && exportTarget !== "pdf") {
   throw Error("guest browser acceptance target must be idml or pdf");
 }
-if (!/^https:\/\/reader\.chaptera\.test:\d+$/.test(origin)
+if (!(publicOrigin ? origin === "https://reader.chaptera.online" :
+      /^https:\/\/reader\.chaptera\.test:\d+$/.test(origin))
     || !/^[0-9a-f]{64}$/.test(fixtureHash)) {
   throw Error("physical guest origin or pinned fixture invalid");
 }
@@ -33,14 +36,15 @@ assert.equal(sha256(original), fixtureHash, "pinned real source hash mismatch");
 assert.ok(original.length > 100000, "not a representative pinned PUB");
 
 const browser = await chromium.launch({
-  headless: true, args: [
+  headless: true, args: publicOrigin ? [] : [
     "--no-proxy-server",
     "--host-resolver-rules=MAP reader.chaptera.test 127.0.0.1",
   ],
 });
 const page = await browser.newPage({
   acceptDownloads: true,
-  ignoreHTTPSErrors: true,
+  // Real public TLS must validate the trusted CA and expected hostname.
+  ignoreHTTPSErrors: !publicOrigin,
   viewport: { width: 1280, height: 900 },
 });
 const observed = { current: [], scenes: [], accepted: [], requests: [], reports: [], responses: [] };
@@ -156,7 +160,7 @@ try {
   const result = await page.goto(origin + "/editor/temporary-preview", {
     waitUntil: "domcontentloaded", timeout: 30000,
   });
-  assert.equal(result?.status(), 200, "public Caddy did not expose guest editor");
+  assert.equal(result?.status(), 200, "trusted editor edge did not expose guest editor");
   await page.locator("#temporary-file").setInputFiles(fixture);
   await page.locator("#temporary-start").click();
   try {
@@ -467,7 +471,12 @@ try {
     source_sha256:fixtureHash,
     source_byte_len:original.length,
     real_pub:true,real_chromium:true,
-    tls_caddy:true,rust_server:true,isolated_worker:true,
+    deployment_mode:publicOrigin ? "public_trusted_origin" : "local_caddy",
+    // A remote browser proves public TLS and behavior, not worker topology.
+    tls_caddy:!publicOrigin,
+    public_trusted_tls:publicOrigin,
+    rust_server:!publicOrigin,
+    isolated_worker:!publicOrigin,
     browser_pointer_commits:privateMoves.length,
     exact_source_bound_revision:true,
     browser_scene_repaint:true,
@@ -486,7 +495,7 @@ try {
     original_pub_immutable:true,
     auth_product_routes_blocked:true,
     bearer_absent_from_urls:true,
-    no_s3_or_account:true,
+    no_s3_or_account:!publicOrigin,
     v0_go:false,
   };
   await mkdir(dirname(receiptPath),{recursive:true});
