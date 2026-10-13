@@ -244,6 +244,8 @@ jobs:
               for item in report["pdf"].get("nodes", [])
           )
 
+          # 2026-10-14 DIAGNOSTIC CONTROL: comment-only exact-main rerun for PR #2740.
+          # No PDF code, workflow assertion, reference hash or fixture is changed.
           # Canonical fixed-PDF baseline, independently measured on unchanged main
           # in comment-only PR #2657, physical Free PUB PDF CLI #38236001178.
           # Strict hashes remain enforced; do not infer native Publisher parity.
