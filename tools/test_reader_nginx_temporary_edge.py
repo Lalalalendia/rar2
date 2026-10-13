@@ -78,10 +78,10 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="chaptera-nginx-edge-") as tmp:
             config = Path(tmp) / "nginx.conf"
             config.write_text(
-                "pid " + str(Path(tmp) / "nginx.pid") + ";\\n"
-                "error_log stderr;\\n"
-                "events { worker_connections 32; }\\n"
-                "http { include " + str(CONFIG) + "; }\\n",
+                "pid " + str(Path(tmp) / "nginx.pid") + ";\n"
+                "error_log stderr;\n"
+                "events { worker_connections 32; }\n"
+                "http { include " + str(CONFIG) + "; }\n",
                 encoding="utf-8",
             )
             result = subprocess.run(
