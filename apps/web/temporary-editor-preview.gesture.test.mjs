@@ -95,7 +95,7 @@ function fakeDom() {
   });
   return { nodes, documentObject, pointer };
 }
-function server() {
+function server(classification = "supported") {
   const calls = [];
   let moved = null;
   return {
@@ -118,7 +118,7 @@ function server() {
       });
       if (url.endsWith("/open")) return response({
         protocol_version: "chaptera.reader-guest-session.v1",
-        session_id: id, classification: "supported",
+        session_id: id, classification,
         source_sha256: source, expires_at_ms: 4_600_000,
         scene: readerScene(beforeRev),
       });
@@ -191,5 +191,39 @@ test("click-only selection never writes a revision", async () => {
   dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
   assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 0);
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+});
+
+test("partial real source retains a visible Needs review fence during edit", async () => {
+  const dom = fakeDom(), network = server("partial");
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+    storage: storage(), fetchImpl: network.fetchImpl,
+    renderer: async () => {},
+  });
+  await controller.start({ name: "partial.pub", size: 1729 });
+  assert.match(dom.nodes["temporary-status"].textContent, /Needs review \/ Partial/);
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+  dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(150, 260));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
+  assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 1);
+  assert.match(dom.nodes["temporary-status"].textContent, /Needs review \/ Partial/);
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+});
+
+test("unsupported upload never requests authoring state or permits a move", async () => {
+  const dom = fakeDom(), network = server("unsupported");
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+    storage: storage(), fetchImpl: network.fetchImpl,
+    renderer: async () => { throw Error("unsupported rendered"); },
+  });
+  await controller.start({ name: "unsupported.pub", size: 1729 });
+  assert.equal(network.calls.filter(c => c.url.endsWith("/current")).length, 0);
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
+  assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
 });
