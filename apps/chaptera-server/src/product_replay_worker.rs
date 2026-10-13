@@ -2335,6 +2335,7 @@ mod tests {
             move_node: None,
             story_range: None,
             reader_scene: None,
+            editable_export: None,
             filesystem_confinement: true,
         }
     }
