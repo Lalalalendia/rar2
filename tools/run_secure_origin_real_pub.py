@@ -275,7 +275,6 @@ def main() -> int:
     caddy_log = TARGET / "caddy.log"
     worker_log = TARGET / "worker.log"
     browser_log = TARGET / "browser.log"
-    story_browser_log = TARGET / "browser-story.log"
     cross_principal_browser_log = TARGET / "browser-cross-principal.log"
     restart_server_log = TARGET / "server-restart.log"
     restart_worker_log = TARGET / "worker-restart.log"
@@ -435,7 +434,10 @@ def main() -> int:
                     if (
                         not story_engines
                         or len(story_engines) != len(set(story_engines))
-                        or any(item not in {"chromium", "webkit"} for item in story_engines)
+                        or any(
+                            item not in {"chromium", "webkit"}
+                            for item in story_engines
+                        )
                     ):
                         raise RuntimeError(
                             "Story browser engines must be unique chromium/webkit values"

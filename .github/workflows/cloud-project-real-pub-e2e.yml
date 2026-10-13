@@ -113,7 +113,7 @@ jobs:
           CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           CHAPTERA_STORY_BROWSER_ENGINES: chromium,webkit
         run: |
-          sudo sh -c 'printf "%s\\n" "127.0.0.1 edge.test" >> /etc/hosts'
+          echo "127.0.0.1 edge.test" | sudo tee -a /etc/hosts >/dev/null
           python tools/run_secure_origin_real_pub.py \
             --binary target/debug/chaptera \
             --browser-script tools/run_secure_origin_real_pub_browser.mjs \
