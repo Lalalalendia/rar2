@@ -17,8 +17,8 @@ use pub_output::{
 };
 use pub_pdf::{
     FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError, PdfTargetProfile, render_bounded_pdf,
-    render_bounded_pdf_a4_card_9up,
+    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError, PdfTargetProfile,
+    render_bounded_pdf, render_bounded_pdf_a4_card_9up,
 };
 use serde_json::{Value, json};
 
@@ -323,9 +323,7 @@ fn render_current_fixed_pdf_with_sheet(
         )
     }
     .map_err(|error| match error {
-        PdfRenderError::NineUpCardGeometryUnsupported => {
-            "edited_pdf_nine_up_geometry_unsupported"
-        }
+        PdfRenderError::NineUpCardGeometryUnsupported => "edited_pdf_nine_up_geometry_unsupported",
         _ => "edited_pdf_render_failed",
     })?;
     if rendered.bytes.len() <= 5

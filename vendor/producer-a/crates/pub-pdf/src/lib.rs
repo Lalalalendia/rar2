@@ -16,7 +16,7 @@ pub use text::{FixedFontResource, FixedTextRun, PdfTextPreparationError};
 
 use image::{AnimationDecoder, ImageFormat};
 use pub_layout::{BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface};
-use pub_model::{Affine2D, CanonicalId, NodeId, PageId, ResourceId, EMU_PER_MILLIMETER};
+use pub_model::{Affine2D, CanonicalId, EMU_PER_MILLIMETER, NodeId, PageId, ResourceId};
 use pub_output::{FontIdentity, OutputFontPlan};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -280,7 +280,9 @@ impl fmt::Display for PdfRenderError {
                 "could not decode fixed image resource {resource_id:?}: {message}"
             ),
             Self::Text(error) => write!(f, "resolved text preparation failed: {error}"),
-            Self::NineUpCardGeometryUnsupported => f.write_str("9-up A4 needs exactly one 85 x 55 mm page"),
+            Self::NineUpCardGeometryUnsupported => {
+                f.write_str("9-up A4 needs exactly one 85 x 55 mm page")
+            }
         }
     }
 }
@@ -674,14 +676,11 @@ fn render_bounded_pdf_with_sheet(
             .get(&page_id)
             .ok_or(PdfRenderError::NineUpCardGeometryUnsupported)?
             .clone();
-        let mut sheet = String::with_capacity(
-            source.len().saturating_mul(9).saturating_add(600),
-        );
+        let mut sheet = String::with_capacity(source.len().saturating_mul(9).saturating_add(600));
         for row in 0_i64..3 {
             for column in 0_i64..3 {
                 let x = (16 + column * 90) * EMU_PER_MILLIMETER;
-                let y = (35 * EMU_PER_MILLIMETER / 2)
-                    + row * 60 * EMU_PER_MILLIMETER;
+                let y = (35 * EMU_PER_MILLIMETER / 2) + row * 60 * EMU_PER_MILLIMETER;
                 sheet.push_str("q\n1 0 0 1 ");
                 sheet.push_str(&format_points(x));
                 sheet.push(' ');
@@ -1402,7 +1401,9 @@ mod tests {
             Err(PdfRenderError::NineUpCardGeometryUnsupported)
         ));
         let mut wrong = scene();
-        wrong.surfaces.retain(|surface| surface.origin == page_id(1));
+        wrong
+            .surfaces
+            .retain(|surface| surface.origin == page_id(1));
         wrong.surfaces[0].size = Size2D::new(
             LengthEmu::new(90 * EMU_PER_MILLIMETER),
             LengthEmu::new(55 * EMU_PER_MILLIMETER),

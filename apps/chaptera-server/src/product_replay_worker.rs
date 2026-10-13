@@ -197,10 +197,16 @@ async fn read_isolated_edited_export_sidecar(
     if edited.target == "pdf9up" {
         let counts = &edited.loss_report["counts"];
         if counts["pages"] != 1
-            || ["blocking", "partial", "unsupported",
-                "font_missing_glyph_lines", "layout_warnings", "pdf_warnings"]
-                .iter()
-                .any(|name| counts[*name] != 0)
+            || [
+                "blocking",
+                "partial",
+                "unsupported",
+                "font_missing_glyph_lines",
+                "layout_warnings",
+                "pdf_warnings",
+            ]
+            .iter()
+            .any(|name| counts[*name] != 0)
         {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_receipt_invalid",
