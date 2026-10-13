@@ -3,7 +3,7 @@
 // runtime. Browser input is transient; canonical Story state lives on server.
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import {
   storyTextForTextarea,
   textareaTextToCanonicalStory,
@@ -23,9 +23,16 @@ if (sourceSha !== pinnedSourceSha || raw.length !== 72192) {
   throw new Error("real Product Story fixture bytes differ from immutable source pin");
 }
 
-const browser = await chromium.launch({
+const browserEngine = process.env.CHAPTERA_STORY_BROWSER ?? "chromium";
+const browserType = { chromium, webkit }[browserEngine];
+if (!browserType) {
+  throw new Error("unsupported real Story browser engine: " + browserEngine);
+}
+const browser = await browserType.launch({
   headless: true,
-  args: ["--host-resolver-rules=MAP edge.test 127.0.0.1"],
+  ...(browserEngine === "chromium"
+    ? { args: ["--host-resolver-rules=MAP edge.test 127.0.0.1"] }
+    : {}),
 });
 try {
   const context = await browser.newContext({
@@ -245,7 +252,10 @@ try {
   const result = {
     schema: "chaptera.real-product-story-browser-acceptance.v1",
     head_sha: process.env.CHAPTERA_HEAD_SHA ?? "unknown",
-    product_http_oidc_chromium: true,
+    product_http_oidc_browser: true,
+    product_http_oidc_chromium: browserEngine === "chromium",
+    browser_engine: browserEngine,
+    browser_version: browser.version(),
     source_immutable_sha256: sourceSha,
     document_id: documentId,
     story_id: selected.storyId,

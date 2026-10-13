@@ -103,15 +103,17 @@ jobs:
       - name: Prove real pinned PUB through Product isolation worker
         run: cargo test -p chaptera-server --test product_isolated_replay_v1 -- --nocapture
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright Chromium and WebKit
         run: |
           npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium webkit
 
       - name: Real OIDC HTTPS PUB upload, validation and project open
         env:
           CHAPTERA_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CHAPTERA_STORY_BROWSER_ENGINES: chromium,webkit
         run: |
+          sudo sh -c 'printf "%s\\n" "127.0.0.1 edge.test" >> /etc/hosts'
           python tools/run_secure_origin_real_pub.py \
             --binary target/debug/chaptera \
             --browser-script tools/run_secure_origin_real_pub_browser.mjs \
@@ -131,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          for path in             target/cloud-real-pub-ingress/receipt.json             target/cloud-real-pub-ingress/server.log             target/cloud-real-pub-ingress/worker.log             target/cloud-real-pub-ingress/browser.log             target/cloud-real-pub-ingress/browser-story.log             target/cloud-real-pub-ingress/story-receipt.json             target/cloud-real-pub-ingress/browser-cross-principal.log             target/cloud-real-pub-ingress/server-restart.log             target/cloud-real-pub-ingress/worker-restart.log             target/cloud-real-pub-ingress/browser-restart.log             target/cloud-real-pub-ingress/caddy.log
+          for path in             target/cloud-real-pub-ingress/receipt.json             target/cloud-real-pub-ingress/server.log             target/cloud-real-pub-ingress/worker.log             target/cloud-real-pub-ingress/browser.log             target/cloud-real-pub-ingress/browser-story-chromium.log             target/cloud-real-pub-ingress/browser-story-webkit.log             target/cloud-real-pub-ingress/story-receipt-chromium.json             target/cloud-real-pub-ingress/story-receipt-webkit.json             target/cloud-real-pub-ingress/story-receipt.json             target/cloud-real-pub-ingress/browser-cross-principal.log             target/cloud-real-pub-ingress/server-restart.log             target/cloud-real-pub-ingress/worker-restart.log             target/cloud-real-pub-ingress/browser-restart.log             target/cloud-real-pub-ingress/caddy.log
           do
             if [ -f "$path" ]; then
               args+=("$path")
@@ -154,7 +156,10 @@ jobs:
             target/cloud-real-pub-ingress/server.log
             target/cloud-real-pub-ingress/worker.log
             target/cloud-real-pub-ingress/browser.log
-            target/cloud-real-pub-ingress/browser-story.log
+            target/cloud-real-pub-ingress/browser-story-chromium.log
+            target/cloud-real-pub-ingress/browser-story-webkit.log
+            target/cloud-real-pub-ingress/story-receipt-chromium.json
+            target/cloud-real-pub-ingress/story-receipt-webkit.json
             target/cloud-real-pub-ingress/story-receipt.json
             target/cloud-real-pub-ingress/browser-cross-principal.log
             target/cloud-real-pub-ingress/server-restart.log
