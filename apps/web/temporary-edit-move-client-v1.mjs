@@ -244,13 +244,16 @@ export class TemporaryGuestMoveClientV1 {
 
   // A private edited-revision report or physical download, never original PUB.
   // Only query-bound public revision identities appear in the URL, never bearer.
-  async exportEdited(target, { reportOnly = false } = {}) {
+  async exportEdited(target, { reportOnly = false, expectedSha256 = null } = {}) {
     if (!["idml", "odg", "pdf", "pdf9up"].includes(target)) {
       throw failure("temporary_export_target_invalid");
     }
     if (this.#busy || this.#pending || this.#refreshRequired ||
         !this.#current || this.#current.revision_cursor === 0) {
       throw failure("temporary_export_current_required");
+    }
+    if (expectedSha256 !== null && (reportOnly || !SECRET.test(expectedSha256))) {
+      throw failure("temporary_export_expected_hash_invalid");
     }
     const head = this.#current;
     const physicalPdf = target === "pdf" || target === "pdf9up";
@@ -336,6 +339,10 @@ export class TemporaryGuestMoveClientV1 {
     if (actualHash !== expectedHash) {
       this.#refreshRequired = true;
       throw failure("temporary_export_hash_mismatch");
+    }
+    if (expectedSha256 !== null && actualHash !== expectedSha256) {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_report_hash_mismatch");
     }
     return { blob, target, sha256: actualHash, revision_id: head.revision_id };
   }
