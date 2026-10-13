@@ -146,9 +146,19 @@ try {
     response.request().method() === "POST" &&
     decodeURIComponent(new URL(response.url()).pathname) ===
       "/v1/documents/" + documentId + "/story-commit",
-  { timeout: 90000 });
+  { timeout: 90000 }).then(response => ({kind: "response", response}),
+    error => ({kind: "response_timeout", error}));
+  const rejectedByUi = page.waitForFunction(() =>
+    document.querySelector("#story-status")?.classList.contains("error") === true,
+  null, { timeout: 90000 }).then(() => ({kind: "ui_error"}),
+    error => ({kind: "ui_timeout", error}));
   await page.locator("#story-apply-action").click();
-  const response = await acceptedResponse;
+  const outcome = await Promise.race([acceptedResponse, rejectedByUi]);
+  if (outcome.kind !== "response") {
+    const status = await page.locator("#story-status").textContent();
+    throw new Error("Story Apply produced no HTTP mutation (" + outcome.kind + "): " + status);
+  }
+  const response = outcome.response;
   const submitted = response.request().postDataJSON();
   const receipt = await response.json().catch(() => null);
   if (response.status() !== 200 ||
