@@ -289,6 +289,16 @@ def main() -> int:
         ):
             raise AssertionError("edited canonical state was not reopened or original PUB mutated")
 
+        chosen_id = chosen["command"]["node_id"]
+        before_bounds = current["authoring_graph"]["nodes"][chosen_id]["header"]["bounds"]
+        after_bounds = reopened["authoring_graph"]["nodes"][chosen_id]["header"]["bounds"]
+        if (
+            after_bounds.get("x") != chosen["command"]["x_emu"]
+            or after_bounds.get("y") != chosen["command"]["y_emu"]
+            or after_bounds == before_bounds
+        ):
+            raise AssertionError("canonical reopened Scene did not reflect the accepted MoveNode geometry")
+
         replay_status, replay_raw = call(
             "POST", move_path, headers=private, body_json=chosen
         )

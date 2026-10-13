@@ -48,9 +48,9 @@ use crate::{
     reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
     reader_observability::ReaderObservabilityV1,
     revision_materializer::{
-        EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, append_event_operation,
-        cloud_revision_project, decode_editor_revision_event_v1, encode_editor_revision_event_v1,
-        project_sha256, EditorRevisionEventV1, EDITOR_REVISION_EVENT_SCHEMA_V1,
+        EDITOR_REVISION_EVENT_SCHEMA_V1, EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        EditorRevisionEventV1, append_event_operation, cloud_revision_project,
+        decode_editor_revision_event_v1, encode_editor_revision_event_v1, project_sha256,
     },
     source_baseline::{derive_commit_revision_identities, derive_import_baseline_identities},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
@@ -576,7 +576,6 @@ struct TemporaryEditorCurrentResponse {
     authoring_graph: PubResolvedGraph,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemporaryEditorMoveNodeRequest {
@@ -629,9 +628,10 @@ fn validate_temporary_move_node_request(
     }
     if request.client_operation_id.is_empty()
         || request.client_operation_id.len() > 160
-        || !request.client_operation_id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
-        })
+        || !request
+            .client_operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
         || request.command.node_id.is_empty()
         || request.command.node_id.len() > 192
         || request.command.node_id.chars().any(char::is_control)
@@ -911,7 +911,6 @@ async fn temporary_editor_current(
     }))
 }
 
-
 /// Commit one bounded geometry mutation to the *same* canonical RevisionStream
 /// used by the authenticated Product Editor. The Guest bearer is checked
 /// before and after isolated worker execution. Migration 21 alone decides
@@ -976,7 +975,9 @@ async fn temporary_editor_move_node(
     )
     .await?;
     if request.base_revision_id != current.revision_id {
-        return Err(GuestReaderError::conflict("temporary_editor_stale_revision"));
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        ));
     }
     if current.revision_cursor >= MAX_TEMPORARY_EDITOR_REVISIONS as i64 {
         return Err(GuestReaderError::unprocessable(
@@ -998,11 +999,10 @@ async fn temporary_editor_move_node(
 
     // At most two concurrent anonymous isolated workers. The host never
     // derives expected_before or source geometry from browser-provided data.
-    let _permit = backend
-        .admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000))?;
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
     let (operation, resulting_project) = backend
         .worker
         .move_node_to(
@@ -1043,13 +1043,13 @@ async fn temporary_editor_move_node(
     let parent_canonical: AuthoringRevisionIdV1 = current
         .canonical_authoring_revision_id
         .parse()
-        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_invalid"))?;
-    let canonical_child = derive_authoring_revision_id_v1(
-        &resulting_project,
-        Some(parent_canonical),
-    )
-    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
-    .to_string();
+        .map_err(|_| {
+        GuestReaderError::internal("temporary_editor_revision_identity_invalid")
+    })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
+            .to_string();
     let canonical_event = encode_editor_revision_event_v1(&EditorRevisionEventV1 {
         schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
         source_sha256: current.source_hash.clone(),
@@ -1120,9 +1120,9 @@ async fn temporary_editor_move_node(
                 .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
             temporary_move_accepted(edge, identity, expiry, true)
         }
-        AppendOutcome::Conflict(_) => {
-            Err(GuestReaderError::conflict("temporary_editor_stale_revision"))
-        }
+        AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        )),
     }
 }
 
@@ -2816,7 +2816,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn temporary_move_node_admits_only_scoped_bounded_product_intent() {
         let id = "tempedit:0123456789abcdef0123456789abcdef";
@@ -2836,7 +2835,10 @@ mod tests {
         assert!(validate_temporary_move_node_request(&request, id).is_ok());
         let original_hash = temporary_move_request_hash(&request).unwrap();
         request.command.x_emu += 1;
-        assert_ne!(original_hash, temporary_move_request_hash(&request).unwrap());
+        assert_ne!(
+            original_hash,
+            temporary_move_request_hash(&request).unwrap()
+        );
         request.command.x_emu -= 1;
 
         request.protocol_version = "chaptera.unknown".to_owned();
@@ -2854,7 +2856,13 @@ mod tests {
         request.command.kind = "replace_story_range".to_owned();
         assert!(validate_temporary_move_node_request(&request, id).is_err());
         request.command.kind = "move_node_to".to_owned();
-        assert!(validate_temporary_move_node_request(&request, "guest:0123456789abcdef0123456789abcdef").is_err());
+        assert!(
+            validate_temporary_move_node_request(
+                &request,
+                "guest:0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
     }
 
     #[test]
