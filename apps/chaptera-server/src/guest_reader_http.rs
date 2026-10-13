@@ -1305,7 +1305,7 @@ fn validate_temporary_export_query(
     target: &str,
     query: &TemporaryEditedExportQuery,
 ) -> Result<(), GuestReaderError> {
-    if !matches!(target, "idml" | "odg" | "pdf")
+    if !matches!(target, "idml" | "odg" | "pdf" | "pdf9up")
         || query.revision_id.len() != 71
         || !query.revision_id.starts_with("sha256:")
         || !query.revision_id[7..]
@@ -1447,6 +1447,10 @@ async fn temporary_editor_edited_export(
         "pdf" => (
             "application/pdf",
             "attachment; filename=\"chaptera-edited.pdf\"",
+        ),
+        "pdf9up" => (
+            "application/pdf",
+            "attachment; filename=\"chaptera-edited-a4-9up.pdf\"",
         ),
         _ => unreachable!("request target was validated before export"),
     };
@@ -3213,6 +3217,8 @@ mod tests {
         assert!(validate_temporary_export_query("odg", &ok).is_ok());
         assert!(validate_temporary_export_query("idml", &ok).is_ok());
         assert!(validate_temporary_export_query("pdf", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf9up", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf16up", &ok).is_err());
         let malformed = TemporaryEditedExportQuery {
             revision_id: "sha256:wrong".to_owned(),
             canonical_authoring_revision_id: ok.canonical_authoring_revision_id.clone(),

@@ -127,7 +127,7 @@ async fn read_isolated_edited_export_sidecar(
     let Some(edited) = receipt.editable_export.as_mut() else {
         return Ok(());
     };
-    if !matches!(edited.target.as_str(), "idml" | "odg" | "pdf")
+    if !matches!(edited.target.as_str(), "idml" | "odg" | "pdf" | "pdf9up")
         || edited.artifact_byte_len == 0
         || edited.artifact_byte_len > MAX_EDITED_EXPORT_BYTES
     {
@@ -175,9 +175,9 @@ async fn read_isolated_edited_export_sidecar(
             "isolated exported bytes differ from receipt digest",
         ));
     }
-    if edited.target == "pdf"
+    if matches!(edited.target.as_str(), "pdf" | "pdf9up")
         && (edited.loss_report["schema_version"] != "chaptera.temporary-edited-fixed-pdf-loss.v1"
-            || edited.loss_report["target"] != "pdf"
+            || edited.loss_report["target"].as_str() != Some(edited.target.as_str())
             || edited.loss_report["can_serialize"] != true
             || edited.loss_report["current_editor_state"] != true
             || edited.loss_report["source_hash"].as_str() != Some(receipt.source_sha256.as_str())
@@ -188,11 +188,25 @@ async fn read_isolated_edited_export_sidecar(
             "isolated PDF LossReport does not match current source authority",
         ));
     }
-    if edited.target == "pdf" && !bytes.starts_with(b"%PDF-") {
+    if matches!(edited.target.as_str(), "pdf" | "pdf9up") && !bytes.starts_with(b"%PDF-") {
         return Err(ProductReplayWorkerError::new(
             "product_edited_export_receipt_invalid",
             "isolated PDF lacks a valid physical PDF signature",
         ));
+    }
+    if edited.target == "pdf9up" {
+        let counts = &edited.loss_report["counts"];
+        if counts["pages"] != 1
+            || ["blocking", "partial", "unsupported",
+                "font_missing_glyph_lines", "layout_warnings", "pdf_warnings"]
+                .iter()
+                .any(|name| counts[*name] != 0)
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "nine-up export must be one A4 sheet without hidden visual loss",
+            ));
+        }
     }
     edited.artifact_bytes = bytes;
     Ok(())
@@ -906,7 +920,7 @@ pub fn run_product_replay_worker(
         ));
     }
     if let Some(target) = editable_export_target
-        && !matches!(target, "idml" | "odg" | "pdf")
+        && !matches!(target, "idml" | "odg" | "pdf" | "pdf9up")
     {
         return Err(ProductReplayWorkerError::new(
             "product_edited_export_invalid",
@@ -1322,15 +1336,23 @@ pub fn run_product_replay_worker(
     };
 
     let editable_export = if let Some(target_name) = editable_export_target {
-        let (artifact, loss_report) = if target_name == "pdf" {
+        let (artifact, loss_report) = if matches!(target_name, "pdf" | "pdf9up") {
             // The only PDF renderer used here is the existing source-neutral
             // pub-pdf. It receives exact current EditorSession state, not a
             // fresh source-only conversion of immutable PUB bytes.
-            let rendered = crate::temporary_fixed_pdf::render_current_fixed_pdf(
-                &source_bytes,
-                expected_source_sha256,
-                &session,
-            )
+            let rendered = if target_name == "pdf9up" {
+                crate::temporary_fixed_pdf::render_current_fixed_pdf_a4_card_9up(
+                    &source_bytes,
+                    expected_source_sha256,
+                    &session,
+                )
+            } else {
+                crate::temporary_fixed_pdf::render_current_fixed_pdf(
+                    &source_bytes,
+                    expected_source_sha256,
+                    &session,
+                )
+            }
             .map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_edited_export_blocked",
@@ -1967,7 +1989,7 @@ impl IsolatedProductReplayProducer {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
         require_sha256(project_hash)?;
-        if !matches!(target, "idml" | "odg" | "pdf") {
+        if !matches!(target, "idml" | "odg" | "pdf" | "pdf9up") {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
                 "temporary output admits only IDML, ODG and PDF",
@@ -2092,7 +2114,7 @@ impl IsolatedProductReplayProducer {
             ));
         }
         if let Some(target) = editable_export_target
-            && !matches!(target, "idml" | "odg" | "pdf")
+            && !matches!(target, "idml" | "odg" | "pdf" | "pdf9up")
         {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",

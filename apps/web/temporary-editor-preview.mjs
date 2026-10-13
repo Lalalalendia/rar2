@@ -113,6 +113,7 @@ export async function bootTemporaryEditorPreview({
   const idmlButton = documentObject?.getElementById("temporary-download-idml");
   const odgButton = documentObject?.getElementById("temporary-download-odg");
   const pdfButton = documentObject?.getElementById("temporary-download-pdf");
+  const pdf9upButton = documentObject?.getElementById("temporary-download-pdf9up");
   const editorEnabled = !!(actions && idmlButton && odgButton);
   const csrfToken = newCsrfToken(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
@@ -144,6 +145,13 @@ export async function bootTemporaryEditorPreview({
       idmlButton.disabled = !canDownload;
       odgButton.disabled = !canDownload;
       if (pdfButton) pdfButton.disabled = !canDownload;
+      if (pdf9upButton) {
+        const validCard = interaction?.pages?.length === 1 &&
+          interaction.pages[0]?.width_emu === 3060000 &&
+          interaction.pages[0]?.height_emu === 1980000;
+        pdf9upButton.hidden = !validCard;
+        pdf9upButton.disabled = !canDownload || !validCard;
+      }
     }
   }
 
@@ -408,7 +416,7 @@ export async function bootTemporaryEditorPreview({
       try {
         const anchor = documentObject.createElement("a");
         anchor.href = blobUrl;
-        anchor.download = "chaptera-edited." + target;
+        anchor.download = target === "pdf9up" ? "chaptera-edited-a4-9up.pdf" : "chaptera-edited." + target;
         anchor.hidden = true;
         documentObject.body.appendChild(anchor);
         anchor.click();
@@ -442,6 +450,7 @@ export async function bootTemporaryEditorPreview({
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
     pdfButton?.addEventListener("click", () => download("pdf"));
+    pdf9upButton?.addEventListener("click", () => download("pdf9up"));
   }
   controls();
   return { start, resume, forget, deleteServer };
