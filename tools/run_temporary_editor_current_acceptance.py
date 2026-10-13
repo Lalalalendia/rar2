@@ -582,6 +582,43 @@ def main() -> int:
         if len(new_source_files) != 1:
             raise AssertionError("early-delete original source not physically present")
         new_physical_source = new_source_files[0]
+        # Destroy an actual edited RevisionStream, not only a read-only upload.
+        delete_current_status, delete_current_raw = call(
+            "GET", delete_path + "/current", headers=delete_private,
+        )
+        checked(delete_current_status, 200, "early-delete canonical baseline")
+        delete_current = json.loads(delete_current_raw)
+        source_node = delete_current.get("authoring_graph", {}).get("nodes", {}).get(chosen_id)
+        source_bounds = source_node.get("header", {}).get("bounds") if isinstance(source_node, dict) else None
+        if not isinstance(source_bounds, dict):
+            raise AssertionError("same real PUB lost deterministic moveable NodeId")
+        delete_move = {
+            "protocol_version": "chaptera.commit-request.v1",
+            "document_id": delete_id,
+            "source_hash": expected_hash,
+            "base_revision_id": delete_current["revision_id"],
+            "client_operation_id": "physical-delete-move",
+            "command": {
+                "kind": "move_node_to", "node_id": chosen_id,
+                "x_emu": source_bounds["x"] + 6350,
+                "y_emu": source_bounds["y"] + 6350,
+            },
+        }
+        delete_move_status, delete_move_raw = call(
+            "POST", delete_path + "/move-node",
+            headers=delete_private, body_json=delete_move,
+        )
+        checked(delete_move_status, 200, "real canonical edit before explicit delete")
+        delete_edit = json.loads(delete_move_raw)
+        if delete_edit.get("revision_id") == delete_current["revision_id"]:
+            raise AssertionError("delete test did not first create an edited revision")
+        with sqlite3.connect(db) as conn:
+            early_edges_before = conn.execute(
+                "SELECT COUNT(*) FROM revision_edges WHERE document_id=?",
+                (delete_id.encode(),),
+            ).fetchone()[0]
+        if early_edges_before != 1:
+            raise AssertionError("delete test did not create one private revision edge")
         with sqlite3.connect(db) as conn:
             active_before_delete = conn.execute(
                 "SELECT COUNT(*) FROM reader_guest_sessions "
@@ -607,6 +644,14 @@ def main() -> int:
                     404, "deleted capability retained a private Reader endpoint")
         checked(call("DELETE", delete_path, headers=delete_private)[0],
                 404, "deleted private capability resurrected on duplicate request")
+        after_delete_query = urlencode({
+            "revision_id": delete_edit["revision_id"],
+            "canonical_authoring_revision_id": delete_edit["canonical_authoring_revision_id"],
+        })
+        checked(call(
+            "GET", delete_path + "/exports/idml?" + after_delete_query,
+            headers=delete_private,
+        )[0], 404, "deleted bearer could download edited canonical bytes")
         if new_physical_source.exists():
             raise AssertionError("user deletion retained quarantined original PUB bytes")
         with sqlite3.connect(db) as conn:
@@ -647,6 +692,7 @@ def main() -> int:
             "edited_artifact_receipts": export_receipts,
             "early_delete_proven": True, "early_delete_status": delete_status,
             "early_delete_rows_after_purge": early_remaining,
+            "early_delete_edited_revisions_before": early_edges_before,
             "early_delete_physical_original_removed": True,
             "early_delete_foreign_capability_rejected": True,
             "persistent_export_artifacts": False, "v0_go": False,
