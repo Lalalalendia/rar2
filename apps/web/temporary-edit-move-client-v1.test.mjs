@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates } from "./temporary-edit-move-client-v1.mjs";
+import {
+  TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates,
+  temporaryStoryTextForTextarea, temporaryStoryObservedToCanonicalStory,
+} from "./temporary-edit-move-client-v1.mjs";
 import { TEMPORARY_EDIT_STORAGE_KEY } from "./temporary-edit-browser-session-v0.mjs";
 
 const session = "tempedit:" + "a".repeat(32);
@@ -342,7 +345,7 @@ function storyAck(replayed = false, {beforeText = "Initial", replacement = "Edit
   };
 }
 
-test("Guest story gate excludes linked, styled, table-owned and paragraph text", () => {
+test("Guest story gate excludes linked, styled, table-owned and mixed-ending source", () => {
   const ready = withPlainStory(before);
   assert.deepEqual(temporaryPlainStoryCandidates(ready.authoring_graph),
     [{story_id: storyId, text: "Initial"}]);
@@ -362,7 +365,7 @@ test("Guest story gate excludes linked, styled, table-owned and paragraph text",
   }), []);
   assert.deepEqual(temporaryPlainStoryCandidates({
     ...ready.authoring_graph,
-    stories: { [storyId]: {text: "one\ntwo"} },
+    stories: { [storyId]: {text: "one\r\ntwo\n"} },
   }), []);
   assert.deepEqual(temporaryPlainStoryCandidates({
     ...ready.authoring_graph,
@@ -374,7 +377,7 @@ test("Guest Story replacement is private, Unicode scalar-counted and reopens exa
   const current = withPlainStory(before, "Old \u{1f642}");
   const revised = withPlainStory(after, "New \u{1f642}");
   const { client, requests } = harness([
-    current, storyAck(false, {beforeText: "Old \u{1f642}", replacement: "New \u{1f642}"}), revised,
+    current, storyAck(false, {beforeText: "Old", replacement: "New"}), revised,
   ]);
   await client.refresh();
   const receipt = await client.replaceStory({storyId, newText:"New \u{1f642}"});
@@ -388,7 +391,7 @@ test("Guest Story replacement is private, Unicode scalar-counted and reopens exa
   const sent = JSON.parse(requests[1].options.body);
   assert.deepEqual(sent.command, {
     kind: "replace_story_range", story_id: storyId,
-    start_scalar: 0, end_scalar: 5, replacement_text: "New \u{1f642}",
+    start_scalar: 0, end_scalar: 3, replacement_text: "New",
   });
   for(const r of requests) {
     assert.equal(r.options.headers["x-chaptera-reader-session"], bearer);
@@ -451,4 +454,66 @@ test("Guest Story rejects forged canonical operation fields before acknowledging
   const same = await client.reconcileUnknown();
   assert.equal(same.accepted.replayed, true);
   assert.equal(same.current.authoring_graph.stories[storyId].text, "Edited");
+});
+
+
+test("Guest Story keeps original terminal CR outside the bounded scalar edit", async () => {
+  const current = withPlainStory(before, "Hello\r");
+  const revised = withPlainStory(after, "Edited\r");
+  assert.equal(temporaryStoryTextForTextarea("Hello\r"), "Hello");
+  assert.deepEqual(temporaryPlainStoryCandidates(current.authoring_graph),
+    [{story_id: storyId, text: "Hello\r"}]);
+  const {client, requests} = harness([
+    current, storyAck(false, {beforeText: "Hello", replacement: "Edited"}), revised,
+  ]);
+  await client.refresh();
+  const result = await client.replaceStory({storyId, newText: "Edited"});
+  assert.equal(result.current.authoring_graph.stories[storyId].text, "Edited\r");
+  const submitted = JSON.parse(requests[1].options.body);
+  assert.deepEqual(submitted.command, {
+    kind: "replace_story_range", story_id: storyId,
+    start_scalar: 0, end_scalar: 5, replacement_text: "Edited",
+  });
+  assert.ok(!submitted.command.replacement_text.includes("\r"));
+});
+
+test("Guest Story preserves CRLF and terminal CR while prohibiting new paragraphs", async () => {
+  const original = "Hello\r\nworld\r";
+  const current = withPlainStory(before, original);
+  const desired = "Edited\r\nworld\r";
+  assert.equal(temporaryStoryTextForTextarea(original), "Hello\nworld");
+  assert.deepEqual(temporaryStoryObservedToCanonicalStory(original,"Edited\nworld"),{
+    canonicalText: desired,
+    range: {start_scalar: 0, end_scalar: 5, replacement_text: "Edited"},
+  });
+  assert.throws(() => temporaryStoryObservedToCanonicalStory(original,"Edited\nworld\nnew"),
+    /temporary_story_intent_invalid/);
+  assert.throws(() => temporaryStoryObservedToCanonicalStory(original,"Edited\rworld"),
+    /temporary_story_intent_invalid/);
+  assert.throws(() => temporaryStoryObservedToCanonicalStory(original,"Edited\tworld"),
+    /temporary_story_intent_invalid/);
+  assert.throws(() => temporaryStoryObservedToCanonicalStory(original,"Edited\nworld\n"),
+    /temporary_story_intent_invalid/);
+  assert.deepEqual(temporaryPlainStoryCandidates(current.authoring_graph),
+    [{story_id: storyId, text: original}]);
+  const {client,requests}=harness([
+    current, storyAck(false,{beforeText:"Hello", replacement:"Edited"}),
+    withPlainStory(after,desired),
+  ]);
+  await client.refresh();
+  const result = await client.replaceStory({storyId,newText:"Edited\nworld"});
+  assert.equal(result.current.authoring_graph.stories[storyId].text,desired);
+  assert.equal(JSON.parse(requests[1].options.body).command.replacement_text,"Edited");
+  assert.throws(() => temporaryStoryObservedToCanonicalStory("a\r\nb\n","A\nb\n"),
+    /mixed Publisher Story line endings/);
+});
+
+test("Guest Story keeps original paragraph positions: reordering a separator is rejected", () => {
+  const original="alpha\r\nbeta\r";
+  assert.throws(() =>
+    temporaryStoryObservedToCanonicalStory(original, "alphabet\n"),
+    /temporary_story_intent_invalid/);
+  assert.throws(() =>
+    temporaryStoryObservedToCanonicalStory(original, "al\nphabeta"),
+    /temporary_story_intent_invalid/);
 });

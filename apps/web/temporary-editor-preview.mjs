@@ -1,4 +1,7 @@
-import { TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates } from "./temporary-edit-move-client-v1.mjs";
+import {
+  TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates,
+  temporaryStoryTextForTextarea, temporaryStoryObservedToCanonicalStory,
+} from "./temporary-edit-move-client-v1.mjs";
 import { MoveGestureV1, hitTestSnapshot } from "./interaction-v1.mjs";
 import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 import { TemporaryEditBrowserSessionV0 } from "./temporary-edit-browser-session-v0.mjs";
@@ -177,7 +180,7 @@ export async function bootTemporaryEditorPreview({
     const selected = storyCandidates.find(entry => entry.story_id === previous) ??
       storyCandidates[0];
     storySelect.value = selected?.story_id ?? "";
-    storyText.value = selected?.text ?? "";
+    storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
     storyPanel.hidden = !moveClient || !selected;
   }
 
@@ -437,10 +440,11 @@ export async function bootTemporaryEditorPreview({
     const storyId = storySelect.value;
     const candidate = storyCandidates.find(entry => entry.story_id === storyId);
     const replacement = storyText.value;
-    if (!candidate || typeof replacement !== "string" || !replacement.length ||
-        replacement === candidate.text || /[\p{Cc}]/u.test(replacement) ||
-        new TextEncoder().encode(replacement).length > 8192) {
-      status.textContent = "Поддерживается только изменение непустого текста в одной обычной рамке, без новых абзацев (до 8192 байт).";
+    try {
+      if (!candidate) throw new Error("Story candidate unavailable");
+      temporaryStoryObservedToCanonicalStory(candidate.text, replacement);
+    } catch {
+      status.textContent = "Поддерживается правка обычной текстовой рамки с сохранением существующих границ абзацев; новые разрывы и управляющие символы запрещены (до 8192 байт).";
       return;
     }
     editBusy = true;
@@ -518,7 +522,7 @@ export async function bootTemporaryEditorPreview({
   if (storyEnabled) {
     storySelect.addEventListener("change", () => {
       const selected = storyCandidates.find(entry => entry.story_id === storySelect.value);
-      storyText.value = selected?.text ?? "";
+      storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
     });
     storyText.addEventListener("compositionstart", () => {
       composingStory = true;

@@ -2,6 +2,10 @@
 // Caddy/TLS, real Rust Reader/Editor workers and actual browser downloads.
 // No synthetic fetch/POST edit, Product login, S3 or native PUB writer claim.
 import assert from "node:assert/strict";
+import {
+  prepareStoryTextForTextarea, restoreStoryTextFromTextarea,
+} from "../apps/web/story-line-endings-v1.mjs";
+import { diffObservedTextToScalarReplacement } from "../apps/web/text-protocol-v1.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
@@ -71,6 +75,69 @@ page.on("response", response => {
 const basePath = id => "/v1/editor/temporary-sessions/" + id;
 const SOURCE_MARKER = "ChapteraGuestStoryProof2026";
 
+
+// Privacy-safe source admission trace: only counts, never text, identifiers,
+// private PUB bytes, edit request, source fragments or bearer.
+function storyEligibilityCounts(graph) {
+  const nodes = Object.values(graph?.nodes ?? {});
+  const stories = Object.entries(graph?.stories ?? {});
+  const frameOwners = new Map(), tableOwned = new Set();
+  let frameNodes = 0;
+  for (const node of nodes) {
+    const frameId = node?.payload?.story_frame?.story_id;
+    if (typeof frameId === "string") {
+      frameNodes++;
+      frameOwners.set(frameId, (frameOwners.get(frameId) ?? 0) + 1);
+    }
+    for (const owner of [node?.payload?.table_story, node?.payload?.table]) {
+      if (typeof owner?.story_id === "string") tableOwned.add(owner.story_id);
+    }
+  }
+  const rejected = {
+    invalid_id: 0, frame_owner_count: 0, table_owned: 0,
+    unrecognized_story_text: 0, source_line_endings: 0,
+    disallowed_control: 0, too_large: 0, rich_metadata: 0,
+  };
+  const observed = {contains_cr: 0, contains_lf: 0, terminal_cr: 0,
+    contains_runs: 0, contains_paragraphs: 0, contains_fields: 0,
+    contains_hyperlinks: 0};
+  let eligible = 0;
+  for (const [id, story] of stories) {
+    if (story?.text?.includes("\r")) observed.contains_cr++;
+    if (story?.text?.includes("\n")) observed.contains_lf++;
+    if (story?.text?.endsWith("\r")) observed.terminal_cr++;
+    for (const field of ["runs", "paragraphs", "fields", "hyperlinks"]) {
+      if (Array.isArray(story?.[field]) && story[field].length) {
+        observed["contains_" + field]++;
+      }
+    }
+    let why = null;
+    if (typeof id !== "string" || !id || id.length > 128) why = "invalid_id";
+    else if ((frameOwners.get(id) ?? 0) !== 1) why = "frame_owner_count";
+    else if (tableOwned.has(id)) why = "table_owned";
+    else if (typeof story?.text !== "string") why = "unrecognized_story_text";
+    else {
+      let profile;
+      try { profile = prepareStoryTextForTextarea(story.text); }
+      catch { why = "source_line_endings"; }
+      if (!why && !profile.value.length) why = "unrecognized_story_text";
+      else if (!why && [...profile.value].some(ch =>
+        ch !== "\n" && /\p{Cc}/u.test(ch))) why = "disallowed_control";
+      else if (!why && new TextEncoder().encode(story.text).length > 8192) why = "too_large";
+      else if (!why && ["runs", "paragraphs", "fields", "hyperlinks"].some(key =>
+        Array.isArray(story[key]) && story[key].length)) why = "rich_metadata";
+    }
+    if (why) rejected[why]++;
+    else eligible++;
+  }
+  return {node_count: nodes.length, story_count: stories.length,
+    story_frame_node_count: frameNodes, unique_frame_owner_count: frameOwners.size,
+    table_story_count: tableOwned.size, eligible_count: eligible,
+    first_rejection_counts: rejected, observed_source_counts: observed};
+}
+
+
+
 // This READ uses the same private browser bearer but creates no state/TTL.
 // Mutations MUST occur through the user-visible textarea and Apply button.
 async function readCurrent(action, documentId) {
@@ -132,17 +199,36 @@ try {
   assert.equal(head.source_hash, fixtureHash);
   assert.equal(head.revision_cursor, 0);
   assert.ok(/^sha256:[0-9a-f]{64}$/.test(head.revision_id || ""));
-  await page.locator("#temporary-story-panel").waitFor({
-    state: "visible", timeout: 45000,
-  });
+  const eligibility = storyEligibilityCounts(head.authoring_graph);
+  assert.ok(eligibility.eligible_count > 0,
+    "Real PUB contains no admissible plain Story: " + JSON.stringify(eligibility));
+  try {
+    await page.locator("#temporary-story-panel").waitFor({
+      state: "visible", timeout: 45000,
+    });
+  } catch (error) {
+    const visible = await page.locator("#temporary-story-panel").isVisible();
+    throw Error("Guest Story panel hidden despite candidate gate: " +
+      JSON.stringify(eligibility) + " visible=" + visible +
+      " wait_error=" + error.name);
+  }
   const storyId = await page.locator("#temporary-story-select").inputValue();
   const priorText = head.authoring_graph?.stories?.[storyId]?.text;
   assert.ok(typeof priorText === "string" && priorText.length > 0,
     "source-backed real Publisher Story is not exposed in Guest Current");
-  assert.equal(await page.locator("#temporary-story-text").inputValue(), priorText);
+  const sourceProfile = prepareStoryTextForTextarea(priorText);
+  const observedBefore = await page.locator("#temporary-story-text").inputValue();
+  assert.equal(observedBefore, sourceProfile.value);
   assert.ok(!priorText.includes(SOURCE_MARKER));
-  assert.ok(!/[\p{Cc}]/u.test(priorText));
   assert.ok(new TextEncoder().encode(SOURCE_MARKER).length <= 8192);
+  const firstLineBreak = observedBefore.indexOf("\n");
+  const observedDesired = SOURCE_MARKER +
+    (firstLineBreak === -1 ? "" : observedBefore.slice(firstLineBreak));
+  const desiredCanonical = restoreStoryTextFromTextarea(observedDesired, sourceProfile);
+  const expectedRange = diffObservedTextToScalarReplacement(priorText, desiredCanonical);
+  assert.notEqual(priorText, desiredCanonical);
+  assert.ok(!/[\p{Cc}]/u.test(expectedRange.replacement_text),
+    "Story fixture change must not insert or remove existing Publisher separators");
 
   const beforeScene = await readCurrent("scene", sessionId);
   assert.equal(beforeScene.status, 200);
@@ -153,7 +239,7 @@ try {
   // inspection GETs; allow a bounded refill before the *UI-owned* mutation.
   await page.waitForTimeout(4500);
   // The real browser owns this mutation. No manual service POST is used.
-  await page.locator("#temporary-story-text").fill(SOURCE_MARKER);
+  await page.locator("#temporary-story-text").fill(observedDesired);
   const ackPromise = page.waitForResponse(response =>
     response.request().method() === "POST" &&
     new URL(response.url()).pathname === basePath(sessionId) + "/story-range",
@@ -169,9 +255,9 @@ try {
   assert.equal(submitted.base_revision_id, head.revision_id);
   assert.equal(submitted.command.kind, "replace_story_range");
   assert.equal(submitted.command.story_id, storyId);
-  assert.equal(submitted.command.start_scalar, 0);
-  assert.equal(submitted.command.end_scalar, [...priorText].length);
-  assert.equal(submitted.command.replacement_text, SOURCE_MARKER);
+  assert.equal(submitted.command.start_scalar, expectedRange.start_scalar);
+  assert.equal(submitted.command.end_scalar, expectedRange.end_scalar);
+  assert.equal(submitted.command.replacement_text, expectedRange.replacement_text);
   assert.ok(headers["x-chaptera-reader-session"]?.length === 64);
   assert.ok(headers["x-csrf-token"]?.length === 32);
   assert.equal(accepted?.protocol_version, "chaptera.temporary-editor-story-range.v1");
@@ -184,7 +270,8 @@ try {
   assert.notEqual(accepted.revision_id, head.revision_id);
   assert.equal(accepted.canonical_operation?.kind, "replace_story_range");
   assert.equal(accepted.canonical_operation?.story_id, storyId);
-  assert.equal(accepted.canonical_operation?.replacement_text, SOURCE_MARKER);
+  assert.equal(accepted.canonical_operation?.replacement_text,
+    expectedRange.replacement_text);
 
   await page.waitForFunction(() =>
     document.querySelector("#temporary-status")?.textContent.includes(
@@ -196,14 +283,14 @@ try {
     accepted.canonical_authoring_revision_id);
   assert.equal(revised.body.revision_cursor, 1);
   assert.equal(revised.body.expires_at_ms, accepted.expires_at_ms);
-  assert.equal(revised.body.authoring_graph?.stories?.[storyId]?.text, SOURCE_MARKER);
+  assert.equal(revised.body.authoring_graph?.stories?.[storyId]?.text, desiredCanonical);
   const scene = await readCurrent("scene", sessionId);
   assert.equal(scene.status, 200);
   assert.equal(scene.body.revision_id, accepted.revision_id);
   assert.equal(scene.body.scene?.revision_id, accepted.revision_id);
   assert.equal(scene.body.scene?.source_hash, fixtureHash);
   assert.ok(scene.body.scene?.stories?.some(story =>
-    story.story_id === storyId && story.text === SOURCE_MARKER),
+    story.story_id === storyId && story.text === desiredCanonical),
     "real Reader Story Scene did not project edited source-backed text");
 
   // Identical operation-ID replay is not another accepted revision/TTL renewal.
@@ -321,12 +408,12 @@ try {
   await page.waitForFunction(() =>
     document.querySelector("#temporary-status")?.textContent.includes(
       "Открыта редактируемая ревизия"), null, {timeout: 150000});
-  assert.equal(await page.locator("#temporary-story-text").inputValue(), SOURCE_MARKER);
+  assert.equal(await page.locator("#temporary-story-text").inputValue(), observedDesired);
   const reopened = await readCurrent("current", sessionId);
   assert.equal(reopened.body.revision_cursor, 1);
   assert.equal(reopened.body.revision_id, accepted.revision_id);
   assert.equal(reopened.body.expires_at_ms, accepted.expires_at_ms);
-  assert.equal(reopened.body.authoring_graph.stories[storyId].text, SOURCE_MARKER);
+  assert.equal(reopened.body.authoring_graph.stories[storyId].text, desiredCanonical);
 
   const cap = await page.evaluate(() =>
     JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0")).access_token);

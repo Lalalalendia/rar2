@@ -300,6 +300,9 @@ where
             "/editor/temporary-edit-move-client-v1.mjs",
             get(temporary_edit_move_client),
         )
+        // Existing source-neutral text helpers, not Product AuthN routes.
+        .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
         .route("/editor/interaction-v1.mjs", get(interaction))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
@@ -678,6 +681,8 @@ mod tests {
             "/editor/temporary-editor-preview.css",
             "/cloud-reader/render-v1.mjs",
             "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
             "/editor/interaction-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {
@@ -714,6 +719,8 @@ mod tests {
         let routes = temporary_preview_router::<()>();
         for path in [
             "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
             "/editor/interaction-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {

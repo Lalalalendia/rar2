@@ -1,6 +1,11 @@
 // Browser-only transport for the existing source-bound Guest MoveNode endpoint.
 // No private PUB parsing, browser-owned revision, OIDC or editable Scene claim.
 import { TEMPORARY_EDIT_STORAGE_KEY } from "./temporary-edit-browser-session-v0.mjs";
+import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
+import {
+  prepareStoryTextForTextarea,
+  restoreStoryTextFromTextarea,
+} from "./story-line-endings-v1.mjs";
 
 const SESSION = /^tempedit:[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;
@@ -53,6 +58,52 @@ function newOperationId(cryptoObject) {
 // A deliberately narrow Guest V0 text gate. Only one-frame, unstyled,
 // source-backed, single-paragraph Stories enter the editable list. The
 // isolated EditorSession remains the final eligibility authority.
+
+// Source Publisher CR/CRLF separators are preserved through the existing
+// canonical textarea bridge; the browser cannot add/remove paragraph breaks.
+const HAS_CONTROL = /\p{Cc}/u;
+const UTF8 = new TextEncoder();
+function checkedTextareaProfile(canonicalText) {
+  if (typeof canonicalText !== "string") throw failure("temporary_story_intent_invalid");
+  const profile = prepareStoryTextForTextarea(canonicalText);
+  if (!profile.value.length || UTF8.encode(canonicalText).length > 8192 ||
+      [...profile.value].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  return profile;
+}
+
+export function temporaryStoryTextForTextarea(canonicalText) {
+  return checkedTextareaProfile(canonicalText).value;
+}
+
+export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText) {
+  const profile = checkedTextareaProfile(canonicalText);
+  if (typeof observedText !== "string" || !observedText.length ||
+      observedText.includes("\r") ||
+      [...observedText].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  const countLf = text => [...text].filter(ch => ch === "\n").length;
+  if (countLf(observedText) !== countLf(profile.value)) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  let desired;
+  try { desired = restoreStoryTextFromTextarea(observedText, profile); }
+  catch { throw failure("temporary_story_intent_invalid"); }
+  if (desired === canonicalText || UTF8.encode(desired).length > 8192) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  const range = diffObservedTextToScalarReplacement(canonicalText, desired);
+  // Existing canonical separators must remain outside the modified scalar
+  // span: neither client nor isolated worker admits new paragraph controls.
+  if (range.replacement_text.length > 8192 ||
+      [...range.replacement_text].some(ch => HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  return {canonicalText: desired, range};
+}
+
 export function temporaryPlainStoryCandidates(graph) {
   if (!object(graph?.nodes) || !object(graph?.stories)) return [];
   const frames = new Map();
@@ -64,12 +115,12 @@ export function temporaryPlainStoryCandidates(graph) {
       if (typeof owner?.story_id === "string") tables.add(owner.story_id);
     }
   }
-  const utf8 = new TextEncoder();
   return Object.entries(graph.stories).filter(([id, story]) =>
     typeof id === "string" && id.length > 0 && id.length <= 128 &&
     (frames.get(id) ?? 0) === 1 && !tables.has(id) &&
-    typeof story?.text === "string" && story.text.length > 0 &&
-    !/[\p{Cc}]/u.test(story.text) && utf8.encode(story.text).length <= 8192 &&
+    typeof story?.text === "string" && (() => {
+      try { checkedTextareaProfile(story.text); return true; } catch { return false; }
+    })() &&
     ["runs", "paragraphs", "fields", "hyperlinks"].every(part =>
       !Array.isArray(story[part]) || story[part].length === 0)
   ).map(([story_id, story]) => ({story_id, text: story.text}))
@@ -433,11 +484,9 @@ export class TemporaryGuestMoveClientV1 {
     if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
     const eligible = temporaryPlainStoryCandidates(this.#current.authoring_graph)
       .find(story => story.story_id === storyId);
-    if (!eligible || typeof newText !== "string" || !newText.length ||
-        newText === eligible.text || /[\p{Cc}]/u.test(newText) ||
-        new TextEncoder().encode(newText).length > 8192) {
-      throw failure("temporary_story_intent_invalid");
-    }
+    if (!eligible) throw failure("temporary_story_intent_invalid");
+    const {canonicalText, range} =
+      temporaryStoryObservedToCanonicalStory(eligible.text, newText);
     const clientOperationId = this.#operationIdFactory();
     if (typeof clientOperationId !== "string" ||
         !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
@@ -446,7 +495,7 @@ export class TemporaryGuestMoveClientV1 {
     this.#pending = {
       action: "story-range",
       before: this.#current,
-      expectedText: newText,
+      expectedText: canonicalText,
       request: {
         protocol_version: REQUEST_PROTOCOL,
         document_id: this.#sessionId,
@@ -455,8 +504,8 @@ export class TemporaryGuestMoveClientV1 {
         client_operation_id: clientOperationId,
         command: {
           kind: "replace_story_range", story_id: storyId,
-          start_scalar: 0, end_scalar: [...eligible.text].length,
-          replacement_text: newText,
+          start_scalar: range.start_scalar, end_scalar: range.end_scalar,
+          replacement_text: range.replacement_text,
         },
       },
       ack: null,

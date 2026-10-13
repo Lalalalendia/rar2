@@ -261,7 +261,7 @@ test("temporary Guest plain Story field posts exact private range and repaints a
     seen.push({url, options});
     if (url === base + "/current") {
       return response(savedText === null ?
-        storyCurrent(beforeRev, 0, "Initial") :
+        storyCurrent(beforeRev, 0, "Initial\r") :
         storyCurrent(afterRev, 1, savedText));
     }
     if (url === base + "/scene") {
@@ -283,7 +283,8 @@ test("temporary Guest plain Story field posts exact private range and repaints a
       assert.equal(body.base_revision_id, beforeRev);
       assert.equal(options.headers["x-chaptera-reader-session"], token);
       assert.equal(savedText, null);
-      savedText = body.command.replacement_text;
+      // An original terminal Publisher CR must survive the browser edit.
+      savedText = body.command.replacement_text + "\r";
       return response({
         protocol_version: "chaptera.temporary-editor-story-range.v1",
         document_id: id, source_hash: source, base_revision_id: beforeRev,
