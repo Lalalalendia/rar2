@@ -229,7 +229,9 @@ try {
   } catch {
     const state = await page.locator("#temporary-status").textContent();
     throw Error("physical browser MoveNode failed with UI status: " +
-      String(state).slice(0,180));
+      String(state).slice(0,180) + " http=" +
+      JSON.stringify(observed.responses.slice(-18)) +
+      " page_errors=" + JSON.stringify(browserErrors));
   }
   await settleResponses();
   const nextHead = observed.current.at(-1);
