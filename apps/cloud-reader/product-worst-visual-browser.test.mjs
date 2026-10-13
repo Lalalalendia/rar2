@@ -33,10 +33,22 @@ if (pinnedPlan && cases[id] &&
 const scenePath = process.env.CHAPTERA_PREVIEW_PROBE_SCENE_OUT;
 const outputPath = process.env.CHAPTERA_PREVIEW_BROWSER_OUTPUT;
 const head = process.env.REPOSITORY_COMMIT_SHA;
+const phasePath = process.env.CHAPTERA_PRODUCT_VISUAL_PHASE_FILE;
+const fixedPhases = new Set([
+  "scene_input", "ablation_ready", "chromium_init",
+  "before_navigate", "before_render", "before_page_membership", "before_raster",
+  "after_navigate", "after_render", "after_page_membership", "after_raster",
+  "final_checks", "finished",
+]);
+async function markPrivatePhase(phase) {
+  assert.ok(fixedPhases.has(phase), "unrecognized Product visual test phase");
+  await writeFile(resolve(phasePath), phase + "\n", "utf8");
+}
 assert.ok(expected, "only pinned worst Product020/026/043 may enter visual comparison");
-assert.ok(scenePath && outputPath, "private accepted scene and private output are required");
+assert.ok(scenePath && outputPath && phasePath, "private accepted scene/output/phase are required");
 assert.match(head ?? "", /^[0-9a-f]{40}$/, "exact repository head is required");
 
+await markPrivatePhase("scene_input");
 const scene = JSON.parse(await readFile(resolve(scenePath), "utf8"));
 assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
 assert.equal(scene.source_hash, expected.source);
@@ -67,6 +79,7 @@ assert.deepEqual(
   scene.resources.filter(r => !images.has(r.mime)),
   "font/nonimage resources must be byte-preserved by image-only ablation"
 );
+await markPrivatePhase("ablation_ready");
 const root = dirname(fileURLToPath(import.meta.url));
 const server = createServer(async (request, response) => {
   try {
@@ -98,7 +111,10 @@ const errors = [];
 const external = [];
 
 async function capture(page, data, mode) {
+  assert.ok(mode === "before" || mode === "after");
+  await markPrivatePhase(mode === "before" ? "before_navigate" : "after_navigate");
   await page.goto(origin, { waitUntil: "domcontentloaded" });
+  await markPrivatePhase(mode === "before" ? "before_render" : "after_render");
   await page.evaluate(async payload => {
     const { renderReaderScene } = await import("/render-v1.mjs");
     await renderReaderScene(document.querySelector("#pages"), payload, {
@@ -118,6 +134,7 @@ async function capture(page, data, mode) {
       }
     }));
   }, data);
+  await markPrivatePhase(mode === "before" ? "before_page_membership" : "after_page_membership");
   const svgs = page.locator("#pages svg.page");
   assert.equal(await svgs.count(), expected.pages, "source PAGE membership cannot change");
   const painted = await page.locator("#pages svg image").evaluateAll(nodes => nodes.map(node => ({
@@ -137,6 +154,7 @@ async function capture(page, data, mode) {
     const vb=await svg.evaluate(el => ({w:el.viewBox.baseVal.width,h:el.viewBox.baseVal.height}));
     assert.ok(Math.abs(vb.w-model.width_emu)<1 && Math.abs(vb.h-model.height_emu)<1,
       "browser projected page extent differs from Product Scene");
+    await markPrivatePhase(mode === "before" ? "before_raster" : "after_raster");
     const png=await svg.screenshot({path:join(resolve(outputPath),mode + "-page-" + (i+1) + ".png")});
     assert.equal(png.subarray(0,8).toString("hex"),"89504e470d0a1a0a");
     captures.push({page:i+1,page_id_sha256:sha256(Buffer.from(model.page_id,"utf8")),
@@ -151,6 +169,7 @@ async function capture(page, data, mode) {
   };
 }
 try {
+  await markPrivatePhase("chromium_init");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({
     viewport: { width: 2500, height: 2500 }, deviceScaleFactor: 1,
@@ -163,6 +182,7 @@ try {
   });
   const before = await capture(page, without, "before");
   const after = await capture(page, scene, "after");
+  await markPrivatePhase("final_checks");
   assert.equal(before.image_count, 0, "negative scene must have no images");
   assert.ok(after.image_count >= accepted.length, "all host-owned resources must paint");
   assert.equal(after.unique_painted_resource_ids, accepted.length);
@@ -192,6 +212,7 @@ try {
   };
   await writeFile(join(resolve(outputPath), "browser-receipt.json"),
     JSON.stringify(receipt, null, 2) + "\n", "utf8");
+  await markPrivatePhase("finished");
   console.log("PRODUCT_WORST_PUBLISHER_AB " + JSON.stringify({fixture:id,pages:expected.pages,host_images:accepted.length,real_chromium:true}));
 } finally {
   if (browser) await browser.close();
