@@ -166,6 +166,7 @@ try {
       " body=" + JSON.stringify(bodyText.slice(0,900)) +
       " requests=" + JSON.stringify(requests.map(x=>x.method+" "+x.path)));
   }
+  await direct.scrollIntoViewIfNeeded();
   const rect=await direct.boundingBox();
   if(!rect)throw Error("source-neutral initial shape did not render");
   const x=rect.x+rect.width/2, y=rect.y+rect.height/2;
