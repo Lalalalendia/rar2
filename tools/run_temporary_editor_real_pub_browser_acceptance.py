@@ -77,6 +77,7 @@ def main() -> int:
                          https_port=httpsport)
         caddy_config = caddyfile.read_text(encoding="utf-8")
         required = (
+            "header_up X-Forwarded-Host {hostport}",
             "/editor/temporary-preview",
             "/editor/temporary-edit-move-client-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
