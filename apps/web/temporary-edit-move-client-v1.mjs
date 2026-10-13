@@ -212,6 +212,110 @@ export class TemporaryGuestMoveClientV1 {
     return { accepted: ack, current };
   }
 
+  // Exact revised Reader Scene; never substitute the original Guest Reader
+  // upload scene after a mutation or infer geometry in the browser.
+  async readerScene() {
+    if (this.#busy || this.#pending || this.#refreshRequired || !this.#current) {
+      throw failure("temporary_scene_current_required");
+    }
+    const head = this.#current;
+    let response;
+    try { response = await this.#request("scene"); }
+    catch (error) {
+      this.#refreshRequired = true;
+      throw error;
+    }
+    if (response.protocol_version !== "chaptera.temporary-editor-scene.v1" ||
+        response.document_id !== this.#sessionId ||
+        response.source_hash !== this.#sourceHash ||
+        response.revision_id !== head.revision_id ||
+        response.expires_at_ms !== head.expires_at_ms ||
+        response.scene?.protocol_version !== "chaptera.reader-scene.v1" ||
+        response.scene.document_id !== this.#sessionId ||
+        response.scene.source_hash !== this.#sourceHash ||
+        response.scene.revision_id !== head.revision_id ||
+        !Array.isArray(response.scene.pages) ||
+        !Array.isArray(response.scene.nodes)) {
+      this.#refreshRequired = true;
+      throw failure("temporary_scene_identity_mismatch");
+    }
+    return response.scene;
+  }
+
+  // A private edited-revision report or physical download, never original PUB.
+  // Only query-bound public revision identities appear in the URL, never bearer.
+  async exportEdited(target, { reportOnly = false } = {}) {
+    if (!["idml", "odg"].includes(target)) {
+      throw failure("temporary_export_target_invalid");
+    }
+    if (this.#busy || this.#pending || this.#refreshRequired ||
+        !this.#current || this.#current.revision_cursor === 0) {
+      throw failure("temporary_export_current_required");
+    }
+    const head = this.#current;
+    const query = new URLSearchParams({
+      revision_id: head.revision_id,
+      canonical_authoring_revision_id: head.canonical_authoring_revision_id,
+      report_only: String(reportOnly),
+    });
+    const response = await this.#fetch(
+      this.#path("exports/" + target) + "?" + query.toString(),
+      {
+        method: "GET",
+        headers: {
+          accept: reportOnly ? "application/json" : "application/octet-stream",
+          "x-chaptera-reader-session": this.#token,
+          "x-csrf-token": this.#csrf,
+        },
+        credentials: "omit", mode: "same-origin", cache: "no-store",
+        redirect: "error", referrerPolicy: "no-referrer",
+      },
+    );
+    if (!response?.ok) {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_request_rejected", response?.status);
+    }
+    if (reportOnly) {
+      let report;
+      try { report = await response.json(); }
+      catch { throw failure("temporary_export_report_invalid"); }
+      if (report?.protocol_version !== "chaptera.temporary-edited-export-report.v1" ||
+          report.revision_id !== head.revision_id ||
+          report.canonical_authoring_revision_id !== head.canonical_authoring_revision_id ||
+          report.source_hash !== this.#sourceHash ||
+          report.target !== target || !SECRET.test(report.artifact_sha256 ?? "") ||
+          !object(report.loss_report)) {
+        this.#refreshRequired = true;
+        throw failure("temporary_export_report_identity_mismatch");
+      }
+      return report;
+    }
+    const expectedType = target === "idml"
+      ? "application/vnd.adobe.indesign-idml-package"
+      : "application/vnd.oasis.opendocument.graphics";
+    const expectedHash = response.headers?.get("x-chaptera-export-sha256");
+    if (response.headers?.get("content-type") !== expectedType ||
+        response.headers?.get("x-chaptera-edit-revision") !== head.revision_id ||
+        !SECRET.test(expectedHash ?? "")) {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_download_identity_mismatch");
+    }
+    const blob = await response.blob();
+    if (blob.size <= 0) {
+      throw failure("temporary_export_download_empty");
+    }
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle || typeof subtle.digest !== "function") {
+      throw failure("temporary_export_crypto_unavailable");
+    }
+    const digest = new Uint8Array(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+    const actualHash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+    if (actualHash !== expectedHash) {
+      throw failure("temporary_export_hash_mismatch");
+    }
+    return { blob, target, sha256: actualHash, revision_id: head.revision_id };
+  }
+
   async moveNode({ nodeId, xEmu, yEmu } = {}) {
     if (this.#busy) throw failure("temporary_move_busy");
     if (this.#pending) throw failure("temporary_move_reconciliation_required");
