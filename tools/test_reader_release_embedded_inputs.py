@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".github/workflows/cloud-reader-linux-release.yml"
 EMBEDDED = ROOT / "apps/chaptera-server/src/product_editor_assets.rs"
 LEGACY_PRODUCTION_DEPLOY = ROOT / ".github/workflows/cloud-reader-deploy.yml"
+PROD_READER_CONFIG = ROOT / "deploy/config/chaptera.reader.prod.example.toml"
 
 # All exposed Temporary Editor modules are include_bytes! in the Chaptera Rust
 # release binary. Source-only UI edits must trigger a *new* immutable packet.
@@ -92,6 +93,15 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertFalse(
             LEGACY_PRODUCTION_DEPLOY.exists(),
             "rar2 must not auto-deploy production; use chaptera-site pinned deploy",
+        )
+
+
+    def test_public_temporary_editor_uses_one_hour_sliding_ttl(self):
+        config = PROD_READER_CONFIG.read_text(encoding="utf-8")
+        self.assertRegex(
+            config,
+            r"(?ms)^\[cloud_reader_guest\]\n(?:.*\n)*?session_ttl_seconds = 3600$",
+            "public Temporary Editor must retain accepted sessions for one hour",
         )
 
 

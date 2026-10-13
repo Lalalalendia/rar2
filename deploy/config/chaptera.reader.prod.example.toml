@@ -60,7 +60,9 @@ max_upload_body_bytes = 268435456
 request_timeout_ms = 30000
 
 [cloud_reader_guest]
-session_ttl_seconds = 600
+# Temporary Editor promises one-hour sliding retention after the last accepted edit.
+# Keep production aligned with browser copy and canonical V0 policy.
+session_ttl_seconds = 3600
 max_file_bytes = 8388608
 max_concurrent_uploads = 1
 max_reserved_bytes = 8388608
