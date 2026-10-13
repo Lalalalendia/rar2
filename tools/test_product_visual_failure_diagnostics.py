@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import tempfile
 import unittest
+
+# The physical runner pins one of 39 source cases on import; here we
+# exercise only its PURE error classifiers, with a deterministic public pilot.
+os.environ["CHAPTERA_PRODUCT_MULTI_ID"] = "020"
 
 from product_full_case_census_v1 import FAILURES
 from run_product_oidc_worst_census_acceptance import (
