@@ -1422,8 +1422,7 @@ async fn temporary_editor_edited_export(
         current.revision_id == current.baseline_revision_id && edges.is_empty()
     } else {
         edges.last().is_some_and(|edge| {
-            edge.child_revision == query.revision_id
-                && edge.child_cursor == current.revision_cursor
+            edge.child_revision == query.revision_id && edge.child_cursor == current.revision_cursor
         })
     };
     if !exact_head {
