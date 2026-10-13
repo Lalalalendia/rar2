@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>Chaptera — временный просмотр PUB</title>
+<title>Chaptera — временный редактор PUB</title>
 <link rel="stylesheet" href="/editor/temporary-editor-preview.css">
 </head>
 <body>
 <main id="temporary-preview-root" class="page-shell">
   <header>
     <strong>Chaptera</strong>
-    <h1>Временный просмотр PUB</h1>
+    <h1>Временный редактор PUB</h1>
     <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
-    <p class="notice"><strong>Пока только просмотр.</strong> Редактирование и скачивание изменённого файла не поддерживаются в этом режиме. Оригинальный PUB не изменяется.</p>
+    <p class="notice"><strong>Правка поддерживаемых объектов.</strong> Временная сессия допускает перенос поддерживаемых фигур и выгрузку изменённого IDML или ODG. Сохранение изменённого .pub не обещается. Исходный PUB неизменен.</p>
   </header>
   <section aria-labelledby="open-heading" class="panel">
     <h2 id="open-heading">Открыть файл</h2>
@@ -28,11 +28,15 @@
     </div>
     <p id="temporary-status" role="status" aria-live="polite">Выберите PUB. Данные временной сессии не добавляются в постоянные проекты.</p>
     <p id="temporary-expiry" class="secondary"></p>
-    <p class="secondary">Вкладка хранит приватный ключ сессии только для восстановления просмотра. «Забыть» очищает ключ в этой вкладке, но не удаляет файл с сервера досрочно. Сервер блокирует доступ по истечении TTL и удаляет временные данные.</p>
+    <p class="secondary">Вкладка хранит приватный ключ временной сессии. «Забыть» удаляет только локальный ключ, не серверный файл. Сервер удаляет временные данные через час после последней принятой правки.</p>
   </section>
   <section class="panel" aria-labelledby="pages-heading">
     <h2 id="pages-heading">Страницы</h2>
-    <div id="temporary-pages" class="pages" role="region" aria-label="Предварительный просмотр страниц PUB"></div>
+    <div id="temporary-pages" class="pages" role="region" aria-label="Страницы временного PUB" tabindex="0"></div>
+    <div id="temporary-export-actions" class="actions" hidden>
+      <button id="temporary-download-idml" type="button" disabled>Скачать изменённый IDML</button>
+      <button id="temporary-download-odg" type="button" disabled>Скачать изменённый ODG</button>
+    </div>
   </section>
 </main>
 <script type="module" src="/editor/temporary-editor-preview.mjs"></script>
