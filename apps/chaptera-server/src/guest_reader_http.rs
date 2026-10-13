@@ -1137,7 +1137,6 @@ async fn temporary_editor_move_node(
     }
 }
 
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemporaryEditedExportQuery {
@@ -1154,13 +1153,14 @@ fn validate_temporary_export_query(
     if !matches!(target, "idml" | "odg")
         || query.revision_id.len() != 71
         || !query.revision_id.starts_with("sha256:")
-        || !query.revision_id[7..].bytes().all(|b| {
-            b.is_ascii_digit() || matches!(b, b'a'..=b'f')
-        })
+        || !query.revision_id[7..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
         || query.canonical_authoring_revision_id.len() != 64
-        || !query.canonical_authoring_revision_id.bytes().all(|b| {
-            b.is_ascii_digit() || matches!(b, b'a'..=b'f')
-        })
+        || !query
+            .canonical_authoring_revision_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
     {
         return Err(GuestReaderError::bad_request(
             "temporary_editor_export_request_invalid",
@@ -1188,8 +1188,7 @@ async fn temporary_editor_edited_export(
     // Even report-only requests require the exact same bearer/TTL authority.
     let session = state.authorized_session(&session_id, &headers, now).await?;
     require_temporary_editor_current_session(&session)?;
-    let GuestJson(current) =
-        temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
     if current.revision_id != query.revision_id
         || current.canonical_authoring_revision_id != query.canonical_authoring_revision_id
     {
@@ -1293,10 +1292,7 @@ async fn temporary_editor_edited_export(
         _ => unreachable!("request target was validated before export"),
     };
     response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
-    response_headers.insert(
-        CONTENT_DISPOSITION,
-        HeaderValue::from_static(disposition),
-    );
+    response_headers.insert(CONTENT_DISPOSITION, HeaderValue::from_static(disposition));
     response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response_headers.insert(
         "x-content-type-options",
@@ -1305,7 +1301,10 @@ async fn temporary_editor_edited_export(
     for (name, value) in [
         ("x-chaptera-edit-revision", query.revision_id.as_str()),
         ("x-chaptera-export-sha256", output.artifact_sha256.as_str()),
-        ("x-chaptera-loss-report-sha256", output.loss_report_sha256.as_str()),
+        (
+            "x-chaptera-loss-report-sha256",
+            output.loss_report_sha256.as_str(),
+        ),
     ] {
         response_headers.insert(
             name,
@@ -3006,7 +3005,6 @@ mod tests {
             quarantine_deleted_at_ms: None,
         }
     }
-
 
     #[test]
     fn edited_export_accepts_only_bounded_pinned_revision_and_known_targets() {

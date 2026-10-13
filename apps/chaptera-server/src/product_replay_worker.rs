@@ -120,7 +120,6 @@ pub(crate) const PREVIEW_PART_COUNT: usize = 8;
 const PREVIEW_SIDECAR_MAX_BYTES: usize = PREVIEW_PART_BYTES * PREVIEW_PART_COUNT;
 const PREVIEW_SIDECAR_V1: &str = "chaptera.reader-preview-samples-sidecar.v1";
 
-
 async fn read_isolated_edited_export_sidecar(
     receipt: &mut ProductReplayWorkerReceiptV1,
     result_dir: &Path,
@@ -145,9 +144,7 @@ async fn read_isolated_edited_export_sidecar(
             "isolated LossReport serialization failed",
         )
     })?;
-    if loss.len() > MAX_EDITED_LOSS_REPORT_BYTES
-        || sha256_hex(&loss) != edited.loss_report_sha256
-    {
+    if loss.len() > MAX_EDITED_LOSS_REPORT_BYTES || sha256_hex(&loss) != edited.loss_report_sha256 {
         return Err(ProductReplayWorkerError::new(
             "product_edited_export_receipt_invalid",
             "isolated LossReport differs from bounded checksum",
@@ -1309,18 +1306,22 @@ pub fn run_product_replay_worker(
         let target = match target_name {
             "idml" => EditorEditableTarget::Idml,
             "odg" => EditorEditableTarget::Odg,
-            _ => return Err(ProductReplayWorkerError::new(
-                "product_edited_export_invalid",
-                "unknown edited export target",
-            )),
+            _ => {
+                return Err(ProductReplayWorkerError::new(
+                    "product_edited_export_invalid",
+                    "unknown edited export target",
+                ));
+            }
         };
         let label = format!("{document_id}@{actual_project_hash}");
-        let preview = session.preview_editable_export(target, label.clone()).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_edited_export_blocked",
-                "current revision target preflight rejected",
-            )
-        })?;
+        let preview = session
+            .preview_editable_export(target, label.clone())
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_blocked",
+                    "current revision target preflight rejected",
+                )
+            })?;
         if !preview.report.can_serialize || preview.report.counts.blocking != 0 {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_blocked",
@@ -1913,7 +1914,6 @@ impl IsolatedProductReplayProducer {
         }
         Ok((mutation.operation, mutation.resulting_project))
     }
-
 
     /// Produces one bounded physical artifact from the exact edited revision.
     /// The original source and private worker scratch remain ephemeral.

@@ -137,7 +137,6 @@ mod tests {
 
     use super::{Cli, Command, MigrateAction};
 
-
     #[test]
     fn edited_export_mode_requires_exact_project_and_disallows_mutation_mixing() {
         let base = [
@@ -170,7 +169,12 @@ mod tests {
                 ..
             }
         ));
-        admitted.extend(["--scene-revision-id", "rev", "--scene-baseline-revision-id", "rev"]);
+        admitted.extend([
+            "--scene-revision-id",
+            "rev",
+            "--scene-baseline-revision-id",
+            "rev",
+        ]);
         assert!(Cli::try_parse_from(admitted).is_err());
     }
 
