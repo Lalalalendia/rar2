@@ -301,7 +301,10 @@ where
             get(temporary_edit_move_client),
         )
         .route("/editor/interaction-v1.mjs", get(interaction))
-        .route("/editor/reader-scene-editor-interaction-v1.mjs", get(interaction_scene))
+        .route(
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+            get(interaction_scene),
+        )
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
 
