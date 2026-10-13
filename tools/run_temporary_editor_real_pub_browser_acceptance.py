@@ -20,6 +20,58 @@ import threading
 import run_cloud_reader_live_acceptance as live
 
 
+
+def _cgroup_memory_events(path: pathlib.Path = pathlib.Path("/sys/fs/cgroup/memory.events")) -> dict[str, int]:
+    """Read numeric resource counters only; never dump private process state."""
+    try:
+        return {
+            name: int(value) for name, value in
+            (line.split(maxsplit=1) for line in path.read_text().splitlines())
+            if name in {"oom", "oom_kill", "oom_group_kill"}
+        }
+    except (OSError, ValueError):
+        return {}
+
+
+def _redact_caddy_log(path: pathlib.Path) -> None:
+    """Caddy errors include request headers, including private bearer tokens.
+
+    Retain the useful upstream status/error while never uploading live
+    X-Chaptera-Reader-Session/CSRF values in public Actions artifacts.
+    Unknown/non-JSON lines are dropped, not echoed as potentially private data.
+    """
+    if not path.exists():
+        return
+    secrets = {
+        "authorization", "proxy-authorization", "cookie", "set-cookie",
+        "x-chaptera-reader-session", "x-csrf-token",
+    }
+
+    def strip(value):
+        if isinstance(value, dict):
+            return {
+                key: "[redacted]" if key.lower() in secrets else strip(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [strip(item) for item in value]
+        return value
+
+    try:
+        cleaned = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                cleaned.append(json.dumps(strip(json.loads(line)), sort_keys=True))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                cleaned.append('{"level":"warn","msg":"unparseable Caddy diagnostic suppressed"}')
+        safe = path.with_name(path.name + ".safe")
+        safe.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+        safe.replace(path)
+    except OSError:
+        # A failed scrub must delete the evidence rather than publish tokens.
+        path.unlink(missing_ok=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     for key in ("chaptera", "caddy", "fixture", "out"):
@@ -50,6 +102,7 @@ def main() -> int:
     oidc_thread.start()
     server = proxy = None
     server_stream = caddy_stream = None
+    oom_before = _cgroup_memory_events()
     try:
         live.write_isolation_wrapper(wrapper)
         live.write_config(
@@ -143,8 +196,16 @@ def main() -> int:
             # Never echo raw source bytes, private HTTP payloads or bearer
             # material in the public CI progress output.
             raise AssertionError(
-                "physical Chromium guest acceptance failed; see chaptera/Caddy "
-                "logs and source-safe diagnostic: " +
+                "physical Chromium guest acceptance failed; see sanitized "
+                "chaptera/Caddy logs. Process/oom metadata: " +
+                json.dumps({
+                    "server_exit": server.poll() if server else None,
+                    "proxy_exit": proxy.poll() if proxy else None,
+                    "new_oom_kills": max(
+                        0, _cgroup_memory_events().get("oom_kill", 0)
+                        - oom_before.get("oom_kill", 0)),
+                }, sort_keys=True) +
+                "; source-safe browser diagnostic: " +
                 (result.stderr or result.stdout)[-1800:]
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
@@ -188,6 +249,7 @@ def main() -> int:
             caddy_stream.close()
         if server_stream is not None:
             server_stream.close()
+        _redact_caddy_log(caddy_log)
         oidc.shutdown()
         oidc.server_close()
         oidc_thread.join(timeout=2)
