@@ -470,10 +470,8 @@ async fn stream_export_loss_report(
     let byte_len = bytes.len();
     let (stem, _) = safe_export_filename(&publication.document_id, "json");
     let filename = stem.replacen(".json", "-loss-report.json", 1);
-    let (_, filename_star) = safe_export_filename(
-        &format!("{}-loss-report", publication.document_id),
-        "json",
-    );
+    let (_, filename_star) =
+        safe_export_filename(&format!("{}-loss-report", publication.document_id), "json");
     let disposition =
         format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_star}");
     let mut response = Response::new(Body::from(bytes));
