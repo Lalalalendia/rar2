@@ -14,7 +14,7 @@ use axum::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
     },
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use chaptera_cdm_model::{
     AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1, canonical_revision_json_v1,
@@ -460,6 +460,10 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
             post(issue_temporary_edit_session),
         )
         .route(
+            "/v1/editor/temporary-sessions/{session_id}",
+            delete(delete_temporary_editor_session),
+        )
+        .route(
             "/v1/editor/temporary-sessions/{session_id}/current",
             get(temporary_editor_current),
         )
@@ -476,6 +480,37 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
             get(temporary_editor_edited_export),
         )
         .with_state(state)
+}
+
+/// Explicit anonymous owner revocation. The SQLite state transition denies
+/// all further Guest reads/commits before any physical source deletion starts.
+/// A failed physical delete leaves a revoked, expired row for the sweeper.
+async fn delete_temporary_editor_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, GuestReaderError> {
+    if !is_temporary_edit_session(&session_id) {
+        return Err(GuestReaderError::not_found("guest_session_not_found"));
+    }
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    let owned = state.authorized_session(&session_id, &headers, now).await?;
+    if !state.sessions.revoke_temporary(&session_id, now).await? {
+        return Err(GuestReaderError::gone("guest_session_expired"));
+    }
+    // Existing cleanup owns the exact quarantine generation and RevisionStream
+    // foreign-key purge; a successful 204 means physical cleanup succeeded.
+    state.cleanup_one(owned, now).await?;
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2629,6 +2664,33 @@ impl SqliteGuestReaderSessionStore {
         Ok(())
     }
 
+    /// Revoke only a live temporary-edit capability in one SQLite statement.
+    /// A concurrent revision insert and this update serialize on the same
+    /// SQLite writer; migration 21 rejects all fresh commits after revocation.
+    async fn revoke_temporary(&self, session_id: &str, now_ms: i64) -> Result<bool, GuestReaderError> {
+        if !is_temporary_edit_session(session_id) {
+            return Err(GuestReaderError::not_found("guest_session_not_found"));
+        }
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_guest_sessions
+            SET state='expired',
+                expires_at_ms=MIN(expires_at_ms, ?),
+                terminal_code='temporary_editor_deleted_by_user',
+                updated_at_ms=MAX(updated_at_ms, ?)
+            WHERE session_id=? AND state!='expired' AND expires_at_ms>?
+            "#,
+        )
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(session_id.as_bytes())
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<bool, GuestReaderError> {
         let result = sqlx::query(
             r#"
@@ -3313,6 +3375,54 @@ mod tests {
         assert_eq!(opened.object_etag.as_deref(), Some("etag-1"));
         assert_eq!(opened.observed_byte_len, Some(1024));
         assert_eq!(opened.quarantine_deleted_at_ms, None);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn explicit_temporary_delete_revokes_before_purge_and_cannot_renew_ttl() {
+        let path = migrated_path("tempedit-early-delete").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        store.insert(&temporary).await.unwrap();
+        let stored = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 3_605_000);
+        assert!(store.revoke_temporary(&temporary.session_id, 5_100).await.unwrap());
+        let revoked = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(revoked.state, GuestSessionState::Expired);
+        assert_eq!(revoked.expires_at_ms, 5_100);
+        assert_eq!(
+            revoked.terminal_code.as_deref(),
+            Some("temporary_editor_deleted_by_user")
+        );
+        assert!(!store.revoke_temporary(&temporary.session_id, 5_200).await.unwrap());
+        let rejected = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_200)
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code, "guest_upload_state_conflict");
+        assert_eq!(
+            store
+                .revoke_temporary("guest:0123456789abcdef0123456789abcdef", 5_200)
+                .await
+                .unwrap_err()
+                .code,
+            "guest_session_not_found"
+        );
+        assert!(store.mark_expired(&temporary.session_id, 5_200).await.unwrap());
+        store
+            .mark_quarantine_deleted(&temporary.session_id, 5_200)
+            .await
+            .unwrap();
+        store.delete_expired(&temporary.session_id).await.unwrap();
+        assert!(store.get(&temporary.session_id).await.unwrap().is_none());
 
         store.close().await;
         let _ = fs::remove_file(path);
