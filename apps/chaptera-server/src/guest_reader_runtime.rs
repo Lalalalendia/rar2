@@ -8,10 +8,10 @@ use crate::{
     },
     guest_reader_worker::IsolatedGuestSceneProducer,
     product_replay_worker::IsolatedProductReplayProducer,
-    source_baseline::SourceBaselineProducerConfig,
-    sqlite_store::SqliteRevisionStore,
     public_rate_limit::SqlitePublicRateLimitAuthority,
+    source_baseline::SourceBaselineProducerConfig,
     source_ingress_security::ProductionSourceSecurityScanner,
+    sqlite_store::SqliteRevisionStore,
     upload_admission::SqliteUploadAdmissionAuthority,
 };
 
@@ -91,12 +91,9 @@ pub async fn build_guest_reader_router(
     // It never weakens or wraps the authenticated Product Editor endpoints.
     let guest_state = if config.storage.provider == "filesystem" {
         let worker = IsolatedProductReplayProducer::new(editor_config)?;
-        let revisions = SqliteRevisionStore::open(
-            &config.sqlite.path,
-            config.sqlite.pool_max,
-            busy_timeout,
-        )
-        .await?;
+        let revisions =
+            SqliteRevisionStore::open(&config.sqlite.path, config.sqlite.pool_max, busy_timeout)
+                .await?;
         guest_state.with_temporary_current(worker, revisions)
     } else {
         guest_state

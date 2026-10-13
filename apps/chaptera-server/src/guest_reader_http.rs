@@ -48,9 +48,9 @@ use crate::{
         cloud_revision_project, decode_editor_revision_event_v1, project_sha256,
     },
     source_baseline::derive_import_baseline_identities,
-    sqlite_store::SqliteRevisionStore,
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
+    sqlite_store::SqliteRevisionStore,
     upload_admission::{
         ReserveUploadOutcome, SqliteUploadAdmissionAuthority, UploadAdmissionError,
         UploadAdmissionRequest,
@@ -550,7 +550,6 @@ impl<T: Serialize> IntoResponse for GuestJson<T> {
     }
 }
 
-
 /// The first no-account EditorSession bridge. It reads the same source byte
 /// identity already accepted by Guest Reader, but runs the *existing* Product
 /// EditorSession replay inside isolation. This route is read-only; it does not
@@ -575,11 +574,16 @@ fn require_temporary_editor_current_session(
         return Err(GuestReaderError::not_found("guest_session_not_found"));
     }
     if session.state != GuestSessionState::Opened
-        || !matches!(session.classification.as_deref(), Some("supported" | "partial"))
+        || !matches!(
+            session.classification.as_deref(),
+            Some("supported" | "partial")
+        )
         || session.quarantine_deleted_at_ms.is_some()
         || session.source_sha256.is_none()
     {
-        return Err(GuestReaderError::unprocessable("temporary_editor_source_not_admitted"));
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_source_not_admitted",
+        ));
     }
     Ok(())
 }
@@ -626,9 +630,7 @@ async fn read_exact_temporary_editor_source(
         .read_to_end(&mut bytes)
         .await
         .map_err(|_| GuestReaderError::internal("temporary_editor_source_read_failed"))?;
-    if bytes.len() as u64 != observed
-        || format!("{:x}", Sha256::digest(&bytes)) != expected_hash
-    {
+    if bytes.len() as u64 != observed || format!("{:x}", Sha256::digest(&bytes)) != expected_hash {
         return Err(GuestReaderError::internal(
             "temporary_editor_source_identity_mismatch",
         ));
@@ -655,11 +657,10 @@ async fn temporary_editor_current(
         .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
     // One anonymous bearer cannot exhaust server CPU by queuing unbounded
     // isolated EditorSession workers. This limit is independent of upload cap.
-    let _permit = backend
-        .admission
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000))?;
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
 
     let source_hash = session
         .source_sha256
@@ -701,12 +702,16 @@ async fn temporary_editor_current(
             || edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION
             || edge.authoring_root_hash.is_some()
         {
-            return Err(GuestReaderError::internal("temporary_editor_revision_invalid"));
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
         }
         let event = decode_editor_revision_event_v1(&edge)
             .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
         if event.source_sha256 != source_hash || event.before_project_sha256 != project_hash {
-            return Err(GuestReaderError::internal("temporary_editor_revision_invalid"));
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
         }
         if !matches!(
             event.operation,
@@ -720,10 +725,10 @@ async fn temporary_editor_current(
             .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
         project_hash = project_sha256(&project)
             .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
-        if project_hash != edge.resulting_state_hash
-            || project_hash != event.after_project_sha256
-        {
-            return Err(GuestReaderError::internal("temporary_editor_revision_invalid"));
+        if project_hash != edge.resulting_state_hash || project_hash != event.after_project_sha256 {
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
         }
         let identity = backend
             .revisions
@@ -2459,7 +2464,6 @@ mod tests {
             quarantine_deleted_at_ms: None,
         }
     }
-
 
     #[test]
     fn temporary_editor_current_admission_requires_exact_opened_source() {
