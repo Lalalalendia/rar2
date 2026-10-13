@@ -101,7 +101,7 @@ jobs:
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
       - name: Physically attempt every case and never rank missing or rejected PUBs
         env:
-          SHARD_CASES: ${ matrix.case_ids }
+          SHARD_CASES: ${{ matrix.case_ids }}
         shell: bash
         run: |
           set -euo pipefail
@@ -176,11 +176,11 @@ jobs:
           python tools/security_leak_scan_v1.py "target/product-physical-full/census-$SHARD_ID.json" \
             --forbid-literal "chaptera-local-only-secret"
       - name: Publish only fixed-code diagnostic, never private PUB or log files
-        if: ${ always() && steps.census_privacy.outcome == 'success' }
+        if: ${{ always() && steps.census_privacy.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: product-49-111-census-${ matrix.shard }
-          path: target/product-physical-full/census-${ matrix.shard }.json
+          name: product-49-111-census-${{ matrix.shard }}
+          path: target/product-physical-full/census-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 14
       - name: Ensure shard artifact contains only source-neutral allowlisted JSON
