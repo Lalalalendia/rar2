@@ -285,8 +285,10 @@ export async function bootTemporaryEditorPreview({
       input.value = "";
       status.textContent = "Сессия удалена с сервера. Для дальнейшей работы загрузите новый PUB.";
     } catch {
-      // A 404/410 after a lost receipt is not independent proof of purge.
-      // Keep the tab key for recovery and never claim server deletion.
+      // A lost receipt may conceal an already-revoked session. Preserve the
+      // tab capability for recovery but do not leave a stale edit scene active.
+      clearEditor();
+      pages.replaceChildren();
       status.textContent = "Удаление не подтверждено сервером. Повторите попытку или дождитесь истечения TTL.";
     } finally {
       busy = false;
