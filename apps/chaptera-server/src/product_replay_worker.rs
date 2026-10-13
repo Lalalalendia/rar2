@@ -413,6 +413,7 @@ fn take_exclusive_story_range_receipt(
     if receipt.baseline_project.is_some()
         || receipt.move_node.is_some()
         || receipt.reader_scene.is_some()
+        || receipt.editable_export.is_some()
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
@@ -1516,6 +1517,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1551,6 +1553,7 @@ impl IsolatedProductReplayProducer {
                 document_id,
                 source_sha256,
                 source_bytes,
+                None,
                 None,
                 None,
                 None,
@@ -1643,6 +1646,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 Some(intent),
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1723,6 +1727,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
                 None,
                 None,
             )
@@ -1848,6 +1853,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1908,6 +1914,94 @@ impl IsolatedProductReplayProducer {
         Ok((mutation.operation, mutation.resulting_project))
     }
 
+
+    /// Produces one bounded physical artifact from the exact edited revision.
+    /// The original source and private worker scratch remain ephemeral.
+    pub async fn export_editable_current(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: &EditorProject,
+        project_hash: &str,
+        target: &str,
+    ) -> Result<IsolatedEditableExportReceiptV1, ProductReplayWorkerError> {
+        require_document_id(document_id)?;
+        require_sha256(source_sha256)?;
+        require_sha256(project_hash)?;
+        if !matches!(target, "idml" | "odg") {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "temporary output admits only IDML and ODG",
+            ));
+        }
+        let project_bytes = serde_json::to_vec(project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "canonical edited project cannot be encoded",
+            )
+        })?;
+        if project_bytes.len() > MAX_PROJECT_BYTES as usize
+            || project_sha256(project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_invalid",
+                    "canonical project hash is unavailable",
+                )
+            })? != project_hash
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "exact edited project identity mismatch",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, project_hash)),
+                None,
+                None,
+                None,
+                Some(target),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            project_hash,
+        )?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "worker returned unrelated authority during edited export",
+            ));
+        }
+        let edited = receipt.editable_export.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "worker returned no edited artifact",
+            )
+        })?;
+        if edited.target != target
+            || edited.artifact_bytes.len() != edited.artifact_byte_len
+            || edited.artifact_bytes.is_empty()
+            || sha256_hex(&edited.artifact_bytes) != edited.artifact_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "physical edited bytes do not match worker receipt",
+            ));
+        }
+        Ok(edited)
+    }
+
     /// Executes only the existing per-file isolation harness. The host may
     /// serialize verified bytes but must not interpret the source PUB.
     #[expect(
@@ -1923,6 +2017,7 @@ impl IsolatedProductReplayProducer {
         move_node: Option<&IsolatedMoveNodeIntentV1>,
         reader_scene: Option<&IsolatedReaderSceneIntentV1>,
         story_range: Option<&IsolatedStoryRangeIntentV1>,
+        editable_export_target: Option<&str>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -1938,6 +2033,7 @@ impl IsolatedProductReplayProducer {
         if usize::from(move_node.is_some())
             + usize::from(reader_scene.is_some())
             + usize::from(story_range.is_some())
+            + usize::from(editable_export_target.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -1949,6 +2045,20 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
                 "Reader scene request must have an exact project without a mutation",
+            ));
+        }
+        if editable_export_target.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "edited output requires a canonical verified project",
+            ));
+        }
+        if let Some(target) = editable_export_target
+            && !matches!(target, "idml" | "odg")
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "unknown edited target",
             ));
         }
         if story_range.is_some() && project.is_none() {
@@ -2045,6 +2155,9 @@ impl IsolatedProductReplayProducer {
         if story_range.is_some() {
             command.arg("--story-intent-json").arg(&story_intent_path);
         }
+        if let Some(target) = editable_export_target {
+            command.arg("--editable-export-target").arg(target);
+        }
         if let Some(scene) = reader_scene {
             command
                 .arg("--scene-revision-id")
@@ -2117,6 +2230,7 @@ impl IsolatedProductReplayProducer {
                 )
             })?;
         read_isolated_preview_sidecar(&mut receipt, &result_dir).await?;
+        read_isolated_edited_export_sidecar(&mut receipt, &result_dir).await?;
         Ok(receipt)
     }
 }
