@@ -104,13 +104,13 @@ jobs:
             xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- \
             "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
-          grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
+          grep -aFq "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.idml"
           CHAPTERA_SCRIBUS_SLA_OUT="$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla" \
             xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- \
             "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.idml"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla"
-          grep -aF "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla"
+          grep -aFq "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla"
 
       - name: Prove ODG survives independent LibreOffice Draw consumer
         env:
@@ -122,14 +122,14 @@ jobs:
           mkdir -p "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice"
           libreoffice --headless             --convert-to fodg             --outdir "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice"             "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
-          grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
+          grep -aFq "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.odg"
           libreoffice --headless \
             --convert-to fodg \
             --outdir "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice" \
             "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.odg"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/story-edited.fodg"
-          grep -aF "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/story-edited.fodg"
+          grep -aFq "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/story-edited.fodg"
 
       - name: Record source-safe editable-target receipt
         env:
