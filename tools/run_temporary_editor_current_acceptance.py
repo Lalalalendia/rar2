@@ -144,6 +144,14 @@ def main() -> int:
             raise AssertionError("pinned Publisher source is not Reader-eligible")
         if opened.get("source_sha256") != expected_hash:
             raise AssertionError("Reader source hash differs from immutable upload")
+        physical_source_files = [
+            p for p in (work / "blob-store").rglob("*")
+            if p.is_file() and p.stat().st_size == fixture.stat().st_size
+            and live.sha256_file(p) == expected_hash
+        ]
+        if len(physical_source_files) != 1:
+            raise AssertionError("the exact quarantined original PUB is not physically present")
+        physical_source = physical_source_files[0]
         expected_expiry = int(opened["expires_at_ms"])
         if not 3_000_000 < expected_expiry - int(time.time() * 1000) <= 3_600_000:
             raise AssertionError("accepted upload did not start one-hour TTL")
@@ -201,6 +209,8 @@ def main() -> int:
             ).fetchone()[0]
         if remaining:
             raise AssertionError("expired temporary session kept its private metadata")
+        if physical_source.exists():
+            raise AssertionError("expired temporary session retained original PUB bytes")
 
         receipt = {
             "schema": "chaptera.tempedit-canonical-current-https.v1",
@@ -208,7 +218,7 @@ def main() -> int:
             "canonical_current_status": current_status, "revision_cursor": 0,
             "private_capability_required": True, "foreign_token_rejected": True,
             "ordinary_guest_rejected": True, "no_read_ttl_extension": True,
-            "expired_access_status": expired_status, "expired_rows": remaining,
+            "expired_access_status": expired_status, "expired_rows": remaining, "physical_original_deleted": True,
             "isolated_real_pub_read": True, "backend_filesystem": True,
             "raw_source_or_bearer_in_receipt": False,
             "mutation_proven": False, "edited_download_proven": False, "v0_go": False,
