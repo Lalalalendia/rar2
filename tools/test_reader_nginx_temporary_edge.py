@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -55,7 +58,7 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
         cls.patterns = []
         cls.blocks = []
         for match in re.finditer(r"^    location ~ (\S+) \{\n", cls.template, re.M):
-            pattern = match.group(1)
+            pattern = match.group(1).strip('"')
             if not (pattern.startswith("^/(?:editor/") or
                     pattern.startswith("^/v1/editor/temporary-sessions")):
                 continue
@@ -67,6 +70,26 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
 
     def admitted(self, path: str) -> bool:
         return any(pattern.fullmatch(path) is not None for pattern in self.patterns)
+
+    def test_real_nginx_configuration_grammar(self):
+        nginx = shutil.which("nginx")
+        if not nginx:
+            self.skipTest("nginx binary not installed")
+        with tempfile.TemporaryDirectory(prefix="chaptera-nginx-edge-") as tmp:
+            config = Path(tmp) / "nginx.conf"
+            config.write_text(
+                "pid " + str(Path(tmp) / "nginx.pid") + ";\\n"
+                "error_log stderr;\\n"
+                "events { worker_connections 32; }\\n"
+                "http { include " + str(CONFIG) + "; }\\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [nginx, "-t", "-p", tmp + "/", "-c", str(config)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0,
+                             "actual Nginx parser rejected production guest template")
 
     def test_exact_guest_rule_count_and_positive_paths(self):
         self.assertEqual(2, len(self.patterns))

@@ -69,7 +69,8 @@ server {
     # Guest-only upload, capability-authenticated Current/Scene/MoveNode,
     # bounded edited exports and explicit DELETE. Restrict path to the
     # canonical tempedit:hex32 identity; arbitrary Product routes remain 404.
-    location ~ ^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|exports/(?:idml|odg|pdf)))?)?$ {
+    # Quantified {32} requires quoted PCRE for Nginx config lexer.
+    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|exports/(?:idml|odg|pdf)))?)?$" {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
