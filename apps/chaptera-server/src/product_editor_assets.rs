@@ -257,6 +257,30 @@ where
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
 
+/// Minimal public assets for an anonymous filesystem-backed temporary
+/// session. Unlike router(), this must not expose Product/OIDC project
+/// routes or document editor modules when Chaptera runs without AuthN.
+pub fn temporary_preview_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/editor/temporary-preview", get(temporary_preview))
+        .route(
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            get(temporary_edit_browser_session),
+        )
+        .route(
+            "/editor/temporary-editor-preview.mjs",
+            get(temporary_preview_entry),
+        )
+        .route(
+            "/editor/temporary-editor-preview.css",
+            get(temporary_preview_css),
+        )
+        .route("/cloud-reader/render-v1.mjs", get(reader_render))
+}
+
 pub fn version_manifest() -> Value {
     let files = ASSETS
         .iter()
@@ -568,6 +592,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn guest_only_preview_route_excludes_product_auth_and_edit_pages() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-preview",
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            "/editor/temporary-editor-preview.mjs",
+            "/editor/temporary-editor-preview.css",
+            "/cloud-reader/render-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        }
+
+        // The no-auth renderer lane must NOT expose the normal Product
+        // project/login/editor entry or accidentally create a guest edit API.
+        for path in [
+            "/editor",
+            "/editor/new",
+            "/editor/projects",
+            "/editor/doc/10000000-0000-7000-8000-000000000001",
+            "/editor/product-editor-entry-v1.mjs",
+            "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     #[tokio::test]
