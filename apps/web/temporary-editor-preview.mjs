@@ -1,4 +1,7 @@
-import { TemporaryGuestMoveClientV1 } from "./temporary-edit-move-client-v1.mjs";
+import {
+  TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates,
+  temporaryStoryTextForTextarea, temporaryStoryObservedToCanonicalStory,
+} from "./temporary-edit-move-client-v1.mjs";
 import { MoveGestureV1, hitTestSnapshot } from "./interaction-v1.mjs";
 import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 import { TemporaryEditBrowserSessionV0 } from "./temporary-edit-browser-session-v0.mjs";
@@ -114,6 +117,11 @@ export async function bootTemporaryEditorPreview({
   const odgButton = documentObject?.getElementById("temporary-download-odg");
   const pdfButton = documentObject?.getElementById("temporary-download-pdf");
   const editorEnabled = !!(actions && idmlButton && odgButton);
+  const storyPanel = documentObject?.getElementById("temporary-story-panel");
+  const storySelect = documentObject?.getElementById("temporary-story-select");
+  const storyText = documentObject?.getElementById("temporary-story-text");
+  const storyApply = documentObject?.getElementById("temporary-story-apply");
+  const storyEnabled = !!(editorEnabled && storyPanel && storySelect && storyText && storyApply);
   const csrfToken = newCsrfToken(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
     csrfToken, storage, fetchImpl,
@@ -125,6 +133,8 @@ export async function bootTemporaryEditorPreview({
   let canonicalCurrent = null;
   let interaction = null;
   let partialFidelity = false;
+  let storyCandidates = [];
+  let composingStory = false;
   let gesture = null;
   let gesturePage = null;
   let gestureOverlay = null;
@@ -145,6 +155,33 @@ export async function bootTemporaryEditorPreview({
       odgButton.disabled = !canDownload;
       if (pdfButton) pdfButton.disabled = !canDownload;
     }
+    if (storyEnabled) {
+      const locked = busy || editBusy || !moveClient ||
+        moveClient.status.pending_reconciliation || moveClient.status.refresh_required;
+      storyPanel.hidden = !moveClient || storyCandidates.length === 0;
+      storySelect.disabled = locked;
+      storyText.disabled = locked;
+      storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
+    }
+  }
+
+  function refreshStoryEditor(preferredStoryId = null) {
+    if (!storyEnabled) return;
+    const previous = preferredStoryId ?? storySelect.value;
+    storyCandidates = moveClient
+      ? temporaryPlainStoryCandidates(canonicalCurrent?.authoring_graph) : [];
+    storySelect.replaceChildren();
+    for (const [index, entry] of storyCandidates.entries()) {
+      const option = documentObject.createElement("option");
+      option.value = entry.story_id;
+      option.textContent = "Рамка " + (index + 1) + ": " + entry.text.slice(0, 55);
+      storySelect.appendChild(option);
+    }
+    const selected = storyCandidates.find(entry => entry.story_id === previous) ??
+      storyCandidates[0];
+    storySelect.value = selected?.story_id ?? "";
+    storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
+    storyPanel.hidden = !moveClient || !selected;
   }
 
   function clearGesture() {
@@ -160,6 +197,9 @@ export async function bootTemporaryEditorPreview({
     moveClient = null;
     canonicalCurrent = null;
     interaction = null;
+    storyCandidates = [];
+    composingStory = false;
+    refreshStoryEditor();
   }
 
   function overlayBounds(bounds) {
@@ -213,6 +253,7 @@ export async function bootTemporaryEditorPreview({
         return;
       }
     }
+    refreshStoryEditor();
     if (moveClient) {
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = partialFidelity
@@ -374,6 +415,7 @@ export async function bootTemporaryEditorPreview({
       await renderer(pages, exactScene, {
         maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
       });
+      refreshStoryEditor();
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML, ODG или PDF." +
         (partialFidelity ? " Needs review / Partial: результат необходимо проверить." : "");
@@ -385,6 +427,49 @@ export async function bootTemporaryEditorPreview({
       if (!moveClient.status.pending_reconciliation) {
         clearEditor();
       }
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
+
+
+  async function applyStoryEdit() {
+    if (!storyEnabled || busy || editBusy || composingStory || !moveClient ||
+        moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
+    const storyId = storySelect.value;
+    const candidate = storyCandidates.find(entry => entry.story_id === storyId);
+    const replacement = storyText.value;
+    try {
+      if (!candidate) throw new Error("Story candidate unavailable");
+      temporaryStoryObservedToCanonicalStory(candidate.text, replacement);
+    } catch {
+      status.textContent = "Поддерживается правка обычной текстовой рамки с сохранением существующих границ абзацев; новые разрывы и управляющие символы запрещены (до 8192 байт).";
+      return;
+    }
+    editBusy = true;
+    controls();
+    status.textContent = "Сохраняется текст в канонической ревизии…";
+    try {
+      const result = await moveClient.replaceStory({ storyId, newText: replacement });
+      canonicalCurrent = result.current;
+      const scene = await moveClient.readerScene();
+      interaction = projectReaderSceneToEditorInteractionScene(scene);
+      await renderer(pages, scene, {
+        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
+      });
+      refreshStoryEditor(storyId);
+      expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
+      status.textContent = "Текст подтверждён сервером в изменённой ревизии. Доступен экспорт IDML, ODG или PDF." +
+        (partialFidelity ? " Needs review / Partial: перед использованием проверьте экспорт." : "");
+    } catch {
+      // The POST may have committed despite a lost ACK or Scene failure.
+      // Never claim an unsaved local textarea as authoritative.
+      pages.replaceChildren();
+      interaction = null;
+      storyPanel.hidden = true;
+      status.textContent = "Исход изменения текста неизвестен. Восстановите сессию перед новой правкой.";
+      if (!moveClient?.status.pending_reconciliation) clearEditor();
     } finally {
       editBusy = false;
       controls();
@@ -434,6 +519,21 @@ export async function bootTemporaryEditorPreview({
   resumeButton.addEventListener("click", resume);
   forgetButton.addEventListener("click", forget);
   deleteButton?.addEventListener("click", () => deleteServer());
+  if (storyEnabled) {
+    storySelect.addEventListener("change", () => {
+      const selected = storyCandidates.find(entry => entry.story_id === storySelect.value);
+      storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
+    });
+    storyText.addEventListener("compositionstart", () => {
+      composingStory = true;
+      controls();
+    });
+    storyText.addEventListener("compositionend", () => {
+      composingStory = false;
+      controls();
+    });
+    storyApply.addEventListener("click", applyStoryEdit);
+  }
   if (editorEnabled) {
     pages.addEventListener("pointerdown", pointerDown);
     pages.addEventListener("pointermove", pointerMove);

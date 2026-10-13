@@ -340,3 +340,103 @@ test("constructor rejects malformed CSRF token", () => {
     csrfToken: "bad", fetchImpl: async () => response(issue),
   }), /temporary_client_config_invalid/);
 });
+
+
+test("200 truncated open body recovers through one bound GET Scene, never another write", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push({url, opts});
+      switch (calls.length) {
+        case 1: return response(issue);
+        case 2: return response(stored);
+        case 3: return new Response('{"protocol_version":"truncated', {
+          status: 200, headers: {"content-type": "application/json"},
+        });
+        case 4: return response(opened);
+        default: throw Error("unexpected second mutation or unbounded open retry");
+      }
+    },
+  });
+  const result = await client.start(file);
+  assert.equal(result.source_sha256, sha);
+  assert.equal(result.expires_at_ms, stored.expires_at_ms);
+  assert.equal(client.hasSavedSession(), true);
+  assert.deepEqual(calls.map(c => [c.url, c.opts.method]), [
+    ["/v1/editor/temporary-sessions", "POST"],
+    [path + "content", "PUT"],
+    [path + "open", "POST"],
+    [path + "scene", "GET"],
+  ]);
+  assert.equal(calls[3].opts.body, undefined);
+  assert.equal(calls[3].opts.headers["x-chaptera-reader-session"], token);
+  assert.equal(calls[3].opts.credentials, "omit");
+  assert.equal(calls[3].opts.redirect, "error");
+  for (const c of calls) assert.ok(!c.url.includes(token));
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).expires_at_ms, stored.expires_at_ms);
+});
+
+test("HTTP 200 malformed open object must re-admit a real Scene with matching identity", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      if (calls.length === 3) return response([]);
+      return response({...opened, session_id: "tempedit:" + "f".repeat(32)});
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "temporary_response_identity_mismatch");
+  assert.deepEqual(calls, [
+    ["/v1/editor/temporary-sessions", "POST"],
+    [path + "content", "PUT"],
+    [path + "open", "POST"],
+    [path + "scene", "GET"],
+  ]);
+  assert.equal(client.hasSavedSession(), true);
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).source_sha256, null);
+});
+
+test("malformed open error status 5xx never gets reinterpreted as accepted", async () => {
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: storage(),
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      return new Response("malformed proxy error body", {
+        status: 503, headers: {"content-type": "text/html"},
+      });
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "temporary_response_invalid" && error.status === 503);
+  assert.equal(calls.length, 3, "5xx must not schedule second POST or a false 200 Scene recovery");
+});
+
+test("failed non-renewing GET Scene retains recovery capability without asserting success", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      // A syntactically valid {} is not a truncated /open response. Force the
+      // HTTP 200 JSON parse failure that authorizes one private Scene read-back.
+      if (calls.length === 3) return new Response("{truncated", {
+        status: 200, headers: {"content-type": "application/json"},
+      });
+      return response({ error: "guest_scene_not_ready" }, 409);
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "guest_scene_not_ready" && error.status === 409);
+  assert.equal(client.hasSavedSession(), true);
+  assert.deepEqual(calls.map(x => x[1]), ["POST", "PUT", "POST", "GET"]);
+});

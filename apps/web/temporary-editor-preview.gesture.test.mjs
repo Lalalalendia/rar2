@@ -227,3 +227,99 @@ test("unsupported upload never requests authoring state or permits a move", asyn
   assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
 });
+
+
+test("temporary Guest plain Story field posts exact private range and repaints accepted Scene", async () => {
+  const dom = fakeDom();
+  for (const key of [
+    "temporary-story-panel", "temporary-story-select",
+    "temporary-story-text", "temporary-story-apply",
+  ]) {
+    dom.nodes[key] = {
+      hidden: false, disabled: false, value: "", textContent: "",
+      handlers: {}, options: [],
+      addEventListener(type, callback) { this.handlers[type] = callback; },
+      replaceChildren() { this.options = []; },
+      appendChild(item) { this.options.push(item); },
+    };
+  }
+  dom.documentObject.createElement = tag => {
+    assert.equal(tag, "option");
+    return {value: "", textContent: ""};
+  };
+  const storyId = "01234567-89ab-4def-8abc-123456789abc";
+  const network = server(), renders = [];
+  let savedText = null;
+  const storyCurrent = (rev, cursor, text) => {
+    const reply = current(rev, cursor, 100, 200);
+    reply.authoring_graph.nodes[nodeId].payload = { story_frame: { story_id: storyId } };
+    reply.authoring_graph.stories = { [storyId]: {text, runs: [], paragraphs: [], fields: [], hyperlinks: []} };
+    return reply;
+  };
+  const seen = [];
+  const fetchImpl = async (url, options) => {
+    seen.push({url, options});
+    if (url === base + "/current") {
+      return response(savedText === null ?
+        storyCurrent(beforeRev, 0, "Initial\r") :
+        storyCurrent(afterRev, 1, savedText));
+    }
+    if (url === base + "/scene") {
+      return response({
+        protocol_version: "chaptera.temporary-editor-scene.v1",
+        document_id: id, source_hash: source,
+        revision_id: savedText === null ? beforeRev : afterRev,
+        expires_at_ms: savedText === null ? 4_600_000 : 8_200_000,
+        scene: readerScene(savedText === null ? beforeRev : afterRev),
+      });
+    }
+    if (url === base + "/story-range") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.command.story_id, storyId);
+      assert.equal(body.command.kind, "replace_story_range");
+      assert.equal(body.command.start_scalar, 0);
+      assert.equal(body.command.end_scalar, 7);
+      assert.equal(body.command.replacement_text, "Edited");
+      assert.equal(body.base_revision_id, beforeRev);
+      assert.equal(options.headers["x-chaptera-reader-session"], token);
+      assert.equal(savedText, null);
+      // An original terminal Publisher CR must survive the browser edit.
+      savedText = body.command.replacement_text + "\r";
+      return response({
+        protocol_version: "chaptera.temporary-editor-story-range.v1",
+        document_id: id, source_hash: source, base_revision_id: beforeRev,
+        revision_id: afterRev, canonical_authoring_revision_id: afterCanon,
+        client_operation_id: body.client_operation_id, expires_at_ms: 8_200_000,
+        replayed: false, scene_refresh: "current",
+        canonical_operation: {
+          kind: "replace_story_range", story_id: storyId,
+          start_scalar: 0, end_scalar: 7, replacement_text: "Edited",
+        },
+      });
+    }
+    return network.fetchImpl(url, options);
+  };
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+    storage: storage(), fetchImpl,
+    renderer: async (_, scene) => {renders.push(scene);},
+  });
+  await controller.start({name: "example.pub", size: 1729});
+  assert.equal(dom.nodes["temporary-story-panel"].hidden, false);
+  assert.equal(dom.nodes["temporary-story-select"].value, storyId);
+  assert.equal(dom.nodes["temporary-story-text"].value, "Initial");
+  const editor = dom.nodes["temporary-story-text"];
+  const apply = dom.nodes["temporary-story-apply"];
+  editor.value = "Edited";
+  editor.handlers.compositionstart();
+  await apply.handlers.click();
+  assert.equal(seen.filter(call => call.url.endsWith("/story-range")).length, 0);
+  editor.handlers.compositionend();
+  await apply.handlers.click();
+  assert.equal(seen.filter(call => call.url.endsWith("/story-range")).length, 1);
+  assert.equal(renders.at(-1).revision_id, afterRev);
+  assert.equal(dom.nodes["temporary-story-text"].value, "Edited");
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+  assert.match(dom.nodes["temporary-status"].textContent, /Текст подтверждён сервером/);
+});
