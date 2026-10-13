@@ -117,6 +117,7 @@ pub struct GuestReaderHttpState {
     scanner: Arc<ProductionSourceSecurityScanner>,
     scene_worker: IsolatedGuestSceneProducer,
     temporary_editor: Option<TemporaryEditorCurrentBackend>,
+    cleanup_lock: Arc<tokio::sync::Mutex<()>>,
     observability: ReaderObservabilityV1,
     config: GuestReaderHttpConfig,
 }
@@ -401,6 +402,7 @@ impl GuestReaderHttpState {
             scanner: Arc::new(scanner),
             scene_worker,
             temporary_editor: None,
+            cleanup_lock: Arc::new(tokio::sync::Mutex::new(())),
             observability: ReaderObservabilityV1::default(),
             config,
         })
@@ -2106,6 +2108,13 @@ impl GuestReaderHttpState {
         session: GuestReaderSession,
         now_ms: i64,
     ) -> Result<(), GuestReaderError> {
+        // DELETE, expiry reads and the periodic sweeper may all target the
+        // same exact quarantine generation. Only one physical cleanup owns it
+        // at a time; reload current state after acquiring the shared lock.
+        let _cleanup = self.cleanup_lock.lock().await;
+        let Some(session) = self.sessions.get(&session.session_id).await? else {
+            return Ok(());
+        };
         // Claim expiration in SQLite before touching the physical source. A
         // future accepted editor commit can extend expires_at_ms, so an
         // expired_pending() snapshot is not deletion authority by itself.
@@ -2667,7 +2676,11 @@ impl SqliteGuestReaderSessionStore {
     /// Revoke only a live temporary-edit capability in one SQLite statement.
     /// A concurrent revision insert and this update serialize on the same
     /// SQLite writer; migration 21 rejects all fresh commits after revocation.
-    async fn revoke_temporary(&self, session_id: &str, now_ms: i64) -> Result<bool, GuestReaderError> {
+    async fn revoke_temporary(
+        &self,
+        session_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, GuestReaderError> {
         if !is_temporary_edit_session(session_id) {
             return Err(GuestReaderError::not_found("guest_session_not_found"));
         }
@@ -3394,7 +3407,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.expires_at_ms, 3_605_000);
-        assert!(store.revoke_temporary(&temporary.session_id, 5_100).await.unwrap());
+        assert!(
+            store
+                .revoke_temporary(&temporary.session_id, 5_100)
+                .await
+                .unwrap()
+        );
         let revoked = store.get(&temporary.session_id).await.unwrap().unwrap();
         assert_eq!(revoked.state, GuestSessionState::Expired);
         assert_eq!(revoked.expires_at_ms, 5_100);
@@ -3402,7 +3420,12 @@ mod tests {
             revoked.terminal_code.as_deref(),
             Some("temporary_editor_deleted_by_user")
         );
-        assert!(!store.revoke_temporary(&temporary.session_id, 5_200).await.unwrap());
+        assert!(
+            !store
+                .revoke_temporary(&temporary.session_id, 5_200)
+                .await
+                .unwrap()
+        );
         let rejected = store
             .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_200)
             .await
@@ -3416,7 +3439,12 @@ mod tests {
                 .code,
             "guest_session_not_found"
         );
-        assert!(store.mark_expired(&temporary.session_id, 5_200).await.unwrap());
+        assert!(
+            store
+                .mark_expired(&temporary.session_id, 5_200)
+                .await
+                .unwrap()
+        );
         store
             .mark_quarantine_deleted(&temporary.session_id, 5_200)
             .await
