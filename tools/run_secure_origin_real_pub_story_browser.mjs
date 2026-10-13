@@ -154,11 +154,79 @@ try {
   }
   const scalars = [...priorText];
   if (!scalars.length) throw new Error("selected Story has no text for physical range edit");
-  const replacement = scalars[0] === "Q" ? "R" : "Q";
+  const replacement = browserEngine === "chromium"
+    ? (scalars[0] === "文" ? "字" : "文")
+    : (scalars[0] === "Q" ? "R" : "Q");
   const desired = replacement + scalars.slice(1).join("");
   const desiredCanonical = textareaTextToCanonicalStory(priorCanonical, desired);
   if (desired === priorText) throw new Error("test Story edit must change exactly one scalar");
-  await page.locator("#story-input").fill(desired);
+  await page.evaluate(() => {
+    const input = document.querySelector("#story-input");
+    window.__chapteraStoryInputTrace = [];
+    for (const type of ["compositionstart", "compositionupdate", "compositionend",
+      "beforeinput", "input"]) {
+      input.addEventListener(type, event => {
+        window.__chapteraStoryInputTrace.push({
+          type: event.type,
+          data: typeof event.data === "string" ? event.data : null,
+          inputType: typeof event.inputType === "string" ? event.inputType : null,
+          isComposing: event.isComposing === true,
+        });
+      });
+    }
+  });
+  const storyInput = page.locator("#story-input");
+  await storyInput.focus();
+  const selectedRange = await page.evaluate(firstScalarWidth => {
+    const input = document.querySelector("#story-input");
+    input.setSelectionRange(0, firstScalarWidth, "forward");
+    return {start: input.selectionStart, end: input.selectionEnd};
+  }, scalars[0].length);
+  if (selectedRange.start !== 0 || selectedRange.end !== scalars[0].length) {
+    throw new Error("Story browser did not preserve the requested first-scalar range");
+  }
+  let compositionApplyFenced = false;
+  if (browserEngine === "chromium") {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Input.imeSetComposition", {
+      text: replacement,
+      selectionStart: replacement.length,
+      selectionEnd: replacement.length,
+      replacementStart: 0,
+      replacementEnd: scalars[0].length,
+    });
+    if (await storyInput.inputValue() !== desired) {
+      throw new Error("active Chromium IME composition did not replace the selected scalar");
+    }
+    // A programmatic click does not blur/commit the active IME composition.
+    // The Product handler must therefore fence the mutation while composing.
+    await page.evaluate(() => document.querySelector("#story-apply-action").click());
+    await page.waitForTimeout(100);
+    compositionApplyFenced = calls.length === 0;
+    if (!compositionApplyFenced) {
+      throw new Error("Story Apply escaped the active IME composition fence");
+    }
+    await cdp.send("Input.insertText", {text: replacement});
+  } else {
+    await page.keyboard.type(replacement);
+  }
+  if (await storyInput.inputValue() !== desired) {
+    throw new Error("physical Story input did not produce the requested scalar replacement");
+  }
+  const inputTrace = await page.evaluate(() => window.__chapteraStoryInputTrace);
+  const compositionEventsConfirmed = browserEngine === "chromium" &&
+    ["compositionstart", "compositionupdate", "compositionend"].every(type =>
+      inputTrace.some(event => event.type === type)) &&
+    inputTrace.some(event => event.isComposing &&
+      (event.type === "beforeinput" || event.type === "input"));
+  const caretRangeInputConfirmed = browserEngine === "webkit" &&
+    inputTrace.some(event => event.type === "input" && event.data === replacement);
+  if (browserEngine === "chromium" && !compositionEventsConfirmed) {
+    throw new Error("Chromium IME did not emit a complete transient composition event sequence");
+  }
+  if (browserEngine === "webkit" && !caretRangeInputConfirmed) {
+    throw new Error("WebKit caret/range keyboard input emitted no matching DOM input event");
+  }
   const acceptedResponse = page.waitForResponse(response =>
     response.request().method() === "POST" &&
     decodeURIComponent(new URL(response.url()).pathname) ===
@@ -262,6 +330,13 @@ try {
     original_revision_id: baseline.revision_id,
     committed_revision_id: receipt.revision_id,
     real_dom_textarea_input: true,
+    input_path: browserEngine === "chromium"
+      ? "chromium_ime_composition"
+      : "webkit_caret_range_keyboard",
+    selected_first_scalar_range: true,
+    composition_events_confirmed: compositionEventsConfirmed,
+    composition_apply_fenced: compositionApplyFenced,
+    caret_range_input_confirmed: caretRangeInputConfirmed,
     one_authorized_story_commit: true,
     canonical_current_text_confirmed: true,
     source_neutral_reader_scene_text_refreshed: true,
