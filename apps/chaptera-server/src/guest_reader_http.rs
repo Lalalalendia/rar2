@@ -980,8 +980,7 @@ async fn temporary_editor_move_node(
 
     // Current uses the existing isolated worker and the existing contiguous
     // RevisionStream replay; no untrusted PUB parser runs inside Axum.
-    let GuestJson(current) =
-        temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
     if request.base_revision_id != current.revision_id {
         return Err(GuestReaderError::conflict(
             "temporary_editor_stale_revision",
