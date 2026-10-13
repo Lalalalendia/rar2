@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -84,9 +85,16 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
                 "http { access_log off; include " + str(CONFIG) + "; }\n",
                 encoding="utf-8",
             )
+            # nginx -t binds configured low ports on some distributions.
+            # Mirror the privileged production parser while keeping this
+            # regression test and its temporary config source-only.
+            command = [nginx, "-t", "-p", tmp + "/", "-c", str(config)]
+            if os.geteuid() != 0:
+                if not shutil.which("sudo"):
+                    self.skipTest("sudo unavailable for privileged nginx port 80 syntax test")
+                command = ["sudo", "-n", *command]
             result = subprocess.run(
-                [nginx, "-t", "-p", tmp + "/", "-c", str(config)],
-                capture_output=True, text=True, check=False,
+                command, capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0,
                              "actual Nginx parser rejected production guest template: " +
