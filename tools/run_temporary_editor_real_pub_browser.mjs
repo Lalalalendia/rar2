@@ -2,6 +2,7 @@
 // Publisher parser/replay -> browser MoveNode -> exact Scene -> edited IDML.
 // No synthetic fetch, manual POST mutation, Product auth, or persistent project.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -238,6 +239,51 @@ try {
   assert.ok(report.loss_report?.can_serialize === true);
   assert.equal(report.loss_report?.counts?.blocking,0);
 
+  // Independent consumer proof must inspect the actual Playwright-downloaded
+  // IDML bytes and the exact NodeId moved by this browser gesture. A ZIP
+  // signature or a SHA-verified export response does not prove its geometry.
+  const rectKeys = ["x", "y", "width", "height"];
+  assert.ok(rectKeys.every(key => Number.isSafeInteger(geometry[key])),
+    "current Reader Scene produced non-integer edited geometry");
+  assert.ok(geometry.width > 0 && geometry.height > 0,
+    "current Reader Scene produced an empty edited rectangle");
+  for (const key of rectKeys) {
+    assert.equal(geometry[key], authoring[key],
+      "current Scene and canonical authoring rectangle diverged");
+  }
+  // The verifier opens the actual browser download as an IDML ZIP and
+  // resolves its exact TextFrame identity and four path anchors. Playwright
+  // owns the private download scratch and removes it when browser closes.
+  const verifier = spawnSync("python3", [
+    "tools/verify_editable_export_geometry.py",
+    "--target", target,
+    "--artifact", await download.path(),
+    "--node-id", selected.nodeId,
+    "--x-emu", String(geometry.x),
+    "--y-emu", String(geometry.y),
+    "--width-emu", String(geometry.width),
+    "--height-emu", String(geometry.height),
+  ], { encoding: "utf8", timeout: 60000, maxBuffer: 65536 });
+  assert.equal(verifier.status, 0,
+    "browser-downloaded IDML failed independent ZIP/XML moved-Node geometry proof");
+  let consumer;
+  try {
+    consumer = JSON.parse(verifier.stdout);
+  } catch {
+    throw Error("browser-downloaded IDML consumer did not emit a valid proof");
+  }
+  assert.equal(consumer.receipt_kind,
+    "chaptera.local-editable-export-geometry-proof.v1");
+  assert.equal(consumer.target, target);
+  assert.equal(consumer.node_id, selected.nodeId);
+  assert.equal(consumer.artifact_sha256, sha256(artifact));
+  assert.deepEqual(consumer.expected_rect_emu, {
+    x: geometry.x, y: geometry.y, width: geometry.width,
+    height: geometry.height,
+  });
+  assert.equal(consumer.geometry_form, "idml_path_geometry");
+  assert.equal(consumer.geometry_matches_edit, true);
+
   // Reload is through the same guest page, original baseline response
   // followed by the exact changed canonical revision. No GET extends TTL.
   await page.reload({waitUntil:"domcontentloaded"});
@@ -300,6 +346,9 @@ try {
     read_does_not_renew_ttl:true,
     changed_idml_download_sha256:sha256(artifact),
     changed_idml_byte_len:artifact.length,
+    changed_idml_geometry_proven:true,
+    changed_idml_identity_proven:true,
+    changed_idml_geometry_form:consumer.geometry_form,
     loss_report_checked:true,
     original_pub_immutable:true,
     auth_product_routes_blocked:true,
@@ -312,6 +361,7 @@ try {
   console.log(JSON.stringify({schema:receipt.schema,status:receipt.status,
     real_pub:true,real_chromium:true,real_https:true,commit_count:1,
     changed_idml_sha256:receipt.changed_idml_download_sha256,
+    changed_idml_geometry_proven:true,
     v0_go:false}));
 } finally {
   await browser.close();
