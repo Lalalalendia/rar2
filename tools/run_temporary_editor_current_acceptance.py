@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import pathlib
+import re
+from decimal import Decimal
 import secrets
 import shutil
 import sqlite3
@@ -23,6 +25,36 @@ import verify_editable_export_geometry as geometry
 def checked(status: int, expected: int, action: str) -> None:
     if status != expected:
         raise AssertionError(f"{action} HTTP {status}, expected {expected}")
+
+
+def verify_physical_edited_pdf(data: bytes, expected: geometry.RectEmu) -> dict:
+    """Independent physical PDF cross-reference + painted MoveNode geometry consumer."""
+    if not data.startswith(b"%PDF-") or not data.rstrip().endswith(b"%%EOF"):
+        raise AssertionError("edited PDF has invalid header or trailer")
+    marker = re.search(rb"startxref\s+(\d+)\s+%%EOF\s*$", data)
+    if marker is None:
+        raise AssertionError("edited PDF lacks a cross-reference pointer")
+    xref = int(marker.group(1))
+    if xref <= 0 or xref >= len(data) or not data[xref:].startswith(b"xref\n"):
+        raise AssertionError("edited PDF cross-reference pointer does not reopen")
+    page_count = data.count(b"/Type /Page /Parent")
+    if page_count <= 0 or page_count > 1000:
+        raise AssertionError("edited PDF has no admissible physical pages")
+    rects = re.findall(
+        rb"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+"
+        rb"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+re\b",
+        data,
+    )
+    # Convert back independently from PDF points. A moved shape must have
+    # physical changed coordinates; a valid source-only PDF is insufficient.
+    physical = tuple(Decimal(value) for value in (
+        expected.x, expected.y, expected.width, expected.height
+    ))
+    for rect in rects:
+        measured = tuple(Decimal(token.decode("ascii")) * 12700 for token in rect)
+        if all(abs(a - b) < Decimal("0.01") for a, b in zip(measured, physical)):
+            return {"geometry_form": "pdf_rectangle_stream", "pages": page_count}
+    raise AssertionError("edited PDF stream does not paint the accepted MoveNode rectangle")
 
 
 def main() -> int:
@@ -245,6 +277,14 @@ def main() -> int:
         nodes = current["authoring_graph"].get("nodes")
         if not isinstance(nodes, dict):
             raise AssertionError("canonical real PUB has no node map for editing")
+        painted_direct_ids = {
+            node["node_id"] for node in rich_scene["nodes"]
+            if isinstance(node, dict) and isinstance(node.get("node_id"), str)
+            and isinstance(node.get("paint"), dict)
+            and (node["paint"].get("fill_rgb") is not None
+                 or (isinstance(node["paint"].get("line"), dict)
+                     and node["paint"]["line"].get("width_emu", 0) > 0))
+        }
         candidates = []
         for node_id, node in sorted(nodes.items()):
             if not isinstance(node_id, str) or not isinstance(node, dict):
@@ -260,6 +300,8 @@ def main() -> int:
             candidates.append((node_id, x, y))
         if not candidates:
             raise AssertionError("pinned real PUB has no canonical geometric nodes")
+        # Prefer a true PDF-rectangle-capable MoveNode for the physical PDF oracle.
+        candidates.sort(key=lambda item: (item[0] not in painted_direct_ids, item[0]))
 
         move_path = f"/v1/editor/temporary-sessions/{session_id}/move-node"
         missing_request = {
@@ -390,7 +432,7 @@ def main() -> int:
         edited_formats = []
         unavailable_formats = []
         export_receipts = []
-        for target in ("odg", "idml"):
+        for target in ("odg", "idml", "pdf"):
             export_path = f"/v1/editor/temporary-sessions/{session_id}/exports/{target}?{query}"
             checked(call("GET", export_path)[0], 401, "private edited export capability")
             checked(call(
@@ -409,6 +451,8 @@ def main() -> int:
                 "GET", export_path + "&report_only=true", headers=private,
             )
             if head_status == 422:
+                if target == "pdf":
+                    raise AssertionError("current edited PDF is blocked for the pinned real PUB")
                 unavailable_formats.append(target)
                 continue
             checked(head_status, 200, "private current edit LossReport")
@@ -433,7 +477,7 @@ def main() -> int:
             headers_out = live.parse_header_file(headers_file)
             actual_sha = hashlib.sha256(artifact).hexdigest()
             if (
-                not artifact.startswith(b"PK")
+                not artifact.startswith(b"%PDF-" if target == "pdf" else b"PK")
                 or actual_sha != preflight["artifact_sha256"]
                 or headers_out.get("x-chaptera-export-sha256") != actual_sha
                 or headers_out.get("x-chaptera-loss-report-sha256") != preflight["loss_report_sha256"]
@@ -444,15 +488,24 @@ def main() -> int:
                 or target not in headers_out.get("content-disposition", "")
             ):
                 raise AssertionError("edited package response MIME/identity/private download mismatch")
+            expected_mime = {
+                "odg": "application/vnd.oasis.opendocument.graphics",
+                "idml": "application/vnd.adobe.indesign-idml-package",
+                "pdf": "application/pdf",
+            }[target]
+            if headers_out.get("content-type") != expected_mime:
+                raise AssertionError("physical edited output MIME was substituted")
             local_artifact = work / ("edited-" + target + "." + target)
             local_artifact.write_bytes(artifact)
             try:
-                observed = geometry.verify_export(
-                    local_artifact, target, chosen_id, expected_rect,
+                observed = (
+                    verify_physical_edited_pdf(artifact, expected_rect)
+                    if target == "pdf" else
+                    geometry.verify_export(local_artifact, target, chosen_id, expected_rect)
                 )
             except (AssertionError, ValueError) as exc:
                 raise AssertionError(
-                    f"edited {target} package did not preserve the changed canonical geometry"
+                    f"edited {target} did not preserve the accepted physical geometry"
                 ) from exc
             export_receipts.append({
                 "target": target, "sha256": actual_sha,
@@ -469,10 +522,8 @@ def main() -> int:
             raise AssertionError("isolated worker retained private edited-export scratch bytes")
         if live.sha256_file(physical_source) != expected_hash:
             raise AssertionError("physical edit export modified immutable source PUB")
-        checked(call(
-            "GET", f"/v1/editor/temporary-sessions/{session_id}/exports/pdf?{query}",
-            headers=private,
-        )[0], 400, "unsupported temporary edited output refuses silent PDF fallback")
+        if "pdf" not in edited_formats:
+            raise AssertionError("temporary guest output never proved physical changed PDF")
 
         replay_status, replay_raw = call(
             "POST", move_path, headers=private, body_json=chosen
@@ -686,7 +737,8 @@ def main() -> int:
             "bounded_rate_retries": rate_retries,
             "private_revision_rows_after_ttl": expired_revisions,
             "private_canonical_bindings_after_ttl": expired_bindings,
-            "edited_download_proven": True, "edited_target_profiles": edited_formats,
+            "edited_download_proven": True, "edited_fixed_pdf_proven": "pdf" in edited_formats,
+            "edited_target_profiles": edited_formats,
             "revised_reader_scene_proven": True, "revised_node_id": chosen_id,
             "editable_unavailable_targets": unavailable_formats,
             "edited_artifact_receipts": export_receipts,

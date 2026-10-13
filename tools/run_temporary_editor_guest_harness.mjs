@@ -15,6 +15,10 @@ const canon0 = "f".repeat(64), canon1 = "1".repeat(64);
 const ttl0 = Date.now() + 3_600_000, ttl1 = ttl0 + 120_000;
 const editedBytes = Buffer.from("PK\u0003\u0004Chaptera temporary browser synthetic edited IDML proof");
 const outputSha = createHash("sha256").update(editedBytes).digest("hex");
+// Synthetic Chrome transport acceptance: this is deliberately NOT a real-PUB
+// PDF rendering proof. The separate live HTTPS scenario proves actual pixels.
+const pdfBytes = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n");
+const pdfSha = createHash("sha256").update(pdfBytes).digest("hex");
 const route = "/v1/editor/temporary-sessions/" + id;
 let accepted = null, requests = [], editedReportRequests = 0, deleted = false;
 const assets = new Map([
@@ -128,7 +132,10 @@ const server = createServer(async (req,res) => {
       replayed:false,scene_refresh:"current",canonical_operation:{kind:"move_node"},
     });return;
   }
-  if (path === route+"/exports/idml" && req.method === "GET") {
+  if ((path === route+"/exports/idml" || path === route+"/exports/pdf") && req.method === "GET") {
+    const target = path.endsWith("/pdf") ? "pdf" : "idml";
+    const output = target === "pdf" ? pdfBytes : editedBytes;
+    const outputDigest = target === "pdf" ? pdfSha : outputSha;
     if (url.searchParams.get("revision_id") !== after ||
         url.searchParams.get("canonical_authoring_revision_id") !== canon1) {
       json(res,409,{error:"temporary_editor_export_stale_revision"});return;
@@ -137,16 +144,16 @@ const server = createServer(async (req,res) => {
       editedReportRequests++;
       json(res,200,{protocol_version:"chaptera.temporary-edited-export-report.v1",
         revision_id:after,canonical_authoring_revision_id:canon1,
-        source_hash:source,target:"idml",artifact_sha256:outputSha,
+        source_hash:source,target,artifact_sha256:outputDigest,
         loss_report:{can_serialize:true,counts:{blocking:0,warning:0}}});return;
     }
     res.writeHead(200,{
-      "content-type":"application/vnd.adobe.indesign-idml-package",
-      "content-disposition":"attachment; filename=\"chaptera-edited.idml\"",
-      "x-chaptera-edit-revision":after,"x-chaptera-export-sha256":outputSha,
+      "content-type":target === "pdf" ? "application/pdf" : "application/vnd.adobe.indesign-idml-package",
+      "content-disposition":`attachment; filename="chaptera-edited.${target}"`,
+      "x-chaptera-edit-revision":after,"x-chaptera-export-sha256":outputDigest,
       "cache-control":"no-store",
     });
-    res.end(editedBytes);return;
+    res.end(output);return;
   }
   json(res,404,{error:"route_not_found"});
 });
@@ -217,7 +224,17 @@ try {
   await page.locator("#temporary-download-idml").click();
   const download=await downloadPromise;
   if(download.suggestedFilename()!=="chaptera-edited.idml")throw Error("guest changed download not offered");
-  if(editedReportRequests!==1)throw Error("changed output was not loss-preflighted");
+  if(editedReportRequests!==1)throw Error("changed IDML was not loss-preflighted");
+  const pdfDownloadPromise=page.waitForEvent("download");
+  await page.locator("#temporary-download-pdf").click();
+  const pdfDownload=await pdfDownloadPromise;
+  if(pdfDownload.suggestedFilename()!=="chaptera-edited.pdf") {
+    throw Error("guest changed PDF download not offered");
+  }
+  if(editedReportRequests!==2)throw Error("changed PDF was not loss-preflighted");
+  if(requests.some(req => req.path.includes(token)||req.query.includes(token))) {
+    throw Error("guest PDF download leaked private bearer in URI");
+  }
   await page.reload();
   await page.locator("#temporary-resume").click();
   await page.waitForFunction((expected) => Number(document.querySelector('[data-node-id] rect')?.getAttribute("x")) === expected,
@@ -242,6 +259,7 @@ try {
     private_guest_capability:true,commit_count:movePosts.length,
     exact_scene_after_move:true,exact_scene_after_reload:true,
     changed_download_preflighted:true,edited_download_offered:true,
+    synthetic_pdf_download_preflighted:true,synthetic_pdf_download_offered:true,
     explicit_server_delete_confirmed:true,deleted_capability_denied:true,
     browser_local_key_erased_after_receipt:true,
     original_pub_unmodified:true,v0_go:false};

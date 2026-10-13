@@ -127,7 +127,7 @@ async fn read_isolated_edited_export_sidecar(
     let Some(edited) = receipt.editable_export.as_mut() else {
         return Ok(());
     };
-    if !matches!(edited.target.as_str(), "idml" | "odg")
+    if !matches!(edited.target.as_str(), "idml" | "odg" | "pdf")
         || edited.artifact_byte_len == 0
         || edited.artifact_byte_len > MAX_EDITED_EXPORT_BYTES
     {
@@ -173,6 +173,25 @@ async fn read_isolated_edited_export_sidecar(
         return Err(ProductReplayWorkerError::new(
             "product_edited_export_receipt_invalid",
             "isolated exported bytes differ from receipt digest",
+        ));
+    }
+    if edited.target == "pdf"
+        && (edited.loss_report["schema_version"] != "chaptera.temporary-edited-fixed-pdf-loss.v1"
+            || edited.loss_report["target"] != "pdf"
+            || edited.loss_report["can_serialize"] != true
+            || edited.loss_report["current_editor_state"] != true
+            || edited.loss_report["source_hash"].as_str() != Some(receipt.source_sha256.as_str())
+            || edited.loss_report["counts"]["blocking"] != 0)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated PDF LossReport does not match current source authority",
+        ));
+    }
+    if edited.target == "pdf" && !bytes.starts_with(b"%PDF-") {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated PDF lacks a valid physical PDF signature",
         ));
     }
     edited.artifact_bytes = bytes;
@@ -887,11 +906,11 @@ pub fn run_product_replay_worker(
         ));
     }
     if let Some(target) = editable_export_target
-        && !matches!(target, "idml" | "odg")
+        && !matches!(target, "idml" | "odg" | "pdf")
     {
         return Err(ProductReplayWorkerError::new(
             "product_edited_export_invalid",
-            "only bounded IDML or ODG export is admitted",
+            "only bounded IDML, ODG or PDF export is admitted",
         ));
     }
     if move_node_intent.is_some() && project_path.is_none() {
@@ -1303,49 +1322,68 @@ pub fn run_product_replay_worker(
     };
 
     let editable_export = if let Some(target_name) = editable_export_target {
-        let target = match target_name {
-            "idml" => EditorEditableTarget::Idml,
-            "odg" => EditorEditableTarget::Odg,
-            _ => {
-                return Err(ProductReplayWorkerError::new(
-                    "product_edited_export_invalid",
-                    "unknown edited export target",
-                ));
-            }
-        };
-        let label = format!("{document_id}@{actual_project_hash}");
-        let preview = session
-            .preview_editable_export(target, label.clone())
+        let (artifact, loss_report) = if target_name == "pdf" {
+            // The only PDF renderer used here is the existing source-neutral
+            // pub-pdf. It receives exact current EditorSession state, not a
+            // fresh source-only conversion of immutable PUB bytes.
+            let rendered = crate::temporary_fixed_pdf::render_current_fixed_pdf(
+                &source_bytes,
+                expected_source_sha256,
+                &session,
+            )
             .map_err(|_| {
                 ProductReplayWorkerError::new(
                     "product_edited_export_blocked",
-                    "current revision target preflight rejected",
+                    "current edited revision cannot be rendered to bounded fixed PDF",
                 )
             })?;
-        if !preview.report.can_serialize || preview.report.counts.blocking != 0 {
-            return Err(ProductReplayWorkerError::new(
-                "product_edited_export_blocked",
-                "current revision has blocking semantic losses",
-            ));
-        }
-        let exported = session.export_editable(target, label).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_edited_export_blocked",
-                "current revision could not be serialized",
-            )
-        })?;
-        if exported.bytes.is_empty() || exported.bytes.len() > MAX_EDITED_EXPORT_BYTES {
+            (rendered.bytes, rendered.loss_report)
+        } else {
+            let target = match target_name {
+                "idml" => EditorEditableTarget::Idml,
+                "odg" => EditorEditableTarget::Odg,
+                _ => {
+                    return Err(ProductReplayWorkerError::new(
+                        "product_edited_export_invalid",
+                        "unknown edited export target",
+                    ));
+                }
+            };
+            let label = format!("{document_id}@{actual_project_hash}");
+            let preview = session
+                .preview_editable_export(target, label.clone())
+                .map_err(|_| {
+                    ProductReplayWorkerError::new(
+                        "product_edited_export_blocked",
+                        "current revision target preflight rejected",
+                    )
+                })?;
+            if !preview.report.can_serialize || preview.report.counts.blocking != 0 {
+                return Err(ProductReplayWorkerError::new(
+                    "product_edited_export_blocked",
+                    "current revision has blocking semantic losses",
+                ));
+            }
+            let exported = session.export_editable(target, label).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_blocked",
+                    "current revision could not be serialized",
+                )
+            })?;
+            let loss_report = serde_json::to_value(exported.report).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_receipt_invalid",
+                    "LossReport could not be encoded",
+                )
+            })?;
+            (exported.bytes, loss_report)
+        };
+        if artifact.is_empty() || artifact.len() > MAX_EDITED_EXPORT_BYTES {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_limit",
                 "edited artifact exceeds bounded response limit",
             ));
         }
-        let loss_report = serde_json::to_value(exported.report).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_edited_export_receipt_invalid",
-                "LossReport could not be encoded",
-            )
-        })?;
         let loss_bytes = serde_json::to_vec(&loss_report).map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_edited_export_receipt_invalid",
@@ -1364,7 +1402,7 @@ pub fn run_product_replay_worker(
                 "output descriptor not prepared before sandbox",
             )
         })?;
-        output.write_all(&exported.bytes).map_err(|_| {
+        output.write_all(&artifact).map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_edited_export_output_failed",
                 "edited artifact sidecar write failed",
@@ -1378,8 +1416,8 @@ pub fn run_product_replay_worker(
         })?;
         Some(IsolatedEditableExportReceiptV1 {
             target: target_name.to_owned(),
-            artifact_sha256: sha256_hex(&exported.bytes),
-            artifact_byte_len: exported.bytes.len(),
+            artifact_sha256: sha256_hex(&artifact),
+            artifact_byte_len: artifact.len(),
             loss_report_sha256: sha256_hex(&loss_bytes),
             loss_report,
             artifact_bytes: Vec::new(),
@@ -1929,10 +1967,10 @@ impl IsolatedProductReplayProducer {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
         require_sha256(project_hash)?;
-        if !matches!(target, "idml" | "odg") {
+        if !matches!(target, "idml" | "odg" | "pdf") {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
-                "temporary output admits only IDML and ODG",
+                "temporary output admits only IDML, ODG and PDF",
             ));
         }
         let project_bytes = serde_json::to_vec(project).map_err(|_| {
@@ -2054,7 +2092,7 @@ impl IsolatedProductReplayProducer {
             ));
         }
         if let Some(target) = editable_export_target
-            && !matches!(target, "idml" | "odg")
+            && !matches!(target, "idml" | "odg" | "pdf")
         {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
