@@ -201,6 +201,14 @@ export class TemporaryGuestMoveClientV1 {
         !object(ack.canonical_operation)) {
       throw failure("temporary_move_ack_identity_invalid");
     }
+    if (request.command.kind === "replace_story_range" &&
+        (ack.canonical_operation.kind !== "replace_story_range" ||
+         ack.canonical_operation.story_id !== request.command.story_id ||
+         ack.canonical_operation.start_scalar !== request.command.start_scalar ||
+         ack.canonical_operation.end_scalar !== request.command.end_scalar ||
+         ack.canonical_operation.replacement_text !== request.command.replacement_text)) {
+      throw failure("temporary_story_ack_operation_mismatch");
+    }
     return ack;
   }
 

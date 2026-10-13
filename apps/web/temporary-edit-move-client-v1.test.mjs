@@ -331,11 +331,14 @@ function withPlainStory(base, text = "Initial") {
     },
   };
 }
-function storyAck(replayed = false) {
+function storyAck(replayed = false, {beforeText = "Initial", replacement = "Edited"} = {}) {
   return {
     ...accepted(replayed),
     protocol_version: "chaptera.temporary-editor-story-range.v1",
-    canonical_operation: { replace_story_range: { story_id: storyId } },
+    canonical_operation: {
+      kind: "replace_story_range", story_id: storyId, start_scalar: 0,
+      end_scalar: [...beforeText].length, replacement_text: replacement,
+    },
   };
 }
 
@@ -370,7 +373,9 @@ test("Guest story gate excludes linked, styled, table-owned and paragraph text",
 test("Guest Story replacement is private, Unicode scalar-counted and reopens exact text", async () => {
   const current = withPlainStory(before, "Old \u{1f642}");
   const revised = withPlainStory(after, "New \u{1f642}");
-  const { client, requests } = harness([current, storyAck(), revised]);
+  const { client, requests } = harness([
+    current, storyAck(false, {beforeText: "Old \u{1f642}", replacement: "New \u{1f642}"}), revised,
+  ]);
   await client.refresh();
   const receipt = await client.replaceStory({storyId, newText:"New \u{1f642}"});
   assert.equal(receipt.current.authoring_graph.stories[storyId].text, "New \u{1f642}");
@@ -431,4 +436,19 @@ test("Guest Story forged ACK/reopen, invalid text and unsupported Story fail clo
   assert.equal(wrong.status.pending_reconciliation,true);
   await wrong.reconcileUnknown();
   assert.equal(wrong.status.pending_reconciliation,false);
+});
+
+
+test("Guest Story rejects forged canonical operation fields before acknowledging Current", async () => {
+  const current = withPlainStory(before, "Initial");
+  const invalid = storyAck();
+  invalid.canonical_operation.replacement_text = "forged";
+  const {client} = harness([current, invalid, storyAck(true), withPlainStory(after, "Edited")]);
+  await client.refresh();
+  await assert.rejects(client.replaceStory({storyId, newText:"Edited"}),
+    /temporary_story_ack_operation_mismatch/);
+  assert.equal(client.status.pending_reconciliation, true);
+  const same = await client.reconcileUnknown();
+  assert.equal(same.accepted.replayed, true);
+  assert.equal(same.current.authoring_graph.stories[storyId].text, "Edited");
 });

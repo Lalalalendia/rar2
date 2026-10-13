@@ -165,9 +165,15 @@ def main() -> int:
                     receipt.get("export_target") != target or
                     receipt.get("target_consumer_text_recovered") is not True or
                     receipt.get("physical_target_xml_consumer") is not True or
+                    receipt.get("target_application_reopened") is not True or
+                    receipt.get("target_application_consumer") !=
+                        ("Scribus" if target == "idml" else "LibreOffice Draw") or
                     receipt.get("exact_current_story_reopened") is not True or
                     receipt.get("exact_reader_scene_story") is not True or
                     receipt.get("identical_operation_id_replay_no_second_revision") is not True or
+                    receipt.get("stale_story_write_denied") is not True or
+                    receipt.get("conflicting_operation_id_denied") is not True or
+                    receipt.get("foreign_bearer_mutation_denied") is not True or
                     receipt.get("read_replay_export_does_not_renew_ttl") is not True or
                     receipt.get("same_browser_session_delete_proven") is not True or
                     receipt.get("revoked_bearer_denied") is not True or

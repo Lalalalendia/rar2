@@ -37,7 +37,7 @@ const page = await browser.newPage({
   acceptDownloads: true,
   viewport: {width: 1280, height: 900},
 });
-const requests = [], responses = [], errors = [];
+const requests = [], responses = [], errors = [], openReplyDiagnostics = [];
 page.on("pageerror", error => errors.push(error.name || "pageerror"));
 page.on("request", request => {
   if (request.url().startsWith(origin)) {
@@ -47,8 +47,25 @@ page.on("request", request => {
 });
 page.on("response", response => {
   if (response.url().startsWith(origin)) {
-    responses.push({path: new URL(response.url()).pathname,
-      status: response.status()});
+    const path = new URL(response.url()).pathname;
+    responses.push({path, status: response.status()});
+    if (path.startsWith("/v1/reader/guest-sessions/") && path.endsWith("/open")) {
+      // Diagnostics contain only response metadata and bounded JSON shape,
+      // never raw PUB, bearer, Story text, base64 or response fragments.
+      openReplyDiagnostics.push(response.body().then(bytes => {
+        let parse = "invalid_json", keys = 0, classification = null;
+        try {
+          const value = JSON.parse(bytes.toString("utf8"));
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            parse = "object"; keys = Object.keys(value).length;
+            classification = ["supported","partial","salvage","unsupported","rejected"]
+              .includes(value.classification) ? value.classification : null;
+          } else parse = typeof value;
+        } catch { /* metadata only */ }
+        return {mime: (response.headers()["content-type"] || "").slice(0, 60),
+          bytes: bytes.length, parse, keys, classification};
+      }).catch(error => ({read_error: error.name || "unknown"})));
+    }
   }
 });
 const basePath = id => "/v1/editor/temporary-sessions/" + id;
@@ -63,15 +80,22 @@ async function readCurrent(action, documentId) {
       return {status: 0, body: null};
     }
     const url = "/v1/editor/temporary-sessions/" + documentId + "/" + action;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {"x-chaptera-reader-session": saved.access_token,
-        "accept": "application/json"},
-      credentials: "omit", mode: "same-origin", cache: "no-store",
-      redirect: "error", referrerPolicy: "no-referrer",
-    });
-    return {status: response.status,
-      body: await response.json().catch(() => null)};
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {"x-chaptera-reader-session": saved.access_token,
+          "accept": "application/json"},
+        credentials: "omit", mode: "same-origin", cache: "no-store",
+        redirect: "error", referrerPolicy: "no-referrer",
+      });
+      if (response.status === 429) {
+        await new Promise(done => setTimeout(done, 2200));
+        continue;
+      }
+      return {status: response.status,
+        body: await response.json().catch(() => null)};
+    }
+    return {status: 429, body: null};
   }, {action, documentId});
 }
 try {
@@ -86,9 +110,12 @@ try {
       document.querySelector("#temporary-status")?.textContent.includes(
         "Открыта редактируемая ревизия"), null, {timeout: 170000});
   } catch {
+    const diagnostic = await Promise.allSettled(openReplyDiagnostics);
     throw Error("real PUB Story browser could not open: " +
       String(await page.locator("#temporary-status").textContent()).slice(0, 160) +
-      " status=" + JSON.stringify(responses.slice(-12)));
+      " status=" + JSON.stringify(responses.slice(-12)) +
+      " open_reply_metadata=" + JSON.stringify(diagnostic.map(item =>
+        item.status === "fulfilled" ? item.value : {read_error: "rejected"})));
   }
   const saved = await page.evaluate(() => {
     const item = JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0") || "null");
@@ -122,6 +149,9 @@ try {
   assert.equal(beforeScene.body.revision_id, head.revision_id);
   assert.equal(beforeScene.body.scene.source_hash, fixtureHash);
 
+  // Guest's 6-request admission burst is shared by page bootstrap and
+  // inspection GETs; allow a bounded refill before the *UI-owned* mutation.
+  await page.waitForTimeout(4500);
   // The real browser owns this mutation. No manual service POST is used.
   await page.locator("#temporary-story-text").fill(SOURCE_MARKER);
   const ackPromise = page.waitForResponse(response =>
@@ -178,24 +208,66 @@ try {
 
   // Identical operation-ID replay is not another accepted revision/TTL renewal.
   const replay = await page.evaluate(async ({sessionId, request, headers}) => {
-    const response = await fetch("/v1/editor/temporary-sessions/" + sessionId + "/story-range", {
-      method: "POST",
-      headers: {"content-type": "application/json", "accept": "application/json",
-        "x-chaptera-reader-session": headers["x-chaptera-reader-session"],
-        "x-csrf-token": headers["x-csrf-token"]},
-      body: JSON.stringify(request), credentials: "omit", mode: "same-origin",
-      cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
-    });
-    return {status: response.status, body: await response.json().catch(() => null)};
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const response = await fetch("/v1/editor/temporary-sessions/" + sessionId + "/story-range", {
+        method: "POST",
+        headers: {"content-type": "application/json", "accept": "application/json",
+          "x-chaptera-reader-session": headers["x-chaptera-reader-session"],
+          "x-csrf-token": headers["x-csrf-token"]},
+        body: JSON.stringify(request), credentials: "omit", mode: "same-origin",
+        cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
+      });
+      if (response.status === 429) {
+        await new Promise(done => setTimeout(done, 2200));
+        continue;
+      }
+      return {status: response.status, body: await response.json().catch(() => null)};
+    }
+    return {status: 429, body: null};
   }, {sessionId, request: submitted, headers});
   assert.equal(replay.status, 200);
   assert.equal(replay.body?.replayed, true);
   assert.equal(replay.body.revision_id, accepted.revision_id);
   assert.equal(replay.body.expires_at_ms, accepted.expires_at_ms);
+  const negative = await page.evaluate(async ({sessionId, request, headers}) => {
+    const path = "/v1/editor/temporary-sessions/" + sessionId + "/story-range";
+    const option = (payload, bearer) => ({
+      method: "POST",
+      headers: {"content-type": "application/json",
+        "x-chaptera-reader-session": bearer,
+        "x-csrf-token": headers["x-csrf-token"]},
+      credentials: "omit", mode: "same-origin", cache: "no-store",
+      body: JSON.stringify(payload),
+    });
+    // A new operation against an old head must be refused, not rebased.
+    const status = async options => {
+      for (let i = 0; i < 12; i++) {
+        const response = await fetch(path, options);
+        if (response.status !== 429) return response.status;
+        await new Promise(done => setTimeout(done, 2200));
+      }
+      return 429;
+    };
+    const stale = await status(option({
+      ...request, client_operation_id: request.client_operation_id + "-stale"},
+      headers["x-chaptera-reader-session"]));
+    const conflicting = await status(option({
+      ...request, command: {...request.command, replacement_text: "forged"}},
+      headers["x-chaptera-reader-session"]));
+    const foreign = await status(option(request, "0".repeat(64)));
+    return {stale, conflicting, foreign};
+  }, {sessionId, request: submitted, headers});
+  assert.equal(negative.stale, 409, "stale Guest Story base was not rejected");
+  assert.equal(negative.conflicting, 409, "reused Story operation ID changed payload");
+  assert.ok([401, 403, 404].includes(negative.foreign),
+    "foreign Guest bearer was allowed to mutate Story");
   const reread = await readCurrent("current", sessionId);
   assert.equal(reread.body.revision_cursor, 1);
   assert.equal(reread.body.expires_at_ms, accepted.expires_at_ms);
 
+  // Preserve the user's unmodified UI export flow: regain two Guest
+  // admission credits instead of racing it with our negative network probes.
+  await page.waitForTimeout(7500);
   // Download via the actual UI, after its own private source-neutral loss report.
   const reportPromise = page.waitForResponse(response =>
     response.request().method() === "GET" &&
@@ -225,7 +297,8 @@ try {
     "--artifact", await download.path(),
     "--target", target,
     "--expected-text", SOURCE_MARKER,
-  ], {encoding: "utf8", timeout: 60000, maxBuffer: 16384});
+    "--real-application-consumer",
+  ], {encoding: "utf8", timeout: 180000, maxBuffer: 16384});
   if (consumer.status !== 0) {
     // No raw document/Story bytes in the CI error stream.
     throw Error("independent browser-download Story XML consumer rejected " +
@@ -236,6 +309,10 @@ try {
   assert.equal(consumed.target, target);
   assert.equal(consumed.artifact_sha256, sha256(downloaded));
   assert.equal(consumed.edited_text_recovered, true);
+  assert.equal(consumed.target_application_consumer?.reopened, true);
+  assert.equal(consumed.target_application_consumer?.story_marker_retained, true);
+  assert.equal(consumed.target_application_consumer?.application,
+    target === "idml" ? "Scribus" : "LibreOffice Draw");
 
   const beforeReload = await readCurrent("current", sessionId);
   assert.equal(beforeReload.body.expires_at_ms, accepted.expires_at_ms);
@@ -288,12 +365,17 @@ try {
     canonical_authoring_revision_id: accepted.canonical_authoring_revision_id,
     exact_current_story_reopened: true, exact_reader_scene_story: true,
     identical_operation_id_replay_no_second_revision: true,
+    stale_story_write_denied: true,
+    conflicting_operation_id_denied: true,
+    foreign_bearer_mutation_denied: true,
     read_replay_export_does_not_renew_ttl: true,
     export_target: target,
     changed_artifact_sha256: sha256(downloaded),
     physical_target_xml_consumer: true,
     target_consumer_schema: consumed.schema,
     target_consumer_text_recovered: consumed.edited_text_recovered,
+    target_application_consumer: consumed.target_application_consumer.application,
+    target_application_reopened: consumed.target_application_consumer.reopened,
     same_browser_session_delete_proven: true,
     revoked_bearer_denied: true,
     bearer_absent_from_urls: true,

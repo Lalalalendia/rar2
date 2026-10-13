@@ -11,7 +11,10 @@ import hashlib
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -76,16 +79,91 @@ def verify(artifact: pathlib.Path, target: str, expected: str) -> dict:
     }
 
 
+
+
+def verify_target_application(artifact: pathlib.Path, target: str, expected: str) -> dict:
+    """Reimport *the same downloaded bytes* in independent publishing software."""
+    if not (shutil.which("libreoffice") and shutil.which("scribus") and
+            shutil.which("xvfb-run")):
+        raise AssertionError("independent target consumer applications unavailable")
+    with tempfile.TemporaryDirectory(prefix="chaptera-story-app-consumer-") as folder:
+        root = pathlib.Path(folder)
+        source = root / ("edited." + target)
+        shutil.copyfile(artifact, source)
+        if target == "idml":
+            script = pathlib.Path("tools/ci/scribus_idml_consumer.py").resolve()
+            output = root / "reimported.sla"
+            if not script.is_file():
+                raise AssertionError("pinned Scribus IDML importer script unavailable")
+            import os
+            env = os.environ.copy()
+            env["CHAPTERA_SCRIBUS_SLA_OUT"] = str(output)
+            try:
+                process = subprocess.run(
+                    ["xvfb-run", "-a", "scribus", "-g", "-ns", "-py",
+                     str(script), "--", str(source)],
+                    capture_output=True, timeout=160, check=False, env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise AssertionError("Scribus IDML import exceeded bounded timeout") from exc
+            if process.returncode != 0 or not output.is_file():
+                raise AssertionError("Scribus failed to reopen browser-downloaded IDML")
+            reopened = output.read_bytes()
+            if expected.encode("utf-8") not in reopened:
+                raise AssertionError("Scribus SLA reimport lost the edited canonical Story")
+            return {
+                "application": "Scribus",
+                "reopened": True, "story_marker_retained": True,
+                "reopened_sha256": hashlib.sha256(reopened).hexdigest(),
+            }
+        # LibreOffice Draw's FODG is an independent importer/serializer, not
+        # just a second zipfile view of the source archive.
+        import os
+        outdir = root / "libreoffice"
+        outdir.mkdir()
+        env = os.environ.copy()
+        env["HOME"] = str(root)
+        profile_url = (root / "lo-profile").as_uri()
+        try:
+            process = subprocess.run(
+                ["libreoffice", "-env:UserInstallation=" + profile_url,
+                 "--headless", "--convert-to", "fodg",
+                 "--outdir", str(outdir), str(source)],
+                capture_output=True, timeout=150, check=False, env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError("LibreOffice ODG import exceeded bounded timeout") from exc
+        reopened_path = outdir / "edited.fodg"
+        if process.returncode != 0 or not reopened_path.is_file():
+            raise AssertionError("LibreOffice Draw failed to reopen browser-downloaded ODG")
+        reopened = reopened_path.read_bytes()
+        document = ET.fromstring(reopened)
+        paragraphs = ["".join(node.itertext()) for node in document.iter()
+                      if node.tag == TEXT_NS]
+        if not any(expected in paragraph for paragraph in paragraphs):
+            raise AssertionError("LibreOffice Draw FODG reimport lost the edited Story")
+        return {
+            "application": "LibreOffice Draw",
+            "reopened": True, "story_marker_retained": True,
+            "reopened_sha256": hashlib.sha256(reopened).hexdigest(),
+        }
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifact", required=True, type=pathlib.Path)
     ap.add_argument("--target", choices=("idml", "odg"), required=True)
     ap.add_argument("--expected-text", required=True)
+    ap.add_argument("--real-application-consumer", action="store_true")
     args = ap.parse_args()
     if not args.expected_text or len(args.expected_text) > 8192 or \
             any(ord(char) < 32 or ord(char) == 127 for char in args.expected_text):
         raise AssertionError("expected Story text is outside the source-neutral proof contract")
     result = verify(args.artifact, args.target, args.expected_text)
+    if args.real_application_consumer:
+        application = verify_target_application(args.artifact, args.target, args.expected_text)
+        if not application["reopened"] or not application["story_marker_retained"]:
+            raise AssertionError("target application did not retain the edited Story")
+        result["target_application_consumer"] = application
     print(json.dumps(result, sort_keys=True))
     return 0
 
