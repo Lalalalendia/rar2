@@ -215,6 +215,76 @@ def audit_desktop_pr_admission(
 
 
 
+READER_PACKET_RELEASE_WORKFLOW = ".github/workflows/cloud-reader-linux-release.yml"
+READER_PACKET_REQUIRED_PUSH_PATHS = (
+    "apps/cloud-reader/**",
+    "apps/web/**",  # guest HTML/CSS/JS is compiled into the Chaptera binary
+    "apps/chaptera-server/**",
+    "crates/chaptera-untrusted-pub-scan/**",
+    "deploy/nginx/chaptera-reader.conf.example",
+    "tools/run_cloud_reader_guest_host_acceptance.py",
+    ".github/workflows/cloud-reader-linux-release.yml",
+)
+
+
+def audit_cloud_reader_release_text(rel: str, text: str) -> list[str]:
+    """Enforce the source->packet trigger and immutable asset publication law."""
+    active = "\n".join(active_lines(text))
+    errors: list[str] = []
+
+    match = re.search(
+        r"(?ms)^on:\n  push:\n(?P<push>.*?)^  workflow_dispatch:",
+        active,
+    )
+    if not match:
+        return [f"{rel}: Cloud Reader release requires main push and manual packet build"]
+    push = match.group("push")
+    if not re.search(r"(?m)^    branches: \[main\]\s*$", push):
+        errors.append(f"{rel}: release push must target main")
+    if not re.search(r"(?m)^    paths:\s*$", push):
+        errors.append(f"{rel}: release push path coverage missing")
+    for required in READER_PACKET_REQUIRED_PUSH_PATHS:
+        if f'      - "{required}"' not in push:
+            errors.append(f"{rel}: release push misses compiled input {required}")
+
+    if "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" not in active:
+        errors.append(f"{rel}: release asset publication must be push/main-only")
+    if "gh release create" not in active:
+        errors.append(f"{rel}: immutable release creation missing")
+    if "--clobber" in active or "gh release upload" in active:
+        errors.append(f"{rel}: published SHA-pinned packet cannot be replaced")
+    if not re.search(
+        r"(?m)^\s+if gh release view .+; then\n"
+        r"\s+echo .+\n"
+        r"\s+exit 1\n"
+        r"\s+fi\s*$",
+        active,
+    ):
+        errors.append(f"{rel}: existing release tag must fail closed, not overwrite")
+    return errors
+
+
+def self_test_cloud_reader_release() -> None:
+    path = pathlib.Path(READER_PACKET_RELEASE_WORKFLOW)
+    valid = path.read_text(encoding="utf-8")
+    errors = audit_cloud_reader_release_text(READER_PACKET_RELEASE_WORKFLOW, valid)
+    if errors:
+        raise AssertionError("real Reader packet release violates source/immutability contract: " + "; ".join(errors))
+
+    mutations = (
+        valid.replace('      - "apps/web/**"\n', ""),
+        valid.replace("branches: [main]", "branches: [other]"),
+        valid.replace("github.event_name == 'push'", "github.event_name == 'workflow_dispatch'"),
+        valid.replace("gh release create", "gh release upload"),
+        valid.replace("            exit 1\n", "            true\n"),
+    )
+    for index, mutated in enumerate(mutations):
+        if mutated == valid:
+            raise AssertionError(f"Reader release trust mutation {index} did not alter fixture")
+        if not audit_cloud_reader_release_text(READER_PACKET_RELEASE_WORKFLOW, mutated):
+            raise AssertionError(f"Reader release trust mutation {index} was not rejected")
+
+
 S3_PROBE_WORKFLOW = ".github/workflows/cloud-s3-provider-physical-probe.yml"
 S3_PROBE_JOB_IF = (
     "    if: github.event_name == 'workflow_dispatch' && "
@@ -337,6 +407,7 @@ def main() -> int:
     if args.self_test:
         self_test_desktop_pr_admission()
         self_test_s3_probe_trust()
+        self_test_cloud_reader_release()
         print("CHAPTERA-CI-TRUST-01 self-test PASS")
         return 0
 
@@ -348,6 +419,17 @@ def main() -> int:
             errors.append(f"{rel}: protected workflow missing")
             continue
         errors.extend(audit(path))
+
+    reader_release_path = root / READER_PACKET_RELEASE_WORKFLOW
+    if not reader_release_path.is_file():
+        errors.append(f"{READER_PACKET_RELEASE_WORKFLOW}: release workflow missing")
+    else:
+        errors.extend(
+            audit_cloud_reader_release_text(
+                READER_PACKET_RELEASE_WORKFLOW,
+                reader_release_path.read_text(encoding="utf-8"),
+            )
+        )
 
     s3_path = root / S3_PROBE_WORKFLOW
     if s3_path.is_file():
