@@ -169,6 +169,16 @@ def main() -> int:
                 receipt.get("original_pub_immutable") is not True or
                 receipt.get("v0_go") is not False):
             raise AssertionError("full physical browser receipt invalid")
+        if target == "pdf" and (
+            receipt.get("pristine_pdf_without_edit_proven") is not True
+            or receipt.get("pristine_pdf_unchanged_revision_proven") is not True
+            or receipt.get("pristine_pdf_private_report_proven") is not True
+            or not isinstance(receipt.get("pristine_pdf_sha256"), str)
+            or len(receipt["pristine_pdf_sha256"]) != 64
+            or not isinstance(receipt.get("pristine_pdf_pages"), int)
+            or receipt["pristine_pdf_pages"] < 1
+        ):
+            raise AssertionError("real-browser untouched PUB baseline PDF proof is missing")
         print(json.dumps({
             "schema": receipt["schema"],
             "status": receipt["status"],
