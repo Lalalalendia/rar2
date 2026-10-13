@@ -66,15 +66,18 @@ def main() -> int:
     )
     live.write_caddy(caddyfile, app_port=appport, http_port=httpport, https_port=httpsport)
     site = caddyfile.read_text(encoding="utf-8")
-    needle = "@reader_surface path / /index.html"
-    if site.count(needle) != 1:
+    # The deployed public edge must expose the real anonymous editor, not
+    # only the physical-test runner's private Caddy rewriting.
+    for path in (
+        "/v1/editor/temporary-sessions",
+        "/v1/editor/temporary-sessions/*",
+        "/editor/temporary-preview",
+        "/editor/temporary-edit-move-client-v1.mjs",
+    ):
+        if path not in site:
+            raise AssertionError("Caddy anonymous editor route missing: " + path)
+    if "@reader_surface path / /index.html" not in site:
         raise AssertionError("Caddy Reader surface unexpectedly changed")
-    site = site.replace(
-        needle,
-        "@reader_surface path /v1/editor/temporary-sessions "
-        "/v1/editor/temporary-sessions/* / /index.html",
-    )
-    caddyfile.write_text(site, encoding="utf-8")
 
     env = os.environ.copy()
     env.update(
