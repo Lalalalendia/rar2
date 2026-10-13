@@ -41,7 +41,9 @@ use crate::{
     blob_store::{BlobStoreError, BlobStoreService, CreateBindingRequest, ResourceKind},
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
-    product_replay_worker::{IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer},
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+    },
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
@@ -466,6 +468,10 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
             post(temporary_editor_move_node),
         )
         .route(
+            "/v1/editor/temporary-sessions/{session_id}/scene",
+            get(temporary_editor_scene),
+        )
+        .route(
             "/v1/editor/temporary-sessions/{session_id}/exports/{target}",
             get(temporary_editor_edited_export),
         )
@@ -575,9 +581,20 @@ struct TemporaryEditorCurrentResponse {
     revision_id: String,
     revision_cursor: i64,
     canonical_authoring_revision_id: String,
+    baseline_revision_id: String,
     expires_at_ms: i64,
     project: EditorProject,
     authoring_graph: PubResolvedGraph,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorSceneResponse {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    expires_at_ms: i64,
+    scene: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -834,7 +851,7 @@ async fn temporary_editor_current_inner(
     )
     .map_err(|_| GuestReaderError::internal("temporary_editor_baseline_invalid"))?;
 
-    let mut revision_id = baseline.service_revision_id;
+    let mut revision_id = baseline.service_revision_id.clone();
     let mut canonical_revision_id = baseline.canonical_authoring_revision_id;
     let mut revision_cursor = 0_i64;
     let mut project_hash = project_sha256(&project)
@@ -922,9 +939,110 @@ async fn temporary_editor_current_inner(
         revision_id,
         revision_cursor,
         canonical_authoring_revision_id: canonical_revision_id,
+        baseline_revision_id: baseline.service_revision_id,
         expires_at_ms: current.expires_at_ms,
         project,
         authoring_graph,
+    }))
+}
+
+/// A source-bound, non-renewing rich Reader Scene for the accepted Guest revision.
+/// The baseline Guest /scene route is deliberately left immutable.
+async fn temporary_editor_scene(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<GuestJson<TemporaryEditorSceneResponse>, GuestReaderError> {
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let source_bytes = read_exact_temporary_editor_source(&state, &session).await?;
+    let project_hash = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let scene = backend
+        .worker
+        .project_reader_scene(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &project_hash,
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: current.revision_id.clone(),
+                baseline_revision_id: current.baseline_revision_id.clone(),
+            },
+        )
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("temporary_editor_scene_unavailable"))?;
+
+    // A worker result is not a durable head claim until its bearer, expiry
+    // and RevisionStream head are rechecked after isolated computation.
+    let latest = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&latest)?;
+    if latest.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let edges = backend
+        .revisions
+        .load_document_edges(&session_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+    let same_head = if current.revision_cursor == 0 {
+        edges.is_empty()
+    } else {
+        edges.last().is_some_and(|edge| {
+            edge.child_revision == current.revision_id
+                && edge.child_cursor == current.revision_cursor
+        })
+    };
+    if !same_head {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_scene_stale_revision",
+        ));
+    }
+    if scene["protocol_version"] != "chaptera.reader-scene.v1"
+        || scene["document_id"] != session_id
+        || scene["source_hash"] != current.source_hash
+        || scene["revision_id"] != current.revision_id
+        || !scene["pages"].is_array()
+        || !scene["nodes"].is_array()
+    {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_scene_identity_mismatch",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorSceneResponse {
+        protocol_version: "chaptera.temporary-editor-scene.v1",
+        document_id: session_id,
+        source_hash: current.source_hash,
+        revision_id: current.revision_id,
+        expires_at_ms: latest.expires_at_ms,
+        scene,
     }))
 }
 

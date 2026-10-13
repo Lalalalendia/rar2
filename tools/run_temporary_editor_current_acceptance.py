@@ -144,6 +144,7 @@ def main() -> int:
         if not session_id.startswith("tempedit:") or len(token) != 64:
             raise AssertionError("temporary capability protocol mismatch")
         path = f"/v1/editor/temporary-sessions/{session_id}/current"
+        scene_path = f"/v1/editor/temporary-sessions/{session_id}/scene"
         private = [f"x-chaptera-reader-session: {token}"]
         checked(call("GET", path)[0], 401, "no-capability current")
         checked(call("GET", path, headers=[
@@ -207,12 +208,48 @@ def main() -> int:
         # Physical P0 mutation: use a bounded real-PUB direct geometric node.
         # Rejected unsupported nodes are skipped; the proof is positive only
         # if a canonical isolated MoveNode event is actually committed.
+        # The guest editing surface must use the exact source-neutral isolated
+        # Reader projection, never the original Guest upload scene.
+        checked(call("GET", scene_path)[0], 401, "guest revised scene requires capability")
+        checked(call("GET", scene_path, headers=[
+            "x-chaptera-reader-session: " + secrets.token_hex(32)
+        ])[0], 404, "foreign capability cannot see revised scene")
+        scene_status, scene_raw = call("GET", scene_path, headers=private)
+        checked(scene_status, 200, "isolated guest exact baseline Reader Scene")
+        scene_head = json.loads(scene_raw)
+        if (
+            scene_head.get("protocol_version") != "chaptera.temporary-editor-scene.v1"
+            or scene_head.get("document_id") != session_id
+            or scene_head.get("source_hash") != expected_hash
+            or scene_head.get("revision_id") != revision
+            or scene_head.get("expires_at_ms") != expected_expiry
+        ):
+            raise AssertionError("private Guest Reader Scene baseline identity/TTL mismatch")
+        rich_scene = scene_head.get("scene")
+        if (
+            not isinstance(rich_scene, dict)
+            or rich_scene.get("protocol_version") != "chaptera.reader-scene.v1"
+            or rich_scene.get("document_id") != session_id
+            or rich_scene.get("source_hash") != expected_hash
+            or rich_scene.get("revision_id") != revision
+            or not isinstance(rich_scene.get("nodes"), list)
+        ):
+            raise AssertionError("isolated baseline Reader Scene protocol or revision invalid")
+        visible_direct_ids = {
+            node["node_id"]
+            for node in rich_scene["nodes"]
+            if isinstance(node, dict) and isinstance(node.get("node_id"), str)
+            and node.get("parent_node_id") is None
+            and node.get("origin_node_id") is None
+        }
         nodes = current["authoring_graph"].get("nodes")
         if not isinstance(nodes, dict):
             raise AssertionError("canonical real PUB has no node map for editing")
         candidates = []
         for node_id, node in sorted(nodes.items()):
             if not isinstance(node_id, str) or not isinstance(node, dict):
+                continue
+            if node_id not in visible_direct_ids:
                 continue
             bounds = node.get("header", {}).get("bounds", {})
             if not isinstance(bounds, dict):
@@ -249,7 +286,7 @@ def main() -> int:
         accepted = None
         chosen = None
         unsupported = 0
-        for idx, (node_id, x, y) in enumerate(candidates[:16]):
+        for idx, (node_id, x, y) in enumerate(candidates[:24]):
             intent = {
                 "protocol_version": "chaptera.commit-request.v1",
                 "document_id": session_id,
@@ -273,7 +310,7 @@ def main() -> int:
             break
         if accepted is None:
             raise AssertionError(
-                f"no supported canonical MoveNode in first 16 real nodes; rejected={unsupported}"
+                f"no supported visible MoveNode in first 24 direct scene nodes; rejected={unsupported}"
             )
         if (
             accepted.get("protocol_version") != "chaptera.temporary-editor-move-node.v1"
@@ -313,6 +350,32 @@ def main() -> int:
         ):
             raise AssertionError("canonical reopened Scene did not reflect the accepted MoveNode geometry")
 
+
+        edited_scene_status, edited_scene_raw = call("GET", scene_path, headers=private)
+        checked(edited_scene_status, 200, "private exact edited Reader Scene after MoveNode")
+        edited_scene_reply = json.loads(edited_scene_raw)
+        if (
+            edited_scene_reply.get("protocol_version") != "chaptera.temporary-editor-scene.v1"
+            or edited_scene_reply.get("document_id") != session_id
+            or edited_scene_reply.get("source_hash") != expected_hash
+            or edited_scene_reply.get("revision_id") != accepted["revision_id"]
+            or edited_scene_reply.get("expires_at_ms") != move_expiry
+        ):
+            raise AssertionError("edited Guest Scene is not the exact accepted revision")
+        edited_rich_scene = edited_scene_reply.get("scene")
+        if not isinstance(edited_rich_scene, dict) or not isinstance(edited_rich_scene.get("nodes"), list):
+            raise AssertionError("edited Guest Scene lost source-neutral page geometry")
+        matches = [
+            node for node in edited_rich_scene["nodes"]
+            if isinstance(node, dict) and node.get("node_id") == chosen_id
+        ]
+        if len(matches) != 1 or (
+            matches[0].get("bounds", {}).get("x") != after_bounds["x"]
+            or matches[0].get("bounds", {}).get("y") != after_bounds["y"]
+        ):
+            raise AssertionError("real edited Reader Scene did not paint moved canonical node")
+        if live.sha256_file(physical_source) != expected_hash:
+            raise AssertionError("revised Scene changed the immutable original PUB")
 
         # The very same pinned moved revision must produce an actual modified
         # editable package, not a converter re-reading immutable PUB bytes.
@@ -455,6 +518,8 @@ def main() -> int:
         expired_status = call("GET", path, headers=private)[0]
         if expired_status not in {404, 410}:
             raise AssertionError("expired capability retained document access")
+        checked(call("GET", scene_path, headers=private)[0], expired_status,
+                "expired bearer may not read private edited Scene")
         checked(call(
             "GET", f"/v1/editor/temporary-sessions/{session_id}/exports/{edited_formats[0]}?{query}",
             headers=private,
@@ -497,6 +562,7 @@ def main() -> int:
             "private_revision_rows_after_ttl": expired_revisions,
             "private_canonical_bindings_after_ttl": expired_bindings,
             "edited_download_proven": True, "edited_target_profiles": edited_formats,
+            "revised_reader_scene_proven": True, "revised_node_id": chosen_id,
             "editable_unavailable_targets": unavailable_formats,
             "edited_artifact_receipts": export_receipts,
             "persistent_export_artifacts": False, "v0_go": False,

@@ -37,6 +37,8 @@ const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
 const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
 const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
 const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
+const TEMPORARY_EDIT_MOVE_CLIENT: &[u8] =
+    include_bytes!("../../web/temporary-edit-move-client-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -53,7 +55,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 28] = [
+const ASSETS: [EmbeddedAsset; 29] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -190,6 +192,11 @@ const ASSETS: [EmbeddedAsset; 28] = [
         bytes: TEMPORARY_PREVIEW_CSS,
     },
     EmbeddedAsset {
+        name: "temporary-edit-move-client-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_EDIT_MOVE_CLIENT,
+    },
+    EmbeddedAsset {
         name: "story-line-endings-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
         bytes: STORY_LINE_ENDINGS,
@@ -250,6 +257,10 @@ where
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
         )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
         .route("/editor/rich-reader-editor-shell-v1.mjs", get(rich_shell))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
@@ -284,6 +295,15 @@ where
         .route(
             "/editor/temporary-editor-preview.css",
             get(temporary_preview_css),
+        )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
+        .route("/editor/interaction-v1.mjs", get(interaction))
+        .route(
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+            get(interaction_scene),
         )
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
@@ -351,7 +371,7 @@ async fn text_protocol() -> Response {
     asset_response(&ASSETS[22])
 }
 async fn story_line_endings() -> Response {
-    asset_response(&ASSETS[27])
+    asset_response(&ASSETS[28])
 }
 async fn temporary_edit_browser_session() -> Response {
     asset_response(&ASSETS[23])
@@ -364,6 +384,9 @@ async fn temporary_preview_entry() -> Response {
 }
 async fn temporary_preview_css() -> Response {
     asset_response(&ASSETS[26])
+}
+async fn temporary_edit_move_client() -> Response {
+    asset_response(&ASSETS[27])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -587,7 +610,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn temporary_preview_entry_is_same_origin_csp_and_explicitly_read_only() {
+    async fn temporary_preview_entry_is_same_origin_csp_and_source_bound() {
         let routes = router::<()>();
         for (uri, content_type, bytes) in [
             (
@@ -627,7 +650,7 @@ mod tests {
         }
 
         let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
-        assert!(html.contains("Пока только просмотр"));
+        assert!(html.contains("Правка поддерживаемых объектов"));
         assert!(html.contains("/editor/temporary-editor-preview.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
         assert!(!html.contains("temporary_access_token="));
@@ -654,6 +677,9 @@ mod tests {
             "/editor/temporary-editor-preview.mjs",
             "/editor/temporary-editor-preview.css",
             "/cloud-reader/render-v1.mjs",
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {
             let response = routes
                 .clone()
@@ -673,6 +699,40 @@ mod tests {
             "/editor/doc/10000000-0000-7000-8000-000000000001",
             "/editor/product-editor-entry-v1.mjs",
             "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_move_module_is_only_static_and_never_mounts_product_routes() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/javascript; charset=utf-8"
+            );
+        }
+        for path in [
+            "/editor/chaptera-product-editor-service-v1.mjs",
+            "/editor/rich-reader-editor-shell-v1.mjs",
+            "/editor/reader-scene-editor-adapter-v1.mjs",
+            "/editor/product-editor-entry-v1.mjs",
         ] {
             let response = routes
                 .clone()

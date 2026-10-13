@@ -1,3 +1,6 @@
+import { TemporaryGuestMoveClientV1 } from "./temporary-edit-move-client-v1.mjs";
+import { MoveGestureV1, hitTestSnapshot } from "./interaction-v1.mjs";
+import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 import { TemporaryEditBrowserSessionV0 } from "./temporary-edit-browser-session-v0.mjs";
 import { renderReaderScene } from "../cloud-reader/render-v1.mjs";
 
@@ -55,6 +58,30 @@ function newCsrfToken(cryptoObject) {
   return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+export function temporaryEditorPagePoint(pageSvg, clientX, clientY) {
+  if (typeof pageSvg?.createSVGPoint !== "function" ||
+      typeof pageSvg?.getScreenCTM !== "function") {
+    throw new Error("temporary_editor_page_transform_unavailable");
+  }
+  const matrix = pageSvg.getScreenCTM();
+  if (!matrix || typeof matrix.inverse !== "function") {
+    throw new Error("temporary_editor_page_transform_unavailable");
+  }
+  const p = pageSvg.createSVGPoint();
+  p.x = clientX;
+  p.y = clientY;
+  const point = p.matrixTransform(matrix.inverse());
+  const round = value => Math.sign(value) * Math.floor(Math.abs(value) + 0.5);
+  const x_emu = round(point.x);
+  const y_emu = round(point.y);
+  if (!Number.isSafeInteger(x_emu) || !Number.isSafeInteger(y_emu)) {
+    throw new Error("temporary_editor_page_point_invalid");
+  }
+  return { x_emu, y_emu };
+}
+
 export async function bootTemporaryEditorPreview({
   documentObject = globalThis.document,
   cryptoObject = globalThis.crypto,
@@ -67,10 +94,9 @@ export async function bootTemporaryEditorPreview({
     "temporary-start", "temporary-resume", "temporary-forget",
     "temporary-status", "temporary-expiry", "temporary-pages",
   ];
-  const elements = Object.fromEntries(ids.map((id) => [id, documentObject?.getElementById(id)]));
-  if (ids.some((id) => !elements[id])) {
-    throw new Error("temporary preview HTML contract incomplete");
-  }
+  const elements = Object.fromEntries(ids.map(id => [id, documentObject?.getElementById(id)]));
+  if (ids.some(id => !elements[id])) throw new Error("temporary preview HTML contract incomplete");
+
   const form = elements["temporary-upload-form"];
   const input = elements["temporary-file"];
   const startButton = elements["temporary-start"];
@@ -79,40 +105,118 @@ export async function bootTemporaryEditorPreview({
   const status = elements["temporary-status"];
   const expiry = elements["temporary-expiry"];
   const pages = elements["temporary-pages"];
+  // An older read-only embedded template stays read-only; the editor is
+  // enabled only when the dedicated download/action panel is present.
+  const actions = documentObject?.getElementById("temporary-export-actions");
+  const idmlButton = documentObject?.getElementById("temporary-download-idml");
+  const odgButton = documentObject?.getElementById("temporary-download-odg");
+  const editorEnabled = !!(actions && idmlButton && odgButton);
+  const csrfToken = newCsrfToken(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
-    csrfToken: newCsrfToken(cryptoObject), storage, fetchImpl,
+    csrfToken, storage, fetchImpl,
   });
+
   let busy = false;
+  let editBusy = false;
+  let moveClient = null;
+  let canonicalCurrent = null;
+  let interaction = null;
+  let gesture = null;
+  let gesturePage = null;
+  let gestureOverlay = null;
   const buttons = [startButton, resumeButton, forgetButton];
 
   function controls() {
-    for (const button of buttons) button.disabled = busy;
+    for (const button of buttons) button.disabled = busy || editBusy;
     resumeButton.hidden = !client.hasSavedSession();
     forgetButton.hidden = !client.hasSavedSession();
+    if (editorEnabled) {
+      actions.hidden = !moveClient;
+      const canDownload = !busy && !editBusy && moveClient &&
+        !moveClient.status.pending_reconciliation &&
+        !moveClient.status.refresh_required &&
+        canonicalCurrent?.revision_cursor > 0;
+      idmlButton.disabled = !canDownload;
+      odgButton.disabled = !canDownload;
+    }
+  }
+
+  function clearGesture() {
+    try { gestureOverlay?.remove?.(); } catch {}
+    gestureOverlay = null;
+    if (gesture && gesture.state === "active") gesture.cancel();
+    gesture = null;
+    gesturePage = null;
+  }
+
+  function clearEditor() {
+    clearGesture();
+    moveClient = null;
+    canonicalCurrent = null;
+    interaction = null;
+  }
+
+  function overlayBounds(bounds) {
+    if (!gesturePage || !bounds) return;
+    if (!gestureOverlay) {
+      gestureOverlay = documentObject.createElementNS(SVG_NS, "rect");
+      gestureOverlay.setAttribute("class", "temporary-move-preview");
+      gestureOverlay.setAttribute("pointer-events", "none");
+      gesturePage.appendChild(gestureOverlay);
+    }
+    for (const key of ["x", "y", "width", "height"]) {
+      gestureOverlay.setAttribute(key, String(bounds[key]));
+    }
   }
 
   async function show(view) {
     const description = describeTemporaryPreview(view);
+    clearEditor();
     pages.replaceChildren();
     expiry.textContent = temporaryExpiryText(view.expires_at_ms);
-    if (description.renderable) {
+
+    let effectiveScene = view.scene;
+    if (description.renderable && view.classification === "supported" && editorEnabled) {
       try {
-        await renderer(pages, view.scene, {
-          maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
+        moveClient = TemporaryGuestMoveClientV1.fromTab({
+          storage, csrfToken, fetchImpl, cryptoObject,
         });
+        canonicalCurrent = await moveClient.refresh();
+        effectiveScene = await moveClient.readerScene();
+        interaction = projectReaderSceneToEditorInteractionScene(effectiveScene);
       } catch {
-        pages.replaceChildren();
-        status.textContent = "Не удалось безопасно отобразить страницы этого PUB. Оригинал сохранён без изменений.";
+        clearEditor();
+        // Original stored scene is never shown as if it were the current
+        // edited revision. Explicit recovery may retry after a 409/429.
+        status.textContent = "Актуальная ревизия редактора недоступна. Восстановите временную сессию для повторной попытки.";
         controls();
         return;
       }
     }
-    status.textContent = description.message;
+    if (description.renderable) {
+      try {
+        await renderer(pages, effectiveScene, {
+          maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
+        });
+      } catch {
+        pages.replaceChildren();
+        clearEditor();
+        status.textContent = "Не удалось безопасно отобразить страницы. Оригинал PUB сохранён без изменений.";
+        controls();
+        return;
+      }
+    }
+    if (moveClient) {
+      expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
+      status.textContent = "Открыта редактируемая ревизия. Перетащите поддерживаемый объект. Изменение подтверждает сервер.";
+    } else {
+      status.textContent = description.message;
+    }
     controls();
   }
 
   async function guarded(operation) {
-    if (busy) return;
+    if (busy || editBusy) return;
     busy = true;
     controls();
     status.textContent = "Обработка временной сессии…";
@@ -121,10 +225,11 @@ export async function bootTemporaryEditorPreview({
       await show(view);
     } catch (error) {
       pages.replaceChildren();
+      clearEditor();
       expiry.textContent = "";
       const code = SAFE_ERROR_CODES.has(error?.code)
         ? error.code : "temporary_request_failed";
-      status.textContent = "Временный просмотр не завершён (" + code + "). Исходный PUB не изменён.";
+      status.textContent = "Временная сессия не открыта (" + code + "). Исходный PUB не изменён.";
     } finally {
       busy = false;
       controls();
@@ -132,7 +237,8 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function start(file) {
-    if (!file || !/\.pub$/i.test(file.name ?? "") || !Number.isSafeInteger(file.size) || file.size <= 0) {
+    if (!file || !/\.pub$/i.test(file.name ?? "") ||
+        !Number.isSafeInteger(file.size) || file.size <= 0) {
       status.textContent = "Выберите непустой файл с расширением .pub.";
       return;
     }
@@ -140,12 +246,28 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function resume() {
+    if (moveClient?.status.pending_reconciliation) {
+      if (busy || editBusy) return;
+      editBusy = true;
+      controls();
+      try {
+        const receipt = await moveClient.reconcileUnknown();
+        canonicalCurrent = receipt.current;
+      } catch {
+        status.textContent = "Подтверждение правки не восстановлено. Редактирование заблокировано; повторите восстановление.";
+        editBusy = false;
+        controls();
+        return;
+      }
+      editBusy = false;
+    }
     await guarded(() => client.resume());
   }
 
   function forget() {
-    if (busy) return;
+    if (busy || editBusy) return;
     client.clear();
+    clearEditor();
     pages.replaceChildren();
     expiry.textContent = "";
     input.value = "";
@@ -153,12 +275,132 @@ export async function bootTemporaryEditorPreview({
     controls();
   }
 
-  form.addEventListener("submit", async (event) => {
+  function pageFromEvent(event) {
+    const svg = event.target?.closest?.("svg.page[data-page-id]") ?? null;
+    return svg && pages.contains?.(svg) ? svg : null;
+  }
+
+  function pointerDown(event) {
+    if (event.button !== 0 || !moveClient || busy || editBusy || gesture ||
+        moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
+    const svg = pageFromEvent(event);
+    if (!svg || !interaction) return;
+    try {
+      const point = temporaryEditorPagePoint(svg, event.clientX, event.clientY);
+      const visualId = event.target?.closest?.("[data-node-id]")?.getAttribute?.("data-node-id");
+      const hit = hitTestSnapshot(interaction, svg.getAttribute("data-page-id"), point);
+      if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
+      gesture = new MoveGestureV1(interaction, hit.node_id, point);
+      gesturePage = svg;
+      overlayBounds(gesture.previewBounds());
+      pages.setPointerCapture?.(event.pointerId);
+      event.preventDefault?.();
+    } catch {
+      clearGesture();
+    }
+  }
+
+  function pointerMove(event) {
+    if (!gesture || !gesturePage) return;
+    try {
+      gesture.update(temporaryEditorPagePoint(gesturePage, event.clientX, event.clientY));
+      overlayBounds(gesture.previewBounds());
+    } catch { clearGesture(); }
+  }
+
+  async function pointerUp(event) {
+    if (!gesture || !moveClient || editBusy || busy) return;
+    const active = gesture;
+    const pageSvg = gesturePage;
+    try {
+      active.update(temporaryEditorPagePoint(pageSvg, event.clientX, event.clientY));
+    } catch { clearGesture(); return; }
+    const next = active.previewBounds();
+    const old = interaction.nodes.find(n => n.node_id === active.nodeId)?.bounds;
+    clearGesture();
+    if (!old || !next || (old.x === next.x && old.y === next.y)) return;
+    editBusy = true;
+    controls();
+    status.textContent = "Сохраняется каноническая правка…";
+    try {
+      const result = await moveClient.moveNode({
+        nodeId: active.nodeId, xEmu: next.x, yEmu: next.y,
+      });
+      canonicalCurrent = result.current;
+      const exactScene = await moveClient.readerScene();
+      const updated = exactScene.nodes.find(n => n.node_id === active.nodeId);
+      if (!updated || updated.bounds?.x !== next.x || updated.bounds?.y !== next.y) {
+        throw new Error("temporary_scene_geometry_mismatch");
+      }
+      interaction = projectReaderSceneToEditorInteractionScene(exactScene);
+      await renderer(pages, exactScene, {
+        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
+      });
+      expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
+      status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML или ODG.";
+    } catch {
+      // Fail closed: never repaint the old stored scene as a new revision.
+      pages.replaceChildren();
+      interaction = null;
+      status.textContent = "Подтверждение или обновлённая сцена недоступны. Восстановите сессию перед следующей правкой.";
+      if (!moveClient.status.pending_reconciliation) {
+        clearEditor();
+      }
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
+
+  async function download(target) {
+    if (!moveClient || !canonicalCurrent || busy || editBusy) return;
+    editBusy = true;
+    controls();
+    try {
+      status.textContent = "Проверка потерь и подготовка изменённого " + target.toUpperCase() + "…";
+      const report = await moveClient.exportEdited(target, { reportOnly: true });
+      // Explicit disclosure before the response bytes are offered for download.
+      const losses = report.loss_report?.counts;
+      status.textContent = "Отчёт об экспорте: " +
+        (losses && typeof losses === "object" ? JSON.stringify(losses) : "частично поддерживаемый формат") +
+        ". Скачивание изменённой ревизии…";
+      const result = await moveClient.exportEdited(target);
+      const blobUrl = URL.createObjectURL(result.blob);
+      try {
+        const anchor = documentObject.createElement("a");
+        anchor.href = blobUrl;
+        anchor.download = "chaptera-edited." + target;
+        anchor.hidden = true;
+        documentObject.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      }
+      status.textContent = "Скачан " + target.toUpperCase() + " из изменённой ревизии. Потери: " +
+        (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") + ".";
+    } catch {
+      status.textContent = "Выгрузка текущей ревизии не подтверждена. Восстановите сессию и проверьте срок действия.";
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
+
+  form.addEventListener("submit", async event => {
     event.preventDefault();
     await start(input.files?.[0] ?? null);
   });
   resumeButton.addEventListener("click", resume);
   forgetButton.addEventListener("click", forget);
+  if (editorEnabled) {
+    pages.addEventListener("pointerdown", pointerDown);
+    pages.addEventListener("pointermove", pointerMove);
+    pages.addEventListener("pointerup", pointerUp);
+    pages.addEventListener("pointercancel", clearGesture);
+    idmlButton.addEventListener("click", () => download("idml"));
+    odgButton.addEventListener("click", () => download("odg"));
+  }
   controls();
   return { start, resume, forget };
 }
