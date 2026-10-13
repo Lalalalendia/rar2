@@ -169,6 +169,24 @@ try {
   const rect=await direct.boundingBox();
   if(!rect)throw Error("source-neutral initial shape did not render");
   const x=rect.x+rect.width/2, y=rect.y+rect.height/2;
+  const pointerContext = await page.evaluate(([x,y]) => {
+    const hit = document.elementFromPoint(x,y);
+    const svg = hit?.closest?.("svg.page[data-page-id]");
+    const pageHost = document.querySelector("#temporary-pages");
+    let transformed = null;
+    try {
+      const point = svg?.createSVGPoint();
+      if (point) {
+        point.x=x;point.y=y;
+        transformed=point.matrixTransform(svg.getScreenCTM().inverse());
+      }
+    } catch (e) {transformed={error:String(e)}}
+    return {tag:hit?.tagName,visualId:hit?.closest?.("[data-node-id]")?.getAttribute("data-node-id"),
+      svgFound:!!svg,pageContains:pageHost?.contains(svg),
+      pageId:svg?.getAttribute("data-page-id"),
+      transformed,svgCount:pageHost?.querySelectorAll("svg.page").length};
+  }, [x,y]);
+  console.log("POINTER_CONTEXT", JSON.stringify(pointerContext));
   await page.mouse.move(x,y);
   await page.mouse.down();
   await page.mouse.move(x+15,y+11,{steps:5});
@@ -178,7 +196,7 @@ try {
   } catch {
     const status = await page.locator("#temporary-status").textContent();
     throw new Error("drag was not accepted; status=" + JSON.stringify(status)
-      + " accepted=" + JSON.stringify(accepted)
+      + " pointer=" + JSON.stringify(pointerContext) + " accepted=" + JSON.stringify(accepted)
       + " browserErrors=" + JSON.stringify(pageErrors)
       + " requests=" + JSON.stringify(requests.map(x => x.method + " " + x.path)));
   }
