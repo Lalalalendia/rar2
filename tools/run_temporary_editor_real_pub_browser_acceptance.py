@@ -25,6 +25,7 @@ def main() -> int:
     for key in ("chaptera", "caddy", "fixture", "out"):
         ap.add_argument("--" + key, required=True, type=pathlib.Path)
     ap.add_argument("--fixture-sha256", required=True)
+    ap.add_argument("--target", choices=("idml", "pdf"), default="idml")
     args = ap.parse_args()
     binary = args.chaptera.resolve()
     caddy = args.caddy.resolve()
@@ -132,6 +133,7 @@ def main() -> int:
             "--fixture", str(fixture),
             "--fixture-sha256", args.fixture_sha256,
             "--out", str(out / "receipt.json"),
+            "--target", args.target,
         ]
         result = subprocess.run(
             command, env=env, cwd=live.ROOT, text=True,
@@ -146,25 +148,36 @@ def main() -> int:
                 (result.stderr or result.stdout)[-1800:]
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
+        target = args.target
+        expected_geometry = (
+            "pdf_rectangle_stream" if target == "pdf" else "idml_path_geometry"
+        )
         if (receipt.get("status") != "PASS" or
                 receipt.get("real_pub") is not True or
                 receipt.get("real_chromium") is not True or
+                receipt.get("export_target") != target or
                 receipt.get("browser_pointer_commits") != 1 or
                 receipt.get("source_sha256") != args.fixture_sha256 or
-                receipt.get("changed_idml_geometry_proven") is not True or
-                receipt.get("changed_idml_identity_proven") is not True or
-                receipt.get("changed_idml_geometry_form") != "idml_path_geometry" or
+                receipt.get(f"changed_{target}_geometry_proven") is not True or
+                receipt.get(f"changed_{target}_identity_proven") is not True or
+                receipt.get(f"changed_{target}_geometry_form") != expected_geometry or
                 receipt.get("same_browser_session_delete_proven") is not True or
                 receipt.get("revoked_old_current_scene_export_denied") is not True or
-                receipt.get("temporary_bearer_cleared_after_delete") is not True):
+                receipt.get("temporary_bearer_cleared_after_delete") is not True or
+                receipt.get("loss_report_checked") is not True or
+                receipt.get("bearer_absent_from_urls") is not True or
+                receipt.get("original_pub_immutable") is not True or
+                receipt.get("v0_go") is not False):
             raise AssertionError("full physical browser receipt invalid")
         print(json.dumps({
             "schema": receipt["schema"],
             "status": receipt["status"],
             "real_pub_browser_https": True,
             "browser_pointer_commits": receipt["browser_pointer_commits"],
-            "edited_idml_sha256": receipt["changed_idml_download_sha256"],
-            "downloaded_idml_consumer_geometry_proven": True,
+            "target": target,
+            "edited_artifact_sha256":
+                receipt[f"changed_{target}_download_sha256"],
+            "downloaded_consumer_geometry_proven": True,
             "v0_go": False,
         }, sort_keys=True))
         return 0

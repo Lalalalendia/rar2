@@ -17,6 +17,12 @@ const origin = arg("origin");
 const fixture = resolve(arg("fixture"));
 const fixtureHash = arg("fixture-sha256");
 const receiptPath = resolve(arg("out"));
+// Preserve the existing bounded IDML proof. PDF is a separate physical
+// geometry consumer of the same browser workflow, selected explicitly by CI.
+const exportTarget = process.argv.includes("--target") ? arg("target") : "idml";
+if (exportTarget !== "idml" && exportTarget !== "pdf") {
+  throw Error("guest browser acceptance target must be idml or pdf");
+}
 if (!/^https:\/\/reader\.chaptera\.test:\d+$/.test(origin)
     || !/^[0-9a-f]{64}$/.test(fixtureHash)) {
   throw Error("physical guest origin or pinned fixture invalid");
@@ -51,7 +57,7 @@ page.on("response", response => {
   if (!response.url().startsWith(origin)) return;
   const path = new URL(response.url()).pathname;
   observed.responses.push({path:path.replace(/tempedit:[0-9a-f]{32}/g, "{session}"),
-    status: response.status()});
+    status: response.status(), mime: response.headers()["content-type"] || null});
   if (response.status() !== 200) return;
   let dest;
   if (/\/v1\/editor\/temporary-sessions\/[^/]+\/current$/.test(path)) {
@@ -60,7 +66,7 @@ page.on("response", response => {
     dest = observed.scenes;
   } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/move-node$/.test(path)) {
     dest = observed.accepted;
-  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/exports\/(?:idml|odg)$/.test(path)
+  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/exports\/(?:idml|odg|pdf)$/.test(path)
       && new URL(response.url()).searchParams.get("report_only") === "true") {
     dest = observed.reports;
   }
@@ -87,7 +93,7 @@ function contains(node, x, y) {
     b.width > 0 && b.height > 0 &&
     x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height;
 }
-function candidatePoints(scene, current) {
+function candidatePoints(scene, current, target) {
   const shapes = scene.nodes.filter(n =>
     direct(n) && current.authoring_graph?.nodes?.[n.node_id]);
   // The actual IDML exporter uses pub-editor::frame_from_payload:
@@ -100,8 +106,11 @@ function candidatePoints(scene, current) {
     return typeof frame?.story_id === "string" &&
       Object.hasOwn(graph.stories ?? {}, frame.story_id);
   });
+  const paintedRects = shapes.filter(n =>
+    (Array.isArray(n.paint?.fill_rgb) && n.paint.fill_rgb.length === 3)
+    || Number(n.paint?.line?.width_emu) > 0);
   const choices = [];
-  for (const node of textFrames) {
+  for (const node of (target === "pdf" ? paintedRects : textFrames)) {
     // Require an unambiguous page-local hit; the browser must never edit
     // projected, master, group-child or nonauthoritative stacking candidates.
     for (const fraction of [[.5,.5],[.25,.25],[.75,.25],[.25,.75],[.75,.75]]) {
@@ -173,9 +182,11 @@ try {
   assert.ok(Array.isArray(sourceScene?.nodes) && sourceScene.nodes.length > 0,
     "real isolated Publisher scene did not render");
 
-  const candidates = candidatePoints(sourceScene, oldHead);
+  const candidates = candidatePoints(sourceScene, oldHead, exportTarget);
   assert.ok(candidates.length,
-    "real PUB has no unambiguous direct canonical TextFrame for IDML consumer");
+    exportTarget === "pdf"
+      ? "real PUB has no unambiguous direct painted rectangle for PDF consumer"
+      : "real PUB has no unambiguous direct canonical StoryFrame for IDML consumer");
   let selected = null;
   for (const choice of candidates.slice(0, 120)) {
     const screen = await hitOnScreen(choice);
@@ -184,12 +195,20 @@ try {
       break;
     }
   }
-  assert.ok(selected, "no actual browser-visible canonical TextFrame is selectable");
-  const selectedNode = oldHead.authoring_graph.nodes[selected.nodeId];
-  const storyId = selectedNode.payload?.story_frame?.story_id;
-  assert.ok(typeof storyId === "string" &&
-      Object.hasOwn(oldHead.authoring_graph.stories ?? {}, storyId),
-    "chosen node lacks an exportable canonical StoryFrame");
+  assert.ok(selected, exportTarget === "pdf"
+    ? "no actual browser-visible painted rectangle is selectable"
+    : "no actual browser-visible canonical StoryFrame is selectable");
+  if (exportTarget === "idml") {
+    const selectedNode = oldHead.authoring_graph.nodes[selected.nodeId];
+    const storyId = selectedNode.payload?.story_frame?.story_id;
+    assert.ok(typeof storyId === "string" &&
+        Object.hasOwn(oldHead.authoring_graph.stories ?? {}, storyId),
+      "chosen node lacks an exportable canonical StoryFrame");
+  } else {
+    const paint = sourceScene.nodes.find(n => n.node_id === selected.nodeId)?.paint;
+    assert.ok(Array.isArray(paint?.fill_rgb) || Number(paint?.line?.width_emu) > 0,
+      "selected browser node is not a painted PDF rectangle");
+  }
   const originalBounds = oldHead.authoring_graph.nodes[selected.nodeId].header.bounds;
 
   // This is a real pointer-driven Chromium event. The test does not call POST
@@ -233,27 +252,42 @@ try {
   assert.ok(geometry.x !== originalBounds.x || geometry.y !== originalBounds.y,
     "real browser gesture left canonical geometry unchanged");
 
-  const target = "idml";
+  const target = exportTarget;
   await page.locator("#temporary-download-" + target).waitFor({state:"visible"});
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await page.locator("#temporary-download-" + target).click();
   const download = await downloadPromise;
   await settleResponses();
-  assert.equal(download.suggestedFilename(),"chaptera-edited.idml");
-  const artifact = await readFile(await download.path());
-  assert.ok(artifact.subarray(0,2).equals(Buffer.from("PK")),
-    "changed IDML must be a real ZIP package");
+  assert.equal(download.suggestedFilename(),"chaptera-edited." + target);
+  const artifactPath = await download.path();
+  const artifact = await readFile(artifactPath);
+  assert.ok(artifact.subarray(0, target === "pdf" ? 5 : 2).equals(
+    Buffer.from(target === "pdf" ? "%PDF-" : "PK")),
+    "changed browser download lacks the required physical target signature");
   const report = observed.reports.at(-1);
   assert.equal(report?.revision_id, accepted.revision_id);
+  assert.equal(report?.canonical_authoring_revision_id,
+    accepted.canonical_authoring_revision_id);
   assert.equal(report?.source_hash, fixtureHash);
   assert.equal(report?.target, target);
   assert.equal(sha256(artifact), report.artifact_sha256);
   assert.ok(report.loss_report?.can_serialize === true);
   assert.equal(report.loss_report?.counts?.blocking,0);
+  if (target === "pdf") {
+    assert.equal(report.loss_report?.schema_version,
+      "chaptera.temporary-edited-fixed-pdf-loss.v1");
+    assert.equal(report.loss_report?.current_editor_state,true);
+    assert.equal(report.loss_report?.source_hash,fixtureHash);
+    assert.ok(report.loss_report?.counts?.moved_nodes > 0,
+      "PDF LossReport did not consume the canonical MoveNode history");
+    assert.ok(observed.responses.some(r =>
+      r.path.endsWith("/exports/pdf") && r.status === 200
+      && r.mime === "application/pdf"),
+      "real HTTPS response did not provide physical PDF MIME");
+  }
 
-  // Independent consumer proof must inspect the actual Playwright-downloaded
-  // IDML bytes and the exact NodeId moved by this browser gesture. A ZIP
-  // signature or a SHA-verified export response does not prove its geometry.
+  // Independent consumer: inspect the exact artifact saved by Playwright.
+  // A ZIP/PDF signature, server hash or Reader Scene is not fidelity evidence.
   const rectKeys = ["x", "y", "width", "height"];
   assert.ok(rectKeys.every(key => Number.isSafeInteger(geometry[key])),
     "current Reader Scene produced non-integer edited geometry");
@@ -263,13 +297,26 @@ try {
     assert.equal(geometry[key], authoring[key],
       "current Scene and canonical authoring rectangle diverged");
   }
-  // The verifier opens the actual browser download as an IDML ZIP and
-  // resolves its exact TextFrame identity and four path anchors. Playwright
-  // owns the private download scratch and removes it when browser closes.
-  const verifier = spawnSync("python3", [
+  // A PDF rectangle drawn at a source-existing position is not an edit proof.
+  if (target === "pdf") {
+    assert.ok(!sourceScene.nodes.some(n =>
+      n.node_id !== selected.nodeId && n.bounds
+      && rectKeys.every(key => n.bounds[key] === geometry[key])),
+      "current PDF rectangle coincides with unrelated source geometry");
+  }
+  const verifier = spawnSync("python3", target === "pdf" ? [
+    "tools/verify_temporary_guest_pdf_geometry.py",
+    "--artifact", artifactPath,
+    "--x-emu", String(geometry.x),
+    "--y-emu", String(geometry.y),
+    "--width-emu", String(geometry.width),
+    "--height-emu", String(geometry.height),
+    "--before-x-emu", String(originalBounds.x),
+    "--before-y-emu", String(originalBounds.y),
+  ] : [
     "tools/verify_editable_export_geometry.py",
     "--target", target,
-    "--artifact", await download.path(),
+    "--artifact", artifactPath,
     "--node-id", selected.nodeId,
     "--x-emu", String(geometry.x),
     "--y-emu", String(geometry.y),
@@ -277,34 +324,47 @@ try {
     "--height-emu", String(geometry.height),
   ], { encoding: "utf8", timeout: 60000, maxBuffer: 65536 });
   if (verifier.status !== 0) {
-    // Never leak private package paths, identity, bounds or XML on CI failure.
-    // Emit only a stable structural class for the exact consumer defect.
+    // Never print temporary browser paths, source payloads or private XML.
     const stderr = verifier.stderr || "";
-    const reason = /expected exactly one IDML TextFrame/.test(stderr)
-      ? "idml_frame_identity_missing"
-      : /IDML geometry mismatch/.test(stderr)
-        ? "idml_frame_geometry_mismatch"
-        : /BadZipFile|CRC failed|corrupt zip/i.test(stderr)
-          ? "idml_package_corrupt" : "idml_consumer_error";
-    throw Error("browser-downloaded IDML independent proof failed: " + reason);
+    const reason = /cross-reference pointer/.test(stderr)
+      ? "pdf_xref_invalid"
+      : /does not paint the accepted MoveNode/.test(stderr)
+        ? "pdf_edited_geometry_missing"
+        : /expected exactly one IDML TextFrame/.test(stderr)
+          ? "idml_frame_identity_missing"
+          : /IDML geometry mismatch/.test(stderr)
+            ? "idml_frame_geometry_mismatch"
+            : /BadZipFile|CRC failed|corrupt zip/i.test(stderr)
+              ? "idml_package_corrupt" : target + "_consumer_error";
+    throw Error("browser-downloaded " + target +
+      " independent proof failed: " + reason);
   }
   let consumer;
   try {
     consumer = JSON.parse(verifier.stdout);
   } catch {
-    throw Error("browser-downloaded IDML consumer did not emit a valid proof");
+    throw Error("browser-downloaded " + target +
+      " consumer did not emit a valid proof");
   }
-  assert.equal(consumer.receipt_kind,
-    "chaptera.local-editable-export-geometry-proof.v1");
+  assert.equal(consumer.receipt_kind,target === "pdf"
+    ? "chaptera.tempedit-guest-pdf-physical-geometry.v1"
+    : "chaptera.local-editable-export-geometry-proof.v1");
   assert.equal(consumer.target, target);
-  assert.equal(consumer.node_id, selected.nodeId);
+  if (target === "idml") {
+    assert.equal(consumer.node_id, selected.nodeId);
+  } else {
+    assert.ok(consumer.pages >= 1,"downloaded PDF has no reopened pages");
+    assert.equal(consumer.artifact_byte_len,artifact.length);
+    assert.equal(consumer.source_position_changed,true);
+  }
   assert.equal(consumer.artifact_sha256, sha256(artifact));
   assert.deepEqual(consumer.expected_rect_emu, {
     x: geometry.x, y: geometry.y, width: geometry.width,
     height: geometry.height,
   });
-  assert.equal(consumer.geometry_form, "idml_path_geometry");
-  assert.equal(consumer.geometry_matches_edit, true);
+  assert.equal(consumer.geometry_form,
+    target === "pdf" ? "pdf_rectangle_stream" : "idml_path_geometry");
+  assert.equal(consumer.geometry_matches_edit,true);
 
   // Reload is through the same guest page, original baseline response
   // followed by the exact changed canonical revision. No GET extends TTL.
@@ -373,7 +433,7 @@ try {
     encodeURIComponent(accepted.canonical_authoring_revision_id);
   const revokedPaths = [
     deletedBase + "/current", deletedBase + "/scene",
-    deletedBase + "/exports/idml" + editedQuery,
+    deletedBase + "/exports/" + target + editedQuery,
   ];
   const revokedCodes = await page.evaluate(async ({paths,token}) => {
     const result=[];
@@ -413,11 +473,12 @@ try {
     browser_scene_repaint:true,
     revised_scene_on_reload:true,
     read_does_not_renew_ttl:true,
-    changed_idml_download_sha256:sha256(artifact),
-    changed_idml_byte_len:artifact.length,
-    changed_idml_geometry_proven:true,
-    changed_idml_identity_proven:true,
-    changed_idml_geometry_form:consumer.geometry_form,
+    export_target:target,
+    ["changed_" + target + "_download_sha256"]:sha256(artifact),
+    ["changed_" + target + "_byte_len"]:artifact.length,
+    ["changed_" + target + "_geometry_proven"]:true,
+    ["changed_" + target + "_identity_proven"]:true,
+    ["changed_" + target + "_geometry_form"]:consumer.geometry_form,
     same_browser_session_delete_proven:true,
     revoked_old_current_scene_export_denied:true,
     temporary_bearer_cleared_after_delete:true,
@@ -432,8 +493,9 @@ try {
   await writeFile(receiptPath,JSON.stringify(receipt,null,2)+"\n");
   console.log(JSON.stringify({schema:receipt.schema,status:receipt.status,
     real_pub:true,real_chromium:true,real_https:true,commit_count:1,
-    changed_idml_sha256:receipt.changed_idml_download_sha256,
-    changed_idml_geometry_proven:true,
+    target,
+    changed_download_sha256:sha256(artifact),
+    changed_download_geometry_proven:true,
     v0_go:false}));
 } finally {
   await browser.close();
