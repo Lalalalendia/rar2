@@ -37,6 +37,7 @@ const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
 const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
 const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
 const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
+const TEMPORARY_GUEST_MOVE: &[u8] = include_bytes!("../../web/temporary-guest-move-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -53,7 +54,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 28] = [
+const ASSETS: [EmbeddedAsset; 29] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -190,6 +191,11 @@ const ASSETS: [EmbeddedAsset; 28] = [
         bytes: TEMPORARY_PREVIEW_CSS,
     },
     EmbeddedAsset {
+        name: "temporary-guest-move-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_GUEST_MOVE,
+    },
+    EmbeddedAsset {
         name: "story-line-endings-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
         bytes: STORY_LINE_ENDINGS,
@@ -285,6 +291,9 @@ where
             "/editor/temporary-editor-preview.css",
             get(temporary_preview_css),
         )
+        .route("/editor/temporary-guest-move-v1.mjs", get(temporary_guest_move))
+        .route("/editor/interaction-v1.mjs", get(interaction))
+        .route("/editor/reader-scene-editor-interaction-v1.mjs", get(interaction_scene))
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
 
@@ -364,6 +373,9 @@ async fn temporary_preview_entry() -> Response {
 }
 async fn temporary_preview_css() -> Response {
     asset_response(&ASSETS[26])
+}
+async fn temporary_guest_move() -> Response {
+    asset_response(&ASSETS[28])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -654,6 +666,9 @@ mod tests {
             "/editor/temporary-editor-preview.mjs",
             "/editor/temporary-editor-preview.css",
             "/cloud-reader/render-v1.mjs",
+            "/editor/temporary-guest-move-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {
             let response = routes
                 .clone()
