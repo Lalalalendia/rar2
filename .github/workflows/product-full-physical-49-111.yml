@@ -8,6 +8,7 @@ on:
       - tools/test_product_full_physical_receipts_v1.py
       - tools/product_full_case_census_v1.py
       - tools/test_product_full_case_census_v1.py
+      - tools/test_product_visual_failure_diagnostics.py
       - tools/product_full_cohort_shards_v1.py
       - tools/run_product_oidc_worst_census_acceptance.py
       - tools/run_secure_origin_product_worst_browser.mjs
@@ -41,10 +42,11 @@ jobs:
       - name: Compile and validate existing 49/39/111 physical contract
         run: |
           set -euo pipefail
-          python -m py_compile tools/product_full_physical_receipts_v1.py tools/test_product_full_physical_receipts_v1.py tools/product_full_case_census_v1.py tools/test_product_full_case_census_v1.py tools/product_full_cohort_shards_v1.py tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_worst_visual_64.py
+          python -m py_compile tools/product_full_physical_receipts_v1.py tools/test_product_full_physical_receipts_v1.py tools/product_full_case_census_v1.py tools/test_product_full_case_census_v1.py tools/test_product_visual_failure_diagnostics.py tools/product_full_cohort_shards_v1.py tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_worst_visual_64.py
           python tools/test_product_full_cohort_shards_v1.py -v
           python tools/test_product_full_physical_receipts_v1.py -v
           python tools/test_product_full_case_census_v1.py -v
+          python tools/test_product_visual_failure_diagnostics.py -v
           node --check tools/run_secure_origin_product_worst_browser.mjs
           node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
       - name: Emit fixed, complete and source-free four-shard selection
