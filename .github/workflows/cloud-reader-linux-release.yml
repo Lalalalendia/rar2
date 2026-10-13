@@ -6,6 +6,14 @@ on:
     paths:
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/**"
+      # Guest JS/CSS is compiled into the Rust binary with include_bytes!.
+      # A web-only security fix requires a fresh Linux release packet.
+      - "apps/web/**"
+      # Track local Rust dependencies as well as the app crate.
+      - "crates/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
       - "deploy/systemd/chaptera-reader.service"

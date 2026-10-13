@@ -8,6 +8,8 @@ on:
       - "tools/validate_cloud_deploy_v0.py"
       - "tools/test_reader_nginx_temporary_edge.py"
       - ".github/workflows/cloud-deploy-v0.yml"
+      - ".github/workflows/cloud-reader-linux-release.yml"
+      - "tools/test_cloud_reader_release_trigger_contract.py"
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +29,8 @@ jobs:
           python-version: "3.12"
       - name: Validate public-safe deployment packet
         run: python tools/validate_cloud_deploy_v0.py
+      - name: Ensure embedded assets and Rust deps trigger Linux releases
+        run: python -m unittest tools.test_cloud_reader_release_trigger_contract
       - name: Enforce no-login Temporary Editor Nginx allowlist and real grammar
         run: |
           sudo apt-get update -qq
