@@ -66,11 +66,11 @@ server {
         proxy_send_timeout 120s;
     }
 
-    # Guest-only upload, capability-authenticated Current/Scene/MoveNode,
+    # Guest-only upload, capability-authenticated Current/Scene/MoveNode/StoryRange,
     # bounded edited exports and explicit DELETE. Restrict path to the
     # canonical tempedit:hex32 identity; arbitrary Product routes remain 404.
     # Quantified {32} requires quoted PCRE for Nginx config lexer.
-    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|exports/(?:idml|odg|pdf)))?)?$" {
+    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|story-range|exports/(?:idml|odg|pdf)))?)?$" {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
