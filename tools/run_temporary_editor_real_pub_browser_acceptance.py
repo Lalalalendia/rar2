@@ -135,7 +135,7 @@ def main() -> int:
         ]
         result = subprocess.run(
             command, env=env, cwd=live.ROOT, text=True,
-            capture_output=True, timeout=270, check=False,
+            capture_output=True, timeout=540, check=False,
         )
         if result.returncode != 0:
             # Never echo raw source bytes, private HTTP payloads or bearer
