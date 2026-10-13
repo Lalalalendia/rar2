@@ -22,4 +22,6 @@ button:disabled { opacity: .65; cursor: wait; }
 .secondary { color: #475569; font-size: .9rem; }
 .pages { display: flex; flex-direction: column; align-items: center; gap: 1rem; overflow-x: auto; padding: .5rem 0; }
 .pages svg.page { background: white; border: 1px solid #d6dde5; box-shadow: 0 1px 5px #15253d26; max-width: 100%; height: auto; }
+.pages { touch-action: none; cursor: default; }
+.temporary-move-preview { fill: none; stroke: #1d4c7d; stroke-width: 12700; stroke-dasharray: 63500 31750; }
 @media (max-width: 580px) { .page-shell { width: calc(100% - 1rem); margin: .75rem auto; } .panel { padding: .85rem; } }
