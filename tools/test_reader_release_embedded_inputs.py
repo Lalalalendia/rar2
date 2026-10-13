@@ -100,7 +100,19 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         install = HOST_INSTALL.read_text(encoding="utf-8")
         self.assertIn('PREVIOUS="/opt/chaptera/previous"', install)
         self.assertIn('readlink -f "${CURRENT}"', install)
-        self.assertIn('^/opt/chaptera/releases/[0-9a-f]{40}, install)
+        self.assertIn('^/opt/chaptera/releases/[0-9a-f]{40}        self.assertIn('[[ ! -x "${old_release}/chaptera" ]]', install)
+        self.assertIn('ln -sfn "${old_release}" "${PREVIOUS}"', install)
+        self.assertIn('ln -sfn "${RELEASE}" "${CURRENT}"', install)
+        self.assertLess(
+            install.index('ln -sfn "${old_release}" "${PREVIOUS}"'),
+            install.index('ln -sfn "${RELEASE}" "${CURRENT}"'),
+            "rollback target must be recorded before current is switched",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
+, install)
         self.assertIn('[[ ! -x "${old_release}/chaptera" ]]', install)
         self.assertIn('ln -sfn "${old_release}" "${PREVIOUS}"', install)
         self.assertIn('ln -sfn "${RELEASE}" "${CURRENT}"', install)
