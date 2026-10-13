@@ -375,7 +375,7 @@ async fn temporary_preview_css() -> Response {
     asset_response(&ASSETS[26])
 }
 async fn temporary_guest_move() -> Response {
-    asset_response(&ASSETS[28])
+    asset_response(&ASSETS[27])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
