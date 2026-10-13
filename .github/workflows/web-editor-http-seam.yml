@@ -30,7 +30,13 @@ on:
       - "apps/web/product-editor-entry-v1.test.mjs"
       - "apps/web/temporary-edit-move-client-v1.mjs"
       - "apps/web/temporary-edit-move-client-v1.test.mjs"
+      - "apps/web/temporary-edit-move-client-v1.scene.test.mjs"
+      - "apps/web/temporary-editor-preview.html"
+      - "apps/web/temporary-editor-preview.css"
+      - "apps/web/temporary-editor-preview.mjs"
+      - "apps/web/temporary-editor-preview.gesture.test.mjs"
       - "tools/run_rich_reader_editor_harness.mjs"
+      - "tools/run_temporary_editor_guest_harness.mjs"
       - "tools/run_product_editor_entry_harness.mjs"
       - "tools/run_cloud_project_new_harness.mjs"
       - "services/editor-api/web_shell_http_harness.py"
@@ -91,6 +97,8 @@ jobs:
         run: node tools/run_product_editor_entry_harness.mjs
       - name: Smoke new PUB project file picker against synthetic SourceIngress transport
         run: node tools/run_cloud_project_new_harness.mjs
+      - name: Smoke anonymous Temporary Editor pointer, current Scene and edited download in Chromium
+        run: node tools/run_temporary_editor_guest_harness.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: web-editor-http-seam-chromium
@@ -99,4 +107,5 @@ jobs:
             target/web-editor-rich/chromium-rich-editor-smoke.json
             target/web-editor-product/chromium-product-editor-entry-smoke.json
             target/web-editor-product/chromium-project-new-synthetic.json
+            target/web-editor-temporary/chromium-temporary-guest.json
           if-no-files-found: error
