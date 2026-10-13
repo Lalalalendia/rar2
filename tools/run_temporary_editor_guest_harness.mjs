@@ -147,6 +147,8 @@ const origin="http://127.0.0.1:"+server.address().port;
 const browser=await chromium.launch({headless:true});
 try {
   const page=await browser.newPage({viewport:{width:1024,height:700},acceptDownloads:true});
+  const pageErrors=[];
+  page.on("pageerror",error=>pageErrors.push(String(error?.message??error)));
   await page.goto(origin+"/editor/temporary-preview");
   await page.locator("#temporary-file").setInputFiles({
     name:"pinned.pub",mimeType:"application/vnd.ms-publisher",
@@ -154,7 +156,16 @@ try {
   });
   await page.locator("#temporary-start").click();
   const direct=page.locator('[data-node-id="'+nodeId+'"]');
-  await direct.waitFor({state:"visible",timeout:30000});
+  try {
+    await direct.waitFor({state:"visible",timeout:7500});
+  } catch {
+    const status=await page.locator("#temporary-status").textContent();
+    const bodyText=await page.locator("body").innerText();
+    throw new Error("anonymous guest preview did not draw exact node; status=" +
+      JSON.stringify(status) + " pageErrors=" + JSON.stringify(pageErrors) +
+      " body=" + JSON.stringify(bodyText.slice(0,900)) +
+      " requests=" + JSON.stringify(requests.map(x=>x.method+" "+x.path)));
+  }
   const rect=await direct.boundingBox();
   if(!rect)throw Error("source-neutral initial shape did not render");
   const x=rect.x+rect.width/2, y=rect.y+rect.height/2;
