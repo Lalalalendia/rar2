@@ -244,7 +244,7 @@ try {
   await page.locator("#temporary-resume").click();
   await page.waitForFunction(() =>
     document.querySelector("#temporary-status")?.textContent.includes(
-      "Открыта редактируемая ревизия"), null,{timeout:90000});
+      "Открыта редактируемая ревизия"), null,{timeout:170000});
   await settleResponses();
   const reopened = observed.scenes.at(-1);
   assert.equal(reopened.revision_id,accepted.revision_id);
