@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import stat
+from print_composer_nup_output_v1 import NupOutputPublishError, publish_nup_outputs_v1
 from print_composer_nup_v1 import PrintComposerNupError, plan_editor_card_a4_9up_v1
 from print_composer_nup_pdf_v1 import (
     ComposedNupPdfV1, MAX_FIXED_PDF_BYTES, compose_editor_card_a4_9up_pdf_v1,
@@ -176,20 +177,12 @@ def main() -> int:
             logical_page_id=args.logical_page_id,gap_mm=args.gap_mm)
         payloads=[product.pdf_bytes,product.preview_png_bytes,
                   (json.dumps(product.receipt,sort_keys=True,indent=2)+"\n").encode()]
-        created=[]
-        try:
-            for path,payload in zip(outs,payloads):
-                with path.open("xb") as output:
-                    created.append(path)
-                    output.write(payload)
-        except OSError:
-            for path in created:path.unlink(missing_ok=True)
-            raise
+        publish_nup_outputs_v1(inputs=ins, outputs=list(zip(outs, payloads)))
         print(json.dumps({"ok":True,"pdf_sha256":sha(product.pdf_bytes),
                           "preview_sha256":sha(product.preview_png_bytes)},sort_keys=True))
         return 0
-    except (PrintComposerNupError,OSError) as exc:
-        print(json.dumps({"ok":False,"error":str(exc) if isinstance(exc,PrintComposerNupError)
+    except (PrintComposerNupError,NupOutputPublishError,OSError) as exc:
+        print(json.dumps({"ok":False,"error":str(exc) if isinstance(exc,(PrintComposerNupError,NupOutputPublishError))
                          else "file_io_error"},sort_keys=True))
         return 2
 

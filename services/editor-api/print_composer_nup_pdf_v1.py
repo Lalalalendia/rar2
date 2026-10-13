@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import stat
 
+from print_composer_nup_output_v1 import publish_nup_outputs_v1, NupOutputPublishError
 from print_composer_nup_v1 import (
     EMU_PER_MM,
     EditorNupSheetV1,
@@ -246,19 +247,16 @@ def main() -> int:
         product = compose_editor_card_a4_9up_pdf_v1(
             plan=plan, current_fixed_pdf_bytes=fixed, source_pub_bytes=source
         )
-        for path, payload in (
+        publish_nup_outputs_v1(inputs=inputs, outputs=[
             (args.output_pdf, product.pdf_bytes),
             (args.output_preview, product.preview_png_bytes),
-            (args.output_receipt, (json.dumps(product.receipt, sort_keys=True, indent=2) + "\n").encode()),
-        ):
-            if not path.parent.exists():
-                raise PrintComposerNupError("output_parent_does_not_exist")
-            path.write_bytes(payload)
+            (args.output_receipt, (json.dumps(product.receipt, sort_keys=True) + "\n").encode()),
+        ])
         print(json.dumps(product.receipt, sort_keys=True))
         return 0
-    except (PrintComposerNupError, OSError) as exc:
+    except (PrintComposerNupError, NupOutputPublishError, OSError) as exc:
         # No customer file paths or text in the diagnostic channel.
-        code = str(exc) if isinstance(exc, PrintComposerNupError) else "file_io_error"
+        code = str(exc) if isinstance(exc, (PrintComposerNupError, NupOutputPublishError)) else "file_io_error"
         print(json.dumps({"error": code, "ok": False}, sort_keys=True))
         return 2
 

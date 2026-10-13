@@ -24,6 +24,7 @@ from print_composer_nup_current_revision_v1 import compose_verified_current_edit
 import os
 import stat
 from print_composer_nup_pdf_v1 import MAX_FIXED_PDF_BYTES
+from print_composer_nup_output_v1 import NupOutputPublishError, publish_nup_outputs_v1
 from print_composer_nup_v1 import PrintComposerNupError
 
 CANONICAL_RUNNER = ROOT / "tools" / "run_editor_fixed_pdf_current_revision_v2.py"
@@ -175,23 +176,14 @@ def main() -> int:
         )
         data = [product.pdf_bytes, product.preview_png_bytes,
                 (json.dumps(receipt, sort_keys=True, indent=2) + "\n").encode()]
-        created: list[Path] = []
-        try:
-            for path, payload in zip(outputs, data):
-                with path.open("xb") as stream:
-                    created.append(path)
-                    stream.write(payload)
-        except OSError:
-            for path in created:
-                path.unlink(missing_ok=True)
-            raise
+        publish_nup_outputs_v1(inputs=inputs, outputs=list(zip(outputs, data)))
         print(json.dumps({"ok": True, "pdf_sha256": digest(product.pdf_bytes),
                           "preview_sha256": digest(product.preview_png_bytes),
                           "verified_fresh_replays": 2}, sort_keys=True))
         return 0
-    except (OSError, PrintComposerNupError) as error:
+    except (OSError, PrintComposerNupError, NupOutputPublishError) as error:
         print(json.dumps({"ok": False, "error":
-                          str(error) if isinstance(error, PrintComposerNupError)
+                          str(error) if isinstance(error, (PrintComposerNupError, NupOutputPublishError))
                           else "file_io_error"}, sort_keys=True))
         return 2
 
