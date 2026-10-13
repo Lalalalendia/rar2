@@ -499,6 +499,30 @@ def main() -> int:
                             or not story_receipt.get("one_authorized_story_commit")
                             or not story_receipt.get("browser_reload_preserves_story")
                             or not story_receipt.get("anonymous_read_denied")
+                            or not story_receipt.get("selected_first_scalar_range")
+                            or (
+                                story_engine == "chromium"
+                                and (
+                                    story_receipt.get("input_path")
+                                    != "chromium_ime_composition"
+                                    or not story_receipt.get(
+                                        "composition_events_confirmed"
+                                    )
+                                    or not story_receipt.get(
+                                        "composition_apply_fenced"
+                                    )
+                                )
+                            )
+                            or (
+                                story_engine == "webkit"
+                                and (
+                                    story_receipt.get("input_path")
+                                    != "webkit_caret_range_keyboard"
+                                    or not story_receipt.get(
+                                        "caret_range_input_confirmed"
+                                    )
+                                )
+                            )
                         ):
                             raise RuntimeError(
                                 f"invalid exact {story_engine} Story acceptance receipt"
@@ -522,11 +546,26 @@ def main() -> int:
                                 "committed_revision_id": receipt[
                                     "committed_revision_id"
                                 ],
+                                "input_path": receipt["input_path"],
                             }
                             for receipt in story_receipts
                         ],
                         "two_engine_claim": set(story_engines)
                         == {"chromium", "webkit"},
+                        "two_engine_caret_ime_range_claim": (
+                            set(story_engines) == {"chromium", "webkit"}
+                            and any(
+                                receipt.get("composition_events_confirmed")
+                                and receipt.get("composition_apply_fenced")
+                                for receipt in story_receipts
+                                if receipt.get("browser_engine") == "chromium"
+                            )
+                            and any(
+                                receipt.get("caret_range_input_confirmed")
+                                for receipt in story_receipts
+                                if receipt.get("browser_engine") == "webkit"
+                            )
+                        ),
                         "browser_layout_is_canonical": False,
                         "authoritative_relayout_overset_verified": False,
                         "story_undo_redo_claim": False,
