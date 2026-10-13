@@ -123,6 +123,12 @@ function server(classification = "supported") {
         source_sha256: source, expires_at_ms: 4_600_000,
         scene: readerScene(beforeRev),
       });
+      // A reload resumes the same unedited Guest Reader file, not a new upload.
+      if (url === "/v1/reader/guest-sessions/" + id + "/scene") return response({
+        protocol_version: "chaptera.reader-guest-session.v1",
+        session_id: id, classification, source_sha256: source,
+        expires_at_ms: 4_600_000, scene: readerScene(beforeRev),
+      });
       if (url === base + "/current") return response(
         moved ? current(afterRev, 1, moved.x_emu, moved.y_emu) :
           current(beforeRev, 0, 100, 200),
@@ -202,6 +208,47 @@ test("click-only selection never writes a revision", async () => {
   assert.equal(dom.nodes["temporary-download-pdf"].disabled, false,
     "click-only selection must not create an edit to unlock PDF");
 });
+
+for (const classification of ["supported", "partial"]) {
+  test("guest " + classification + " reopens baseline PDF after page reload without new upload or revision", async () => {
+    const sharedStorage = storage(), network = server(classification);
+    const first = fakeDom(), second = fakeDom();
+    const settings = {
+      cryptoObject: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+      storage: sharedStorage, fetchImpl: network.fetchImpl,
+      renderer: async () => {},
+    };
+    const opened = await bootTemporaryEditorPreview({
+      ...settings, documentObject: first.documentObject,
+    });
+    await opened.start({ name: "saved.pub", size: 1729 });
+    const initialExpiry = first.nodes["temporary-expiry"].textContent;
+    assert.equal(first.nodes["temporary-download-pdf"].disabled, false);
+    assert.equal(first.nodes["temporary-download-idml"].disabled, true);
+    const resumed = await bootTemporaryEditorPreview({
+      ...settings, documentObject: second.documentObject,
+    });
+    await resumed.resume();
+    assert.equal(second.nodes["temporary-download-pdf"].disabled, false);
+    assert.equal(second.nodes["temporary-download-pdf"].textContent, "Скачать PDF");
+    assert.equal(second.nodes["temporary-download-idml"].disabled, true);
+    assert.equal(second.nodes["temporary-download-odg"].disabled, true);
+    assert.equal(second.nodes["temporary-expiry"].textContent, initialExpiry,
+      "read-only Resume must not extend the server's one-hour TTL");
+    assert.equal(network.calls.filter(x => x.url ===
+      "/v1/editor/temporary-sessions" && x.options.method === "POST").length, 1,
+      "refresh/resume must never mint an extra temporary session");
+    assert.equal(network.calls.filter(x => x.url.endsWith("/content")).length, 1);
+    assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 0);
+    assert.equal(network.calls.filter(x => x.url ===
+      "/v1/reader/guest-sessions/" + id + "/scene").length, 1);
+    if (classification === "partial") {
+      assert.match(second.nodes["temporary-status"].textContent, /Needs review \/ Partial/);
+    }
+    assert.ok(network.calls.every(x => !x.url.includes(token)),
+      "the private capability must not leak into request URLs");
+  });
+}
 
 test("partial real source retains a visible Needs review fence during edit", async () => {
   const dom = fakeDom(), network = server("partial");
