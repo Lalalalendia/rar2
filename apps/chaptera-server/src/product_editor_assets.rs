@@ -33,6 +33,9 @@ const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor
 const TEXT_PROTOCOL: &[u8] = include_bytes!("../../web/text-protocol-v1.mjs");
 const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
     include_bytes!("../../web/temporary-edit-browser-session-v0.mjs");
+const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
+const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
+const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -49,7 +52,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 24] = [
+const ASSETS: [EmbeddedAsset; 27] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -170,6 +173,21 @@ const ASSETS: [EmbeddedAsset; 24] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: TEMPORARY_EDIT_BROWSER_SESSION,
     },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_HTML,
+    },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_CSS,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -210,6 +228,17 @@ where
             "/editor/temporary-edit-browser-session-v0.mjs",
             get(temporary_edit_browser_session),
         )
+        // Pilot entry is explicitly named "preview" and intentionally has
+        // no canonical edit or changed-file export controls.
+        .route("/editor/temporary-preview", get(temporary_preview))
+        .route(
+            "/editor/temporary-editor-preview.mjs",
+            get(temporary_preview_entry),
+        )
+        .route(
+            "/editor/temporary-editor-preview.css",
+            get(temporary_preview_css),
+        )
         .route(
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
@@ -224,6 +253,30 @@ where
         .route(
             "/editor/reader-scene-editor-adapter-v1.mjs",
             get(reader_adapter),
+        )
+        .route("/cloud-reader/render-v1.mjs", get(reader_render))
+}
+
+/// Minimal public assets for an anonymous filesystem-backed temporary
+/// session. Unlike router(), this must not expose Product/OIDC project
+/// routes or document editor modules when Chaptera runs without AuthN.
+pub fn temporary_preview_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/editor/temporary-preview", get(temporary_preview))
+        .route(
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            get(temporary_edit_browser_session),
+        )
+        .route(
+            "/editor/temporary-editor-preview.mjs",
+            get(temporary_preview_entry),
+        )
+        .route(
+            "/editor/temporary-editor-preview.css",
+            get(temporary_preview_css),
         )
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
@@ -292,6 +345,15 @@ async fn text_protocol() -> Response {
 }
 async fn temporary_edit_browser_session() -> Response {
     asset_response(&ASSETS[23])
+}
+async fn temporary_preview() -> Response {
+    asset_response(&ASSETS[24])
+}
+async fn temporary_preview_entry() -> Response {
+    asset_response(&ASSETS[25])
+}
+async fn temporary_preview_css() -> Response {
+    asset_response(&ASSETS[26])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -471,6 +533,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn temporary_preview_entry_is_same_origin_csp_and_explicitly_read_only() {
+        let routes = router::<()>();
+        for (uri, content_type, bytes) in [
+            (
+                "/editor/temporary-preview",
+                "text/html; charset=utf-8",
+                TEMPORARY_PREVIEW_HTML,
+            ),
+            (
+                "/editor/temporary-editor-preview.mjs",
+                "text/javascript; charset=utf-8",
+                TEMPORARY_PREVIEW_ENTRY,
+            ),
+            (
+                "/editor/temporary-editor-preview.css",
+                "text/css; charset=utf-8",
+                TEMPORARY_PREVIEW_CSS,
+            ),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(response.headers()["cache-control"], "no-cache");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+            assert!(
+                response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .contains("connect-src 'self'")
+            );
+            let received = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(received.as_ref(), bytes, "{uri}");
+        }
+
+        let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
+        assert!(html.contains("Пока только просмотр"));
+        assert!(html.contains("/editor/temporary-editor-preview.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+        assert!(!html.contains("temporary_access_token="));
+
+        // This route is not the future full editing/export entry.
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn guest_only_preview_route_excludes_product_auth_and_edit_pages() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-preview",
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            "/editor/temporary-editor-preview.mjs",
+            "/editor/temporary-editor-preview.css",
+            "/cloud-reader/render-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        }
+
+        // The no-auth renderer lane must NOT expose the normal Product
+        // project/login/editor entry or accidentally create a guest edit API.
+        for path in [
+            "/editor",
+            "/editor/new",
+            "/editor/projects",
+            "/editor/doc/10000000-0000-7000-8000-000000000001",
+            "/editor/product-editor-entry-v1.mjs",
+            "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     #[tokio::test]
