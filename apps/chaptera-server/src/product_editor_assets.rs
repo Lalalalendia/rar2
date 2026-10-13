@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn temporary_preview_entry_is_same_origin_csp_and_explicitly_read_only() {
+    async fn temporary_preview_entry_is_same_origin_csp_and_source_bound() {
         let routes = router::<()>();
         for (uri, content_type, bytes) in [
             (
@@ -647,7 +647,7 @@ mod tests {
         }
 
         let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
-        assert!(html.contains("Пока только просмотр"));
+        assert!(html.contains("Правка поддерживаемых объектов"));
         assert!(html.contains("/editor/temporary-editor-preview.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
         assert!(!html.contains("temporary_access_token="));
@@ -696,6 +696,40 @@ mod tests {
             "/editor/doc/10000000-0000-7000-8000-000000000001",
             "/editor/product-editor-entry-v1.mjs",
             "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_move_module_is_only_static_and_never_mounts_product_routes() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/javascript; charset=utf-8"
+            );
+        }
+        for path in [
+            "/editor/chaptera-product-editor-service-v1.mjs",
+            "/editor/rich-reader-editor-shell-v1.mjs",
+            "/editor/reader-scene-editor-adapter-v1.mjs",
+            "/editor/product-editor-entry-v1.mjs",
         ] {
             let response = routes
                 .clone()
