@@ -205,10 +205,25 @@ export class TemporaryEditBrowserSessionV0 {
       uploaded = true;
       session.expires_at_ms = stored.expires_at_ms;
       this.#save(session);
-      const opened = await this.#request(pathFor(session.session_id, "open"), {
-        method: "POST", body: "{}", contentType: "application/json",
-        token: session.access_token, signal,
-      });
+      let opened;
+      try {
+        opened = await this.#request(pathFor(session.session_id, "open"), {
+          method: "POST", body: "{}", contentType: "application/json",
+          token: session.access_token, signal,
+        });
+      } catch (error) {
+        // POST /open may commit an Opened session, then lose its JSON body
+        // over a reset upstream connection. Confirm the *stored* authority
+        // with one read-only GET, rather than issuing a new upload or POST.
+        // Only an HTTP 200 with an unparseable response qualifies; all
+        // rejected, unauthorized, timed-out or unknown POST results fail closed.
+        if (error?.code !== "temporary_response_invalid" || error?.status !== 200) {
+          throw error;
+        }
+        opened = await this.#request(pathFor(session.session_id, "scene"), {
+          token: session.access_token, signal,
+        });
+      }
       checkBinding(opened, session.session_id);
       const view = snapshot(opened);
       session.expires_at_ms = view.expires_at_ms;

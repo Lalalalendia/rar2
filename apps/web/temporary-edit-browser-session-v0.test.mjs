@@ -121,6 +121,92 @@ test("no storage permits current-tab view but reports resume unavailable", async
   assert.equal(result.restorable, false);
 });
 
+test("opened-but-truncated HTTP 200 recovers by one private Scene GET without a new session", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    storage: store, csrfToken,
+    fetchImpl: async (url, opts) => {
+      calls.push({ url, opts });
+      switch (calls.length) {
+        case 1: return response(issue);
+        case 2: return response(stored);
+        case 3: return new Response('{"protocol_version":', {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+        case 4: return response(opened);
+        default: throw Error("unexpected additional request");
+      }
+    },
+  });
+  const result = await client.start(file);
+  assert.equal(result.classification, "supported");
+  assert.equal(result.source_sha256, sha);
+  assert.equal(result.expires_at_ms, stored.expires_at_ms);
+  assert.equal(result.restorable, true);
+  assert.deepEqual(calls.map(({url, opts}) => [url, opts.method]), [
+    ["/v1/editor/temporary-sessions", "POST"],
+    [path + "content", "PUT"],
+    [path + "open", "POST"],
+    [path + "scene", "GET"],
+  ]);
+  assert.equal(calls[3].opts.headers["x-chaptera-reader-session"], token);
+  assert.equal(calls[3].opts.body, undefined);
+  assert.equal(calls[3].opts.cache, "no-store");
+  assert.equal(calls[3].opts.credentials, "omit");
+  assert.ok(calls.every(c => !c.url.includes(token)));
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).source_sha256, sha);
+  assert.equal(calls.filter(c => c.opts.method === "POST").length, 2,
+    "no fake mutation/open replay is permitted during recovery");
+});
+
+test("truncated HTTP 200 cannot forge a successful preview if the read-back is invalid", async () => {
+  for (const readback of [
+    response({ ...opened, session_id: "tempedit:" + "f".repeat(32) }),
+    response({ error: "guest_scene_not_ready" }, 409),
+    new Response("broken JSON", { status: 200 }),
+  ]) {
+    const store = storage(), calls = [];
+    const client = new TemporaryEditBrowserSessionV0({
+      storage: store, csrfToken,
+      fetchImpl: async (url, opts) => {
+        calls.push({url, opts});
+        if (calls.length === 1) return response(issue);
+        if (calls.length === 2) return response(stored);
+        if (calls.length === 3) return new Response("incomplete", {status: 200});
+        if (calls.length === 4) return readback;
+        throw Error("unexpected retry after bad read-back");
+      },
+    });
+    await assert.rejects(() => client.start(file));
+    assert.equal(calls.length, 4);
+    assert.equal(calls.filter(c => c.url === path + "open").length, 1);
+    assert.equal(calls.filter(c => c.url === path + "scene").length, 1);
+    assert.equal(client.hasSavedSession(), true,
+      "accepted upload capability remains resumable, not marked successful");
+    assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).source_sha256, null);
+  }
+});
+
+test("HTTP 4xx/5xx open rejection never retries or reads Scene", async () => {
+  for (const status of [403, 409, 429, 500]) {
+    const store = storage(), calls = [];
+    const client = new TemporaryEditBrowserSessionV0({
+      storage: store, csrfToken,
+      fetchImpl: async (url, opts) => {
+        calls.push({url, opts});
+        if (calls.length === 1) return response(issue);
+        if (calls.length === 2) return response(stored);
+        if (calls.length === 3) return response({error:"guest_scene_worker_failed"},status);
+        throw Error("forbidden unauthorized replay");
+      },
+    });
+    await assert.rejects(() => client.start(file));
+    assert.equal(calls.length, 3);
+    assert.equal(calls.some(c => c.url === path + "scene"), false);
+    assert.equal(client.hasSavedSession(), status !== 403);
+  }
+});
+
 test("interrupted open after accepted upload resumes only that server handshake", async () => {
   const store = storage();
   await assert.rejects(() => new TemporaryEditBrowserSessionV0({
