@@ -31,6 +31,7 @@ const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
 const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
 const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
 const TEXT_PROTOCOL: &[u8] = include_bytes!("../../web/text-protocol-v1.mjs");
+const STORY_LINE_ENDINGS: &[u8] = include_bytes!("../../web/story-line-endings-v1.mjs");
 const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
     include_bytes!("../../web/temporary-edit-browser-session-v0.mjs");
 const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
@@ -52,7 +53,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 27] = [
+const ASSETS: [EmbeddedAsset; 28] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -188,6 +189,11 @@ const ASSETS: [EmbeddedAsset; 27] = [
         content_type: "text/css; charset=utf-8",
         bytes: TEMPORARY_PREVIEW_CSS,
     },
+    EmbeddedAsset {
+        name: "story-line-endings-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: STORY_LINE_ENDINGS,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -224,6 +230,7 @@ where
         .route("/editor/product-editor.css", get(editor_css))
         .route("/editor/product-editor-entry-v1.mjs", get(editor_entry))
         .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
         .route(
             "/editor/temporary-edit-browser-session-v0.mjs",
             get(temporary_edit_browser_session),
@@ -343,6 +350,9 @@ async fn editor_entry() -> Response {
 async fn text_protocol() -> Response {
     asset_response(&ASSETS[22])
 }
+async fn story_line_endings() -> Response {
+    asset_response(&ASSETS[27])
+}
 async fn temporary_edit_browser_session() -> Response {
     asset_response(&ASSETS[23])
 }
@@ -460,6 +470,47 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), READER_ADAPTER);
+    }
+
+    #[tokio::test]
+    async fn story_line_endings_is_a_real_same_origin_editor_module() {
+        assert!(
+            std::str::from_utf8(EDITOR_ENTRY)
+                .unwrap()
+                .contains("./story-line-endings-v1.mjs")
+        );
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/story-line-endings-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'self'")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), STORY_LINE_ENDINGS);
+        assert!(
+            version_manifest()["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["name"].as_str() == Some("story-line-endings-v1.mjs"))
+        );
     }
 
     #[tokio::test]

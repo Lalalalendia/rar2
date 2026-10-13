@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Physical no-login temporary EditorSession CURRENT: exact PUB, HTTPS, TTL."""
+"""Physical no-login temporary EditorSession CURRENT + MoveNode: exact PUB, HTTPS, TTL."""
 from __future__ import annotations
 
 import argparse
@@ -94,15 +94,26 @@ def main() -> int:
     proxy: subprocess.Popen[str] | None = None
     token: str | None = None
 
+    rate_retries = 0
+
     def call(method: str, path: str, *, headers: list[str] | None = None, **other):
-        return live.curl_request(
-            https_port=httpsport,
-            method=method,
-            path=path,
-            output=response,
-            headers=headers,
-            **other,
-        )
+        nonlocal rate_retries
+        for attempt in range(8):
+            status, raw = live.curl_request(
+                https_port=httpsport,
+                method=method,
+                path=path,
+                output=response,
+                headers=headers,
+                **other,
+            )
+            if status != 429 or attempt == 7:
+                return status, raw
+            # Keep adversarial cases inside the real 30/minute burst-six
+            # ReaderSessionOpen admission, rather than weakening live policy.
+            rate_retries += 1
+            time.sleep(2.2)
+        raise AssertionError("temporary private reader admission did not converge")
 
     try:
         live.run([str(args.chaptera.resolve()), "--config", str(config), "migrate", "up"], env=env)
@@ -189,6 +200,141 @@ def main() -> int:
             if second.get(field) != current.get(field):
                 raise AssertionError("second current read changed " + field)
 
+
+        # Physical P0 mutation: use a bounded real-PUB direct geometric node.
+        # Rejected unsupported nodes are skipped; the proof is positive only
+        # if a canonical isolated MoveNode event is actually committed.
+        nodes = current["authoring_graph"].get("nodes")
+        if not isinstance(nodes, dict):
+            raise AssertionError("canonical real PUB has no node map for editing")
+        candidates = []
+        for node_id, node in sorted(nodes.items()):
+            if not isinstance(node_id, str) or not isinstance(node, dict):
+                continue
+            bounds = node.get("header", {}).get("bounds", {})
+            if not isinstance(bounds, dict):
+                continue
+            x, y = bounds.get("x"), bounds.get("y")
+            if type(x) is not int or type(y) is not int:
+                continue
+            candidates.append((node_id, x, y))
+        if not candidates:
+            raise AssertionError("pinned real PUB has no canonical geometric nodes")
+
+        move_path = f"/v1/editor/temporary-sessions/{session_id}/move-node"
+        missing_request = {
+            "protocol_version": "chaptera.commit-request.v1",
+            "document_id": session_id,
+            "source_hash": expected_hash,
+            "base_revision_id": revision,
+            "client_operation_id": "missing-capability",
+            "command": {
+                "kind": "move_node_to",
+                "node_id": candidates[0][0],
+                "x_emu": candidates[0][1] + 6350,
+                "y_emu": candidates[0][2],
+            },
+        }
+        checked(call("POST", move_path, body_json=missing_request)[0],
+                401, "MoveNode requires private token")
+        checked(call(
+            "POST", move_path,
+            headers=["x-chaptera-reader-session: " + secrets.token_hex(32)],
+            body_json=missing_request,
+        )[0], 404, "MoveNode rejects foreign private token")
+
+        accepted = None
+        chosen = None
+        unsupported = 0
+        for idx, (node_id, x, y) in enumerate(candidates[:16]):
+            intent = {
+                "protocol_version": "chaptera.commit-request.v1",
+                "document_id": session_id,
+                "source_hash": expected_hash,
+                "base_revision_id": revision,
+                "client_operation_id": f"physical-move-{idx}",
+                "command": {
+                    "kind": "move_node_to",
+                    "node_id": node_id,
+                    "x_emu": x + 6350,
+                    "y_emu": y + 6350,
+                },
+            }
+            status, raw = call("POST", move_path, headers=private, body_json=intent)
+            if status == 422:
+                unsupported += 1
+                continue
+            checked(status, 200, "real isolated canonical MoveNode")
+            accepted = json.loads(raw)
+            chosen = intent
+            break
+        if accepted is None:
+            raise AssertionError(
+                f"no supported canonical MoveNode in first 16 real nodes; rejected={unsupported}"
+            )
+        if (
+            accepted.get("protocol_version") != "chaptera.temporary-editor-move-node.v1"
+            or accepted.get("document_id") != session_id
+            or accepted.get("source_hash") != expected_hash
+            or accepted.get("base_revision_id") != revision
+            or accepted.get("revision_id") == revision
+            or accepted.get("replayed") is not False
+            or accepted.get("scene_refresh") != "current"
+            or int(accepted.get("expires_at_ms", 0)) <= expected_expiry
+        ):
+            raise AssertionError("accepted MoveNode does not prove a fresh source-bound revision")
+        move_expiry = int(accepted["expires_at_ms"])
+        if not 3_000_000 < move_expiry - int(time.time() * 1000) <= 3_600_000:
+            raise AssertionError("accepted MoveNode did not atomically refresh one-hour TTL")
+
+        reread_status, reread_raw = call("GET", path, headers=private)
+        checked(reread_status, 200, "reopen edited canonical revision")
+        reopened = json.loads(reread_raw)
+        if (
+            reopened.get("revision_id") != accepted["revision_id"]
+            or reopened.get("revision_cursor") != 1
+            or reopened.get("expires_at_ms") != move_expiry
+            or reopened.get("source_hash") != expected_hash
+            or reopened.get("project") == current["project"]
+            or live.sha256_file(physical_source) != expected_hash
+        ):
+            raise AssertionError("edited canonical state was not reopened or original PUB mutated")
+
+        chosen_id = chosen["command"]["node_id"]
+        before_bounds = current["authoring_graph"]["nodes"][chosen_id]["header"]["bounds"]
+        after_bounds = reopened["authoring_graph"]["nodes"][chosen_id]["header"]["bounds"]
+        if (
+            after_bounds.get("x") != chosen["command"]["x_emu"]
+            or after_bounds.get("y") != chosen["command"]["y_emu"]
+            or after_bounds == before_bounds
+        ):
+            raise AssertionError("canonical reopened Scene did not reflect the accepted MoveNode geometry")
+
+        replay_status, replay_raw = call(
+            "POST", move_path, headers=private, body_json=chosen
+        )
+        checked(replay_status, 200, "exact-idempotency MoveNode retry")
+        replay = json.loads(replay_raw)
+        if (
+            replay.get("replayed") is not True
+            or replay.get("revision_id") != accepted["revision_id"]
+            or replay.get("expires_at_ms") != move_expiry
+        ):
+            raise AssertionError("replayed operation illegally inserted a new revision or moved TTL")
+        conflicting = json.loads(json.dumps(chosen))
+        conflicting["command"]["x_emu"] += 1
+        checked(call("POST", move_path, headers=private, body_json=conflicting)[0],
+                409, "same operation ID with changed intent conflicts")
+        stale = json.loads(json.dumps(chosen))
+        stale["client_operation_id"] = "physical-stale-after-move"
+        checked(call("POST", move_path, headers=private, body_json=stale)[0],
+                409, "stale base cannot commit another MoveNode")
+        final_status, final_raw = call("GET", path, headers=private)
+        checked(final_status, 200, "current state after rejected replays")
+        final = json.loads(final_raw)
+        if final["revision_cursor"] != 1 or final["expires_at_ms"] != move_expiry:
+            raise AssertionError("failed/replayed operations modified revision count or TTL")
+
         status, raw = call(
             "POST", "/v1/reader/guest-sessions",
             body_json={"expected_byte_len": fixture.stat().st_size},
@@ -217,6 +363,17 @@ def main() -> int:
             raise AssertionError("expired temporary session kept its private metadata")
         if physical_source.exists():
             raise AssertionError("expired temporary session retained original PUB bytes")
+        with sqlite3.connect(db) as conn:
+            expired_revisions = conn.execute(
+                "SELECT COUNT(*) FROM revision_edges WHERE document_id=?",
+                (session_id.encode(),),
+            ).fetchone()[0]
+            expired_bindings = conn.execute(
+                "SELECT COUNT(*) FROM revision_identity_bindings WHERE document_id=?",
+                (session_id.encode(),),
+            ).fetchone()[0]
+        if expired_revisions or expired_bindings:
+            raise AssertionError("TTL deletion retained private canonical revision bytes")
 
         receipt = {
             "schema": "chaptera.tempedit-canonical-current-https.v1",
@@ -227,12 +384,19 @@ def main() -> int:
             "expired_access_status": expired_status, "expired_rows": remaining, "physical_original_deleted": True,
             "isolated_real_pub_read": True, "backend_filesystem": True,
             "raw_source_or_bearer_in_receipt": False,
-            "mutation_proven": False, "edited_download_proven": False, "v0_go": False,
+            "mutation_proven": True, "changed_revision_reopened": True,
+            "exact_replay_ttl_unchanged": True,
+            "foreign_mutation_capability_rejected": True,
+            "failed_and_stale_ops_rejected": True,
+            "bounded_rate_retries": rate_retries,
+            "private_revision_rows_after_ttl": expired_revisions,
+            "private_canonical_bindings_after_ttl": expired_bindings,
+            "edited_download_proven": False, "v0_go": False,
         }
         (out / "receipt.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        print(json.dumps({"canonical_current_status": current_status, "v0_go": False}))
+        print(json.dumps({"canonical_current_status": current_status, "mutation_proven": True, "v0_go": False}))
     finally:
         live.terminate(proxy)
         live.terminate(server)
