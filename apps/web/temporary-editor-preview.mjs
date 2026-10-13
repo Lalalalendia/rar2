@@ -88,6 +88,7 @@ export async function bootTemporaryEditorPreview({
   storage = defaultStorage(),
   fetchImpl = globalThis.fetch,
   renderer = renderReaderScene,
+  confirmDelete = globalThis.confirm,
 } = {}) {
   const ids = [
     "temporary-preview-root", "temporary-upload-form", "temporary-file",
@@ -102,6 +103,7 @@ export async function bootTemporaryEditorPreview({
   const startButton = elements["temporary-start"];
   const resumeButton = elements["temporary-resume"];
   const forgetButton = elements["temporary-forget"];
+  const deleteButton = documentObject?.getElementById("temporary-delete");
   const status = elements["temporary-status"];
   const expiry = elements["temporary-expiry"];
   const pages = elements["temporary-pages"];
@@ -125,12 +127,13 @@ export async function bootTemporaryEditorPreview({
   let gesture = null;
   let gesturePage = null;
   let gestureOverlay = null;
-  const buttons = [startButton, resumeButton, forgetButton];
+  const buttons = [startButton, resumeButton, forgetButton, deleteButton].filter(Boolean);
 
   function controls() {
     for (const button of buttons) button.disabled = busy || editBusy;
     resumeButton.hidden = !client.hasSavedSession();
     forgetButton.hidden = !client.hasSavedSession();
+    if (deleteButton) deleteButton.hidden = !client.hasSavedSession();
     if (editorEnabled) {
       actions.hidden = !moveClient;
       const canDownload = !busy && !editBusy && moveClient &&
@@ -268,6 +271,35 @@ export async function bootTemporaryEditorPreview({
     await guarded(() => client.resume());
   }
 
+  async function deleteServer() {
+    if (busy || editBusy || !deleteButton || !client.hasSavedSession()) return;
+    if (typeof confirmDelete !== "function" ||
+        !confirmDelete("Удалить временный PUB и все изменения с сервера? Отменить удаление нельзя.")) {
+      return;
+    }
+    busy = true;
+    clearGesture();
+    controls();
+    status.textContent = "Удаляется временная сессия с сервера…";
+    try {
+      await client.deleteSession();
+      clearEditor();
+      pages.replaceChildren();
+      expiry.textContent = "";
+      input.value = "";
+      status.textContent = "Сессия удалена с сервера. Для дальнейшей работы загрузите новый PUB.";
+    } catch {
+      // A lost receipt may conceal an already-revoked session. Preserve the
+      // tab capability for recovery but do not leave a stale edit scene active.
+      clearEditor();
+      pages.replaceChildren();
+      status.textContent = "Удаление не подтверждено сервером. Повторите попытку или дождитесь истечения TTL.";
+    } finally {
+      busy = false;
+      controls();
+    }
+  }
+
   function forget() {
     if (busy || editBusy) return;
     client.clear();
@@ -399,6 +431,7 @@ export async function bootTemporaryEditorPreview({
   });
   resumeButton.addEventListener("click", resume);
   forgetButton.addEventListener("click", forget);
+  deleteButton?.addEventListener("click", () => deleteServer());
   if (editorEnabled) {
     pages.addEventListener("pointerdown", pointerDown);
     pages.addEventListener("pointermove", pointerMove);
@@ -408,7 +441,7 @@ export async function bootTemporaryEditorPreview({
     odgButton.addEventListener("click", () => download("odg"));
   }
   controls();
-  return { start, resume, forget };
+  return { start, resume, forget, deleteServer };
 }
 
 if (typeof document !== "undefined" && document.getElementById("temporary-preview-root")) {
