@@ -37,7 +37,8 @@ const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
 const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
 const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
 const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
-const TEMPORARY_GUEST_MOVE: &[u8] = include_bytes!("../../web/temporary-guest-move-v1.mjs");
+const TEMPORARY_EDIT_MOVE_CLIENT: &[u8] =
+    include_bytes!("../../web/temporary-edit-move-client-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -191,9 +192,9 @@ const ASSETS: [EmbeddedAsset; 29] = [
         bytes: TEMPORARY_PREVIEW_CSS,
     },
     EmbeddedAsset {
-        name: "temporary-guest-move-v1.mjs",
+        name: "temporary-edit-move-client-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
-        bytes: TEMPORARY_GUEST_MOVE,
+        bytes: TEMPORARY_EDIT_MOVE_CLIENT,
     },
     EmbeddedAsset {
         name: "story-line-endings-v1.mjs",
@@ -256,6 +257,10 @@ where
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
         )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
         .route("/editor/rich-reader-editor-shell-v1.mjs", get(rich_shell))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
@@ -291,7 +296,10 @@ where
             "/editor/temporary-editor-preview.css",
             get(temporary_preview_css),
         )
-        .route("/editor/temporary-guest-move-v1.mjs", get(temporary_guest_move))
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
         .route("/editor/interaction-v1.mjs", get(interaction))
         .route("/editor/reader-scene-editor-interaction-v1.mjs", get(interaction_scene))
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
@@ -360,7 +368,7 @@ async fn text_protocol() -> Response {
     asset_response(&ASSETS[22])
 }
 async fn story_line_endings() -> Response {
-    asset_response(&ASSETS[27])
+    asset_response(&ASSETS[28])
 }
 async fn temporary_edit_browser_session() -> Response {
     asset_response(&ASSETS[23])
@@ -374,7 +382,7 @@ async fn temporary_preview_entry() -> Response {
 async fn temporary_preview_css() -> Response {
     asset_response(&ASSETS[26])
 }
-async fn temporary_guest_move() -> Response {
+async fn temporary_edit_move_client() -> Response {
     asset_response(&ASSETS[27])
 }
 async fn product_service() -> Response {
@@ -666,7 +674,7 @@ mod tests {
             "/editor/temporary-editor-preview.mjs",
             "/editor/temporary-editor-preview.css",
             "/cloud-reader/render-v1.mjs",
-            "/editor/temporary-guest-move-v1.mjs",
+            "/editor/temporary-edit-move-client-v1.mjs",
             "/editor/interaction-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {
