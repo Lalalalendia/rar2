@@ -31,6 +31,8 @@ const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
 const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
 const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
 const TEXT_PROTOCOL: &[u8] = include_bytes!("../../web/text-protocol-v1.mjs");
+const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
+    include_bytes!("../../web/temporary-edit-browser-session-v0.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -47,7 +49,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 23] = [
+const ASSETS: [EmbeddedAsset; 24] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -163,6 +165,11 @@ const ASSETS: [EmbeddedAsset; 23] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: TEXT_PROTOCOL,
     },
+    EmbeddedAsset {
+        name: "temporary-edit-browser-session-v0.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_EDIT_BROWSER_SESSION,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -199,6 +206,10 @@ where
         .route("/editor/product-editor.css", get(editor_css))
         .route("/editor/product-editor-entry-v1.mjs", get(editor_entry))
         .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route(
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            get(temporary_edit_browser_session),
+        )
         .route(
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
@@ -278,6 +289,9 @@ async fn editor_entry() -> Response {
 }
 async fn text_protocol() -> Response {
     asset_response(&ASSETS[22])
+}
+async fn temporary_edit_browser_session() -> Response {
+    asset_response(&ASSETS[23])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -409,6 +423,54 @@ mod tests {
         );
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), TEXT_PROTOCOL);
+    }
+
+    #[tokio::test]
+    async fn temporary_edit_browser_module_is_embedded_without_public_edit_entry() {
+        let module = std::str::from_utf8(TEMPORARY_EDIT_BROWSER_SESSION).unwrap();
+        assert!(module.contains("can_edit: false"));
+        assert!(module.contains("can_download_changed_file: false"));
+        assert!(module.contains("/v1/editor/temporary-sessions"));
+        let routes = router::<()>();
+        let response = routes
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary-edit-browser-session-v0.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("connect-src 'self'")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEMPORARY_EDIT_BROWSER_SESSION);
+
+        // This is only a reusable read-only intake client; no user-facing
+        // temporary edit/download route is enabled by serving the module.
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
