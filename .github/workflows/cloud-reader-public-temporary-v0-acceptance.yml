@@ -1,0 +1,151 @@
+name: Temporary Editor public HTTPS browser acceptance
+
+# Operator-only readiness check AFTER deploying the specified immutable
+# Cloud Reader Linux packet. This never deploys or reads SSH credentials.
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact 40-hex rar2 Cloud Reader release installed on FirstVDS"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaptera-public-temporary-editor-acceptance
+  cancel-in-progress: false
+
+jobs:
+  public-guest-editor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Reject non-main and unpinned launch
+        env:
+          PINNED_SHA: ${{ inputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == refs/heads/main ]]
+          [[ "${PINNED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify pinned source and public release identity
+        env:
+          PINNED_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${PINNED_SHA}" ]]
+          gh release view "cloud-reader-${PINNED_SHA}" --repo Lalalalendia/rar2 \
+            --json assets --jq '.assets[].name' \
+            | grep -Fx chaptera-cloud-reader-linux-amd64.tar.gz
+          node --check tools/run_temporary_editor_real_pub_browser.mjs
+
+      - name: Fail closed on wrong live host or stale embedded browser assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          origin=https://reader.chaptera.online
+          for path in \
+            temporary-editor-preview.mjs \
+            temporary-editor-preview.css \
+            temporary-edit-browser-session-v0.mjs \
+            temporary-edit-move-client-v1.mjs \
+            reader-scene-editor-interaction-v1.mjs \
+            interaction-v1.mjs; do
+            curl --fail --silent --show-error --max-time 25 \
+              "${origin}/editor/${path}" \
+              --output "${RUNNER_TEMP}/guest-live-asset"
+            cmp "apps/web/${path}" "${RUNNER_TEMP}/guest-live-asset"
+          done
+          curl --fail --silent --show-error --max-time 25 \
+            "${origin}/editor/temporary-preview" \
+            --output "${RUNNER_TEMP}/guest-live-asset"
+          cmp apps/web/temporary-editor-preview.html "${RUNNER_TEMP}/guest-live-asset"
+          curl --fail --silent --show-error --max-time 25 \
+            "${origin}/cloud-reader/render-v1.mjs" \
+            --output "${RUNNER_TEMP}/guest-live-asset"
+          cmp apps/cloud-reader/render-v1.mjs "${RUNNER_TEMP}/guest-live-asset"
+          rm -f "${RUNNER_TEMP}/guest-live-asset"
+
+      - name: Fetch pinned non-sensitive Apache POI Publisher file
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 --retry-delay 2 --max-time 100 \
+            https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub \
+            --output "${RUNNER_TEMP}/fixture.pub"
+          echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  ${RUNNER_TEMP}/fixture.pub" | sha256sum -c -
+          test "$(stat -c '%s' "${RUNNER_TEMP}/fixture.pub")" = "291840"
+
+      - name: Install pinned Chromium acceptance dependencies
+        shell: bash
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Real public Chromium MoveNode and downloaded IDML/PDF consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in idml pdf; do
+            node tools/run_temporary_editor_real_pub_browser.mjs \
+              --public-origin --origin https://reader.chaptera.online \
+              --fixture "${RUNNER_TEMP}/fixture.pub" \
+              --fixture-sha256 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf \
+              --target "${target}" \
+              --out "${RUNNER_TEMP}/public-editor-${target}-receipt.json"
+          done
+
+      - name: Require source-neutral public receipt and server DELETE
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          for target in ("idml", "pdf"):
+              receipt = json.loads((root / f"public-editor-{target}-receipt.json").read_text())
+              assert receipt["status"] == "PASS"
+              assert receipt["deployment_mode"] == "public_trusted_origin"
+              assert receipt["public_trusted_tls"] is True
+              assert receipt["tls_caddy"] is False
+              assert receipt["export_target"] == target
+              assert receipt["browser_pointer_commits"] == 1
+              for flag in ("exact_source_bound_revision", "revised_scene_on_reload",
+                           "same_browser_session_delete_proven",
+                           "revoked_old_current_scene_export_denied",
+                           "temporary_bearer_cleared_after_delete",
+                           "original_pub_immutable", "bearer_absent_from_urls"):
+                  assert receipt[flag] is True, flag
+              assert receipt[f"changed_{target}_geometry_proven"] is True
+              assert receipt["v0_go"] is False
+              print(json.dumps({"target": target, "public_https": True,
+                                "geometry_verified": True, "deleted": True,
+                                "sha256": receipt[f"changed_{target}_download_sha256"],
+                                "v0_go": False}, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaptera-temporary-editor-public-acceptance
+          path: ${{ runner.temp }}/public-editor-*-receipt.json
+          if-no-files-found: ignore
+          retention-days: 7
