@@ -49,7 +49,11 @@ try {
   await page.waitForFunction(() =>
     document.querySelector("#status")?.textContent?.includes("Готов к загрузке"),
   null, { timeout: 30000 });
-  await page.locator("#pub-file").waitFor({ state: "visible", timeout: 30000 });
+  // The product intentionally keeps the native file input hidden and drives it
+  // through the visible drop-zone/button. Playwright's setInputFiles targets
+  // that real attached input directly; visibility is not an upload-readiness
+  // signal and would reject the production DOM before any source bytes move.
+  await page.locator("#pub-file").waitFor({ state: "attached", timeout: 30000 });
   await page.locator("#pub-file").setInputFiles({
     name: "Sample3.pub", mimeType: "application/x-mspublisher", buffer: raw,
   });
