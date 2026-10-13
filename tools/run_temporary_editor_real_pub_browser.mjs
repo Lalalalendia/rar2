@@ -165,8 +165,8 @@ try {
   await page.locator("#temporary-start").click();
   try {
     await page.waitForFunction(() =>
-      document.querySelector("#temporary-status")?.textContent.includes(
-        "Открыта редактируемая ревизия"), null, { timeout: 170000 });
+      /(?:PUB открыт|Открыта редактируемая ревизия)/.test(
+        document.querySelector("#temporary-status")?.textContent ?? ""), null, { timeout: 170000 });
   } catch {
     const ui = await page.locator("#temporary-status").textContent();
     throw Error("real PUB editor did not open; visible_status=" +
@@ -185,6 +185,62 @@ try {
   assert.equal(sourceScene?.revision_id, oldHead.revision_id);
   assert.ok(Array.isArray(sourceScene?.nodes) && sourceScene.nodes.length > 0,
     "real isolated Publisher scene did not render");
+
+  // Download an actual pristine PDF before any pointer or authoring event.
+  // Compare the browser's downloaded bytes against the canonical private
+  // report and independently reopen the physical PDF xref and page tree.
+  let pristinePdfProof = null;
+  if (exportTarget === "pdf") {
+    const untouched = page.locator("#temporary-download-pdf");
+    await untouched.waitFor({ state: "visible" });
+    assert.equal(await untouched.isEnabled(), true,
+      "unedited supported PUB must allow baseline PDF");
+    assert.equal((await untouched.textContent())?.trim(), "Скачать PDF");
+    const baselinePromise = page.waitForEvent("download", { timeout: 90000 });
+    await untouched.click();
+    const baselineDownload = await baselinePromise;
+    await settleResponses();
+    assert.equal(baselineDownload.suggestedFilename(), "chaptera-original.pdf");
+    const downloaded = await readFile(await baselineDownload.path());
+    assert.ok(downloaded.length > 40 && downloaded.length <= 16 * 1024 * 1024,
+      "baseline PDF byte length must be bounded");
+    assert.ok(downloaded.subarray(0, 5).equals(Buffer.from("%PDF-")),
+      "baseline download has no PDF signature");
+    const pdfText = downloaded.toString("latin1");
+    const xrefMatch = pdfText.match(/startxref\s+(\d+)\s+%%EOF\s*$/);
+    assert.ok(xrefMatch, "baseline PDF must end with startxref and EOF");
+    const xrefOffset = Number(xrefMatch[1]);
+    assert.ok(Number.isSafeInteger(xrefOffset) && xrefOffset > 0 &&
+      xrefOffset < downloaded.length &&
+      pdfText.slice(xrefOffset).startsWith("xref\n"),
+      "baseline physical PDF cross-reference cannot be reopened");
+    const pageCount = [...pdfText.matchAll(/\/Type\s*\/Page\s*\/Parent/g)].length;
+    assert.ok(pageCount > 0 && pageCount <= 1000,
+      "baseline PDF contains no physical pages");
+    const baselineReport = observed.reports.at(-1);
+    const baselineSha = sha256(downloaded);
+    assert.equal(baselineReport?.protocol_version,
+      "chaptera.temporary-edited-export-report.v1");
+    assert.equal(baselineReport?.target, "pdf");
+    assert.equal(baselineReport?.is_baseline, true);
+    assert.equal(baselineReport?.source_hash, fixtureHash);
+    assert.equal(baselineReport?.revision_id, oldHead.revision_id);
+    assert.equal(baselineReport?.canonical_authoring_revision_id,
+      oldHead.canonical_authoring_revision_id);
+    assert.equal(baselineReport?.artifact_sha256, baselineSha);
+    assert.equal(baselineReport?.loss_report?.counts?.blocking, 0);
+    assert.equal(baselineReport?.loss_report?.counts?.moved_nodes, 0);
+    assert.ok(observed.responses.some(r => r.path.endsWith("/exports/pdf") &&
+      r.status === 200 && r.mime === "application/pdf"),
+      "baseline PDF lacked an actual HTTPS application/pdf response");
+    assert.equal(observed.requests.filter(r => r.method === "POST" &&
+      r.path.endsWith("/move-node")).length, 0,
+      "PDF without an edit must not create an artificial MoveNode");
+    assert.equal(observed.current.at(-1)?.revision_cursor, 0);
+    assert.equal(sha256(await readFile(fixture)), fixtureHash,
+      "pristine export altered original PUB");
+    pristinePdfProof = { sha256: baselineSha, pageCount };
+  }
 
   const candidates = candidatePoints(sourceScene, oldHead, exportTarget);
   assert.ok(candidates.length,
@@ -375,8 +431,8 @@ try {
   await page.reload({waitUntil:"domcontentloaded"});
   await page.locator("#temporary-resume").click();
   await page.waitForFunction(() =>
-    document.querySelector("#temporary-status")?.textContent.includes(
-      "Открыта редактируемая ревизия"), null,{timeout:170000});
+    /(?:PUB открыт|Открыта редактируемая ревизия)/.test(
+      document.querySelector("#temporary-status")?.textContent ?? ""), null,{timeout:170000});
   await settleResponses();
   const reopened = observed.scenes.at(-1);
   assert.equal(reopened.revision_id,accepted.revision_id);
@@ -483,6 +539,13 @@ try {
     revised_scene_on_reload:true,
     read_does_not_renew_ttl:true,
     export_target:target,
+    ...(pristinePdfProof ? {
+      pristine_pdf_without_edit_proven:true,
+      pristine_pdf_sha256:pristinePdfProof.sha256,
+      pristine_pdf_pages:pristinePdfProof.pageCount,
+      pristine_pdf_unchanged_revision_proven:true,
+      pristine_pdf_private_report_proven:true,
+    } : {}),
     ["changed_" + target + "_download_sha256"]:sha256(artifact),
     ["changed_" + target + "_byte_len"]:artifact.length,
     ["changed_" + target + "_geometry_proven"]:true,
