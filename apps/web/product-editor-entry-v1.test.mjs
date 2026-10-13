@@ -155,18 +155,20 @@ test("unknown Undo/Redo outcome remains visibly locked until server history rech
   assert.doesNotMatch(recovered.status, /Saved/);
 });
 
-test("Story inspector admits only plain framed source Stories, never table/rich", () => {
+test("Story inspector admits only single-line plain framed source Stories", () => {
   const graph = {
     nodes: {
       a: {payload: {story_frame: {story_id: "plain"}}},
       b: {payload: {story_frame: {story_id: "rich"}}},
       c: {payload: {story_frame: {story_id: "table"}}},
       d: {payload: {table: {story_id: "table"}}},
+      e: {payload: {story_frame: {story_id: "multiline"}}},
     },
     stories: {
       plain: {text: "ABC", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       rich: {text: "Rich", runs: [{source: "import"}]},
       table: {text: "Cell"},
+      multiline: {text: "First\r\nSecond", runs: [], paragraphs: [], fields: [], hyperlinks: []},
       unframed: {text: "No frame"},
     },
   };

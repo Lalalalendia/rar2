@@ -19,7 +19,7 @@ export function sourcePlainStoryCandidates(graph) {
   }
   return Object.entries(graph.stories ?? {}).filter(([id, story]) =>
     typeof id === "string" && frames.has(id) && !tableOwned.has(id) &&
-    typeof story?.text === "string" &&
+    typeof story?.text === "string" && !HAS_CONTROL.test(story.text) &&
     ["runs", "paragraphs", "fields", "hyperlinks"].every((part) =>
       !Array.isArray(story[part]) || story[part].length === 0
     )
