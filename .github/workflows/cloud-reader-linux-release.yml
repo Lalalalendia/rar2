@@ -99,7 +99,12 @@ jobs:
           set -euo pipefail
           asset="chaptera-cloud-reader-linux-amd64.tar.gz"
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" "${asset}" --clobber --repo "${GITHUB_REPOSITORY}"
-          else
-            gh release create "${TAG}" "${asset}"               --repo "${GITHUB_REPOSITORY}"               --target "${GITHUB_SHA}"               --title "Chaptera Cloud Reader ${GITHUB_SHA}"               --notes "Immutable Linux amd64 deployment packet for Chaptera Cloud Reader."               --prerelease
+            echo "::error::Immutable Cloud Reader release ${TAG} already exists; refusing asset overwrite"
+            exit 1
           fi
+          gh release create "${TAG}" "${asset}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Chaptera Cloud Reader ${GITHUB_SHA}" \
+            --notes "Immutable Linux amd64 deployment packet for Chaptera Cloud Reader." \
+            --prerelease

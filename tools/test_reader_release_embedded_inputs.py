@@ -62,5 +62,27 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
                 self.assertTrue(any(fnmatchcase(input_path, rule) for rule in self.triggers))
 
 
+    def test_existing_sha_pinned_release_refuses_asset_overwrite(self):
+        publish = self.workflow.split(
+            "      - name: Publish immutable public release asset", 1
+        )[1]
+        self.assertIn(
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            publish,
+        )
+        self.assertIn("gh release create", publish)
+        self.assertNotIn("gh release upload", publish)
+        self.assertNotIn("--clobber", publish)
+        # A re-run of the same push SHA cannot rewrite bytes behind a
+        # previously published tag. A new release must use a new commit SHA.
+        self.assertRegex(
+            publish,
+            r'if gh release view [^\n]+; then\n'
+            r'\s+echo "::error::[^\n]+\n'
+            r'\s+exit 1\n'
+            r'\s+fi\n',
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
