@@ -60,6 +60,7 @@ pub mod source_validation_job;
 pub mod sqlite_blob_metadata;
 pub mod sqlite_store;
 pub mod state;
+mod temporary_fixed_pdf;
 pub mod untrusted_pub_worker;
 pub mod upload_admission;
 pub mod worker;
