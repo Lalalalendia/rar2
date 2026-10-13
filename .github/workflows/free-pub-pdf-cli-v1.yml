@@ -244,6 +244,32 @@ jobs:
               for item in report["pdf"].get("nodes", [])
           )
 
+          # 2026-10-14 CONTROL: independently validate page tree and MediaBoxes,
+          # without reading private source, changing the renderer, or relaxing hashes.
+          import re
+          pdf_bytes = (out / "a.pdf").read_bytes()
+          page_boxes = [
+              [part.decode("ascii") for part in m.group(1).split()]
+              for m in re.finditer(
+                  rb"<< /Type /Page /Parent 2 0 R /MediaBox \[([^\]]+)\]",
+                  pdf_bytes,
+              )
+          ]
+          report_boxes = [page["media_box_points"] for page in report["pdf"]["pages"]]
+          page_tree = re.search(
+              rb"<< /Type /Pages /Count (\d+) /Kids \[([^\]]*)\] >>", pdf_bytes
+          )
+          assert page_tree is not None
+          pdf_page_count = int(page_tree.group(1))
+          expected_kids = [f"{3 + 2*i} 0 R" for i in range(pdf_page_count)]
+          assert page_tree.group(2).decode("ascii").split() == " ".join(expected_kids).split()
+          assert pdf_page_count == len(page_boxes) == len(report_boxes)
+          assert page_boxes == report_boxes
+          print("independent_page_tree=" + json.dumps({
+              "page_count": pdf_page_count, "media_boxes_points": page_boxes,
+              "page_tree_and_report_consistent": True,
+          }, sort_keys=True))
+
           # 2026-10-14 DIAGNOSTIC CONTROL: comment-only exact-main rerun for PR #2740.
           # No PDF code, workflow assertion, reference hash or fixture is changed.
           # Canonical fixed-PDF baseline, independently measured on unchanged main
