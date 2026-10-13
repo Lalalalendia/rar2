@@ -102,6 +102,13 @@ pub enum Command {
         scene_revision_id: Option<String>,
         #[arg(long, requires = "scene_revision_id")]
         scene_baseline_revision_id: Option<String>,
+        /// Existing isolated EditorSession edited-revision output, never a source-only export.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "scene_revision_id", "story_intent_json"]
+        )]
+        editable_export_target: Option<String>,
     },
     #[command(hide = true)]
     GuestReaderScene {
@@ -129,6 +136,47 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command, MigrateAction};
+
+    #[test]
+    fn edited_export_mode_requires_exact_project_and_disallows_mutation_mixing() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "tempedit:0123456789abcdef0123456789abcdef",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut missing = base.to_vec();
+        missing.extend(["--editable-export-target", "odg"]);
+        assert!(Cli::try_parse_from(missing).is_err());
+
+        let mut admitted = base.to_vec();
+        admitted.extend([
+            "--project-json",
+            "/tmp/current.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--editable-export-target",
+            "odg",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(admitted.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                editable_export_target: Some(_),
+                ..
+            }
+        ));
+        admitted.extend([
+            "--scene-revision-id",
+            "rev",
+            "--scene-baseline-revision-id",
+            "rev",
+        ]);
+        assert!(Cli::try_parse_from(admitted).is_err());
+    }
 
     #[test]
     fn text_story_mode_requires_private_project_and_exclusive_command() {

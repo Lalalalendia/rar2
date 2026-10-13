@@ -8,10 +8,10 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_LENGTH, RETRY_AFTER},
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
     },
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -464,6 +464,10 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
         .route(
             "/v1/editor/temporary-sessions/{session_id}/move-node",
             post(temporary_editor_move_node),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/exports/{target}",
+            get(temporary_editor_edited_export),
         )
         .with_state(state)
 }
@@ -1131,6 +1135,185 @@ async fn temporary_editor_move_node(
             "temporary_editor_stale_revision",
         )),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditedExportQuery {
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    #[serde(default)]
+    report_only: bool,
+}
+
+fn validate_temporary_export_query(
+    target: &str,
+    query: &TemporaryEditedExportQuery,
+) -> Result<(), GuestReaderError> {
+    if !matches!(target, "idml" | "odg")
+        || query.revision_id.len() != 71
+        || !query.revision_id.starts_with("sha256:")
+        || !query.revision_id[7..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+        || query.canonical_authoring_revision_id.len() != 64
+        || !query
+            .canonical_authoring_revision_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_export_request_invalid",
+        ));
+    }
+    Ok(())
+}
+
+/// A one-shot edited Revision download. Output is never materialized into a
+/// durable user Project, derived-BlobStore artifact or S3 service. Worker
+/// scratch files are torn down before the response bytes reach Axum.
+async fn temporary_editor_edited_export(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path((session_id, target)): Path<(String, String)>,
+    Query(query): Query<TemporaryEditedExportQuery>,
+    headers: HeaderMap,
+) -> Result<Response, GuestReaderError> {
+    validate_temporary_export_query(&target, &query)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    // Even report-only requests require the exact same bearer/TTL authority.
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if current.revision_id != query.revision_id
+        || current.canonical_authoring_revision_id != query.canonical_authoring_revision_id
+    {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_export_stale_revision",
+        ));
+    }
+    if current.revision_cursor == 0 {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_export_requires_accepted_edit",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+    let hash = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let output = backend
+        .worker
+        .export_editable_current(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &hash,
+            &target,
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_edited_export_blocked" | "product_edited_export_limit" => {
+                GuestReaderError::unprocessable("temporary_editor_export_unavailable")
+            }
+            _ => GuestReaderError::internal("temporary_editor_export_worker_failed"),
+        })?;
+    // An export MUST NOT become a mutation or prolong the hour. Before any
+    // bytes are returned, reauthorize the original bearer and compare the
+    // current SQLite RevisionStream head with the requested exact revision.
+    let latest = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&latest)?;
+    if latest.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let edges = backend
+        .revisions
+        .load_document_edges(&session_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+    if edges.last().map(|edge| edge.child_revision.as_str()) != Some(query.revision_id.as_str())
+        || edges.last().map(|edge| edge.child_cursor) != Some(current.revision_cursor)
+    {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_export_stale_revision",
+        ));
+    }
+    // Provide a private, exact LossReport prior to download via report_only.
+    // The host emits no public or unauthenticated source-derived metadata.
+    if query.report_only {
+        return Ok(GuestJson(serde_json::json!({
+            "protocol_version": "chaptera.temporary-edited-export-report.v1",
+            "revision_id": query.revision_id,
+            "canonical_authoring_revision_id": query.canonical_authoring_revision_id,
+            "source_hash": current.source_hash,
+            "target": target,
+            "artifact_sha256": output.artifact_sha256,
+            "loss_report_sha256": output.loss_report_sha256,
+            "loss_report": output.loss_report,
+            "expires_at_ms": latest.expires_at_ms,
+        }))
+        .into_response());
+    }
+    let mut response = Response::new(Body::from(output.artifact_bytes));
+    let response_headers = response.headers_mut();
+    let (mime, disposition) = match target.as_str() {
+        "idml" => (
+            "application/vnd.adobe.indesign-idml-package",
+            "attachment; filename=\"chaptera-edited.idml\"",
+        ),
+        "odg" => (
+            "application/vnd.oasis.opendocument.graphics",
+            "attachment; filename=\"chaptera-edited.odg\"",
+        ),
+        _ => unreachable!("request target was validated before export"),
+    };
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+    response_headers.insert(CONTENT_DISPOSITION, HeaderValue::from_static(disposition));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    for (name, value) in [
+        ("x-chaptera-edit-revision", query.revision_id.as_str()),
+        ("x-chaptera-export-sha256", output.artifact_sha256.as_str()),
+        (
+            "x-chaptera-loss-report-sha256",
+            output.loss_report_sha256.as_str(),
+        ),
+    ] {
+        response_headers.insert(
+            name,
+            HeaderValue::from_str(value).map_err(|_| {
+                GuestReaderError::internal("temporary_editor_export_receipt_invalid")
+            })?,
+        );
+    }
+    Ok(response)
 }
 
 async fn issue_session(
@@ -2821,6 +3004,30 @@ mod tests {
             expires_at_ms: now_ms + 60_000,
             quarantine_deleted_at_ms: None,
         }
+    }
+
+    #[test]
+    fn edited_export_accepts_only_bounded_pinned_revision_and_known_targets() {
+        let ok = TemporaryEditedExportQuery {
+            revision_id: format!("sha256:{}", "a".repeat(64)),
+            canonical_authoring_revision_id: "b".repeat(64),
+            report_only: false,
+        };
+        assert!(validate_temporary_export_query("odg", &ok).is_ok());
+        assert!(validate_temporary_export_query("idml", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf", &ok).is_err());
+        let malformed = TemporaryEditedExportQuery {
+            revision_id: "sha256:wrong".to_owned(),
+            canonical_authoring_revision_id: ok.canonical_authoring_revision_id.clone(),
+            report_only: true,
+        };
+        assert!(validate_temporary_export_query("idml", &malformed).is_err());
+        let malformed = TemporaryEditedExportQuery {
+            revision_id: ok.revision_id.clone(),
+            canonical_authoring_revision_id: "Z".repeat(64),
+            report_only: true,
+        };
+        assert!(validate_temporary_export_query("odg", &malformed).is_err());
     }
 
     #[test]

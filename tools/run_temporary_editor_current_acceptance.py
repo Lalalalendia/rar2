@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -13,8 +14,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import urlencode
 
 import run_cloud_reader_live_acceptance as live
+import verify_editable_export_geometry as geometry
 
 
 def checked(status: int, expected: int, action: str) -> None:
@@ -310,6 +313,104 @@ def main() -> int:
         ):
             raise AssertionError("canonical reopened Scene did not reflect the accepted MoveNode geometry")
 
+
+        # The very same pinned moved revision must produce an actual modified
+        # editable package, not a converter re-reading immutable PUB bytes.
+        expected_rect = geometry.RectEmu(
+            x=after_bounds["x"], y=after_bounds["y"],
+            width=after_bounds["width"], height=after_bounds["height"],
+        )
+        query = urlencode({
+            "revision_id": accepted["revision_id"],
+            "canonical_authoring_revision_id": accepted["canonical_authoring_revision_id"],
+        })
+        edited_formats = []
+        unavailable_formats = []
+        export_receipts = []
+        for target in ("odg", "idml"):
+            export_path = f"/v1/editor/temporary-sessions/{session_id}/exports/{target}?{query}"
+            checked(call("GET", export_path)[0], 401, "private edited export capability")
+            checked(call(
+                "GET", export_path,
+                headers=["x-chaptera-reader-session: " + secrets.token_hex(32)],
+            )[0], 404, "foreign token cannot download edited output")
+            pinned_stale = urlencode({
+                "revision_id": revision,
+                "canonical_authoring_revision_id": authoring_revision,
+            })
+            checked(call(
+                "GET", export_path.split("?")[0] + "?" + pinned_stale,
+                headers=private,
+            )[0], 409, "original revision cannot be substituted for edited artifact")
+            head_status, head_raw = call(
+                "GET", export_path + "&report_only=true", headers=private,
+            )
+            if head_status == 422:
+                unavailable_formats.append(target)
+                continue
+            checked(head_status, 200, "private current edit LossReport")
+            preflight = json.loads(head_raw)
+            if (
+                preflight.get("protocol_version") != "chaptera.temporary-edited-export-report.v1"
+                or preflight.get("source_hash") != expected_hash
+                or preflight.get("revision_id") != accepted["revision_id"]
+                or preflight.get("canonical_authoring_revision_id") != accepted["canonical_authoring_revision_id"]
+                or preflight.get("target") != target
+                or preflight.get("expires_at_ms") != move_expiry
+                or not isinstance(preflight.get("loss_report"), dict)
+                or preflight["loss_report"].get("can_serialize") is not True
+                or preflight["loss_report"].get("counts", {}).get("blocking") != 0
+            ):
+                raise AssertionError("preflight did not prove exact amended canonical output")
+            headers_file = work / ("output-" + target + "-headers.txt")
+            status, artifact = call(
+                "GET", export_path, headers=private, dump_headers=headers_file,
+            )
+            checked(status, 200, "physical edited " + target + " download")
+            headers_out = live.parse_header_file(headers_file)
+            actual_sha = hashlib.sha256(artifact).hexdigest()
+            if (
+                not artifact.startswith(b"PK")
+                or actual_sha != preflight["artifact_sha256"]
+                or headers_out.get("x-chaptera-export-sha256") != actual_sha
+                or headers_out.get("x-chaptera-loss-report-sha256") != preflight["loss_report_sha256"]
+                or headers_out.get("x-chaptera-edit-revision") != accepted["revision_id"]
+                or headers_out.get("cache-control") != "no-store"
+                or headers_out.get("x-content-type-options") != "nosniff"
+                or not headers_out.get("content-disposition", "").startswith("attachment; filename=")
+                or target not in headers_out.get("content-disposition", "")
+            ):
+                raise AssertionError("edited package response MIME/identity/private download mismatch")
+            local_artifact = work / ("edited-" + target + "." + target)
+            local_artifact.write_bytes(artifact)
+            try:
+                observed = geometry.verify_export(
+                    local_artifact, target, chosen_id, expected_rect,
+                )
+            except (AssertionError, ValueError) as exc:
+                raise AssertionError(
+                    f"edited {target} package did not preserve the changed canonical geometry"
+                ) from exc
+            export_receipts.append({
+                "target": target, "sha256": actual_sha,
+                "artifact_length": len(artifact),
+                "geometry_form": observed.get("geometry_form"),
+            })
+            edited_formats.append(target)
+        if not edited_formats:
+            raise AssertionError(
+                "both editable formats blocked or failed the physical edited-geometry oracle: "
+                + repr(unavailable_formats)
+            )
+        if list(work.rglob("edited-export.bin")):
+            raise AssertionError("isolated worker retained private edited-export scratch bytes")
+        if live.sha256_file(physical_source) != expected_hash:
+            raise AssertionError("physical edit export modified immutable source PUB")
+        checked(call(
+            "GET", f"/v1/editor/temporary-sessions/{session_id}/exports/pdf?{query}",
+            headers=private,
+        )[0], 400, "unsupported temporary edited output refuses silent PDF fallback")
+
         replay_status, replay_raw = call(
             "POST", move_path, headers=private, body_json=chosen
         )
@@ -354,6 +455,10 @@ def main() -> int:
         expired_status = call("GET", path, headers=private)[0]
         if expired_status not in {404, 410}:
             raise AssertionError("expired capability retained document access")
+        checked(call(
+            "GET", f"/v1/editor/temporary-sessions/{session_id}/exports/{edited_formats[0]}?{query}",
+            headers=private,
+        )[0], expired_status, "expired bearer may not download private edited artifact")
         with sqlite3.connect(db) as conn:
             remaining = conn.execute(
                 "SELECT COUNT(*) FROM reader_guest_sessions WHERE session_id=?",
@@ -391,12 +496,16 @@ def main() -> int:
             "bounded_rate_retries": rate_retries,
             "private_revision_rows_after_ttl": expired_revisions,
             "private_canonical_bindings_after_ttl": expired_bindings,
-            "edited_download_proven": False, "v0_go": False,
+            "edited_download_proven": True, "edited_target_profiles": edited_formats,
+            "editable_unavailable_targets": unavailable_formats,
+            "edited_artifact_receipts": export_receipts,
+            "persistent_export_artifacts": False, "v0_go": False,
         }
         (out / "receipt.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        print(json.dumps({"canonical_current_status": current_status, "mutation_proven": True, "v0_go": False}))
+        print(json.dumps({"canonical_current_status": current_status, "mutation_proven": True,
+                          "edited_download_proven": True, "targets": edited_formats, "v0_go": False}))
     finally:
         live.terminate(proxy)
         live.terminate(server)

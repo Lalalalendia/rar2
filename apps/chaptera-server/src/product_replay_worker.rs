@@ -14,7 +14,8 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
+    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId,
+    open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,18 @@ pub struct IsolatedStoryRangeReceiptV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct IsolatedEditableExportReceiptV1 {
+    pub target: String,
+    pub artifact_sha256: String,
+    pub artifact_byte_len: usize,
+    pub loss_report_sha256: String,
+    pub loss_report: Value,
+    #[serde(skip)]
+    pub artifact_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsolatedReaderSceneIntentV1 {
     pub revision_id: String,
     pub baseline_revision_id: String,
@@ -96,6 +109,9 @@ const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
+const MAX_EDITED_EXPORT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EDITED_LOSS_REPORT_BYTES: usize = 64 * 1024;
+const EDITED_EXPORT_PART: &str = "edited-export.bin";
 // An 8 MiB part stays well below the 32 MiB default per-file RLIMIT_FSIZE.
 // Preview samples never inflate result.json; all fixed sidecar slots are
 // opened before the isolated worker installs filesystem default-deny.
@@ -103,6 +119,65 @@ const PREVIEW_PART_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const PREVIEW_PART_COUNT: usize = 8;
 const PREVIEW_SIDECAR_MAX_BYTES: usize = PREVIEW_PART_BYTES * PREVIEW_PART_COUNT;
 const PREVIEW_SIDECAR_V1: &str = "chaptera.reader-preview-samples-sidecar.v1";
+
+async fn read_isolated_edited_export_sidecar(
+    receipt: &mut ProductReplayWorkerReceiptV1,
+    result_dir: &Path,
+) -> Result<(), ProductReplayWorkerError> {
+    let Some(edited) = receipt.editable_export.as_mut() else {
+        return Ok(());
+    };
+    if !matches!(edited.target.as_str(), "idml" | "odg")
+        || edited.artifact_byte_len == 0
+        || edited.artifact_byte_len > MAX_EDITED_EXPORT_BYTES
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated editable export exceeds the admitted target/byte envelope",
+        ));
+    }
+    require_sha256(&edited.artifact_sha256)?;
+    require_sha256(&edited.loss_report_sha256)?;
+    let loss = serde_json::to_vec(&edited.loss_report).map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated LossReport serialization failed",
+        )
+    })?;
+    if loss.len() > MAX_EDITED_LOSS_REPORT_BYTES || sha256_hex(&loss) != edited.loss_report_sha256 {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated LossReport differs from bounded checksum",
+        ));
+    }
+    let path = result_dir.join(EDITED_EXPORT_PART);
+    let metadata = async_fs::metadata(&path).await.map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_edited_export_receipt_missing",
+            "isolated exported bytes were not produced",
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() != edited.artifact_byte_len as u64 {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated export sidecar length differs from receipt",
+        ));
+    }
+    let bytes = async_fs::read(&path).await.map_err(|_| {
+        ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated export sidecar could not be read",
+        )
+    })?;
+    if bytes.len() != edited.artifact_byte_len || sha256_hex(&bytes) != edited.artifact_sha256 {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_receipt_invalid",
+            "isolated exported bytes differ from receipt digest",
+        ));
+    }
+    edited.artifact_bytes = bytes;
+    Ok(())
+}
 
 pub(crate) fn preview_part_name(index: usize) -> String {
     format!("reader-preview-{index}.bin")
@@ -269,6 +344,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     pub story_range: Option<IsolatedStoryRangeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editable_export: Option<IsolatedEditableExportReceiptV1>,
     pub filesystem_confinement: bool,
 }
 
@@ -333,6 +410,7 @@ fn take_exclusive_story_range_receipt(
     if receipt.baseline_project.is_some()
         || receipt.move_node.is_some()
         || receipt.reader_scene.is_some()
+        || receipt.editable_export.is_some()
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
@@ -772,6 +850,7 @@ pub fn run_product_replay_worker(
     move_node_intent: Option<IsolatedMoveNodeIntentV1>,
     reader_scene_intent: Option<IsolatedReaderSceneIntentV1>,
     story_intent_path: Option<&Path>,
+    editable_export_target: Option<&str>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -787,6 +866,7 @@ pub fn run_product_replay_worker(
     if usize::from(move_node_intent.is_some())
         + usize::from(reader_scene_intent.is_some())
         + usize::from(story_intent_path.is_some())
+        + usize::from(editable_export_target.is_some())
         > 1
     {
         return Err(ProductReplayWorkerError::new(
@@ -798,6 +878,20 @@ pub fn run_product_replay_worker(
         return Err(ProductReplayWorkerError::new(
             "product_story_range_invalid",
             "StoryRange requires an authorized exact base project",
+        ));
+    }
+    if editable_export_target.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_invalid",
+            "edited export requires a verified canonical project",
+        ));
+    }
+    if let Some(target) = editable_export_target
+        && !matches!(target, "idml" | "odg")
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_edited_export_invalid",
+            "only bounded IDML or ODG export is admitted",
         ));
     }
     if move_node_intent.is_some() && project_path.is_none() {
@@ -854,6 +948,22 @@ pub fn run_product_replay_worker(
             )
         })?;
 
+    let mut edited_export_output = if editable_export_target.is_some() {
+        Some(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output_root.join(EDITED_EXPORT_PART))
+                .map_err(|_| {
+                    ProductReplayWorkerError::new(
+                        "product_edited_export_output_failed",
+                        "isolated sidecar could not be opened before sandbox",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let mut preview_outputs = Vec::new();
     if reader_scene_intent.is_some() {
         for i in 0..PREVIEW_PART_COUNT {
@@ -1192,6 +1302,92 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let editable_export = if let Some(target_name) = editable_export_target {
+        let target = match target_name {
+            "idml" => EditorEditableTarget::Idml,
+            "odg" => EditorEditableTarget::Odg,
+            _ => {
+                return Err(ProductReplayWorkerError::new(
+                    "product_edited_export_invalid",
+                    "unknown edited export target",
+                ));
+            }
+        };
+        let label = format!("{document_id}@{actual_project_hash}");
+        let preview = session
+            .preview_editable_export(target, label.clone())
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_blocked",
+                    "current revision target preflight rejected",
+                )
+            })?;
+        if !preview.report.can_serialize || preview.report.counts.blocking != 0 {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_blocked",
+                "current revision has blocking semantic losses",
+            ));
+        }
+        let exported = session.export_editable(target, label).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_blocked",
+                "current revision could not be serialized",
+            )
+        })?;
+        if exported.bytes.is_empty() || exported.bytes.len() > MAX_EDITED_EXPORT_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_limit",
+                "edited artifact exceeds bounded response limit",
+            ));
+        }
+        let loss_report = serde_json::to_value(exported.report).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "LossReport could not be encoded",
+            )
+        })?;
+        let loss_bytes = serde_json::to_vec(&loss_report).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "LossReport serialization failed",
+            )
+        })?;
+        if loss_bytes.len() > MAX_EDITED_LOSS_REPORT_BYTES {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_limit",
+                "private LossReport exceeds bounded receipt",
+            ));
+        }
+        let output = edited_export_output.as_mut().ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_output_failed",
+                "output descriptor not prepared before sandbox",
+            )
+        })?;
+        output.write_all(&exported.bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_output_failed",
+                "edited artifact sidecar write failed",
+            )
+        })?;
+        output.flush().map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_output_failed",
+                "edited artifact sidecar flush failed",
+            )
+        })?;
+        Some(IsolatedEditableExportReceiptV1 {
+            target: target_name.to_owned(),
+            artifact_sha256: sha256_hex(&exported.bytes),
+            artifact_byte_len: exported.bytes.len(),
+            loss_report_sha256: sha256_hex(&loss_bytes),
+            loss_report,
+            artifact_bytes: Vec::new(),
+        })
+    } else {
+        None
+    };
+
     let graph: Value = serde_json::to_value(session.graph()).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_projection_failed",
@@ -1223,6 +1419,7 @@ pub fn run_product_replay_worker(
         move_node,
         story_range,
         reader_scene,
+        editable_export,
         filesystem_confinement: true,
     };
     validate_product_replay_receipt(
@@ -1321,6 +1518,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1356,6 +1554,7 @@ impl IsolatedProductReplayProducer {
                 document_id,
                 source_sha256,
                 source_bytes,
+                None,
                 None,
                 None,
                 None,
@@ -1448,6 +1647,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 Some(intent),
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1528,6 +1728,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
                 None,
                 None,
             )
@@ -1653,6 +1854,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1713,6 +1915,93 @@ impl IsolatedProductReplayProducer {
         Ok((mutation.operation, mutation.resulting_project))
     }
 
+    /// Produces one bounded physical artifact from the exact edited revision.
+    /// The original source and private worker scratch remain ephemeral.
+    pub async fn export_editable_current(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: &EditorProject,
+        project_hash: &str,
+        target: &str,
+    ) -> Result<IsolatedEditableExportReceiptV1, ProductReplayWorkerError> {
+        require_document_id(document_id)?;
+        require_sha256(source_sha256)?;
+        require_sha256(project_hash)?;
+        if !matches!(target, "idml" | "odg") {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "temporary output admits only IDML and ODG",
+            ));
+        }
+        let project_bytes = serde_json::to_vec(project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "canonical edited project cannot be encoded",
+            )
+        })?;
+        if project_bytes.len() > MAX_PROJECT_BYTES as usize
+            || project_sha256(project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_edited_export_invalid",
+                    "canonical project hash is unavailable",
+                )
+            })? != project_hash
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "exact edited project identity mismatch",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, project_hash)),
+                None,
+                None,
+                None,
+                Some(target),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            project_hash,
+        )?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "worker returned unrelated authority during edited export",
+            ));
+        }
+        let edited = receipt.editable_export.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "worker returned no edited artifact",
+            )
+        })?;
+        if edited.target != target
+            || edited.artifact_bytes.len() != edited.artifact_byte_len
+            || edited.artifact_bytes.is_empty()
+            || sha256_hex(&edited.artifact_bytes) != edited.artifact_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_receipt_invalid",
+                "physical edited bytes do not match worker receipt",
+            ));
+        }
+        Ok(edited)
+    }
+
     /// Executes only the existing per-file isolation harness. The host may
     /// serialize verified bytes but must not interpret the source PUB.
     #[expect(
@@ -1728,6 +2017,7 @@ impl IsolatedProductReplayProducer {
         move_node: Option<&IsolatedMoveNodeIntentV1>,
         reader_scene: Option<&IsolatedReaderSceneIntentV1>,
         story_range: Option<&IsolatedStoryRangeIntentV1>,
+        editable_export_target: Option<&str>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -1743,6 +2033,7 @@ impl IsolatedProductReplayProducer {
         if usize::from(move_node.is_some())
             + usize::from(reader_scene.is_some())
             + usize::from(story_range.is_some())
+            + usize::from(editable_export_target.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -1754,6 +2045,20 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
                 "Reader scene request must have an exact project without a mutation",
+            ));
+        }
+        if editable_export_target.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "edited output requires a canonical verified project",
+            ));
+        }
+        if let Some(target) = editable_export_target
+            && !matches!(target, "idml" | "odg")
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_edited_export_invalid",
+                "unknown edited target",
             ));
         }
         if story_range.is_some() && project.is_none() {
@@ -1850,6 +2155,9 @@ impl IsolatedProductReplayProducer {
         if story_range.is_some() {
             command.arg("--story-intent-json").arg(&story_intent_path);
         }
+        if let Some(target) = editable_export_target {
+            command.arg("--editable-export-target").arg(target);
+        }
         if let Some(scene) = reader_scene {
             command
                 .arg("--scene-revision-id")
@@ -1922,6 +2230,7 @@ impl IsolatedProductReplayProducer {
                 )
             })?;
         read_isolated_preview_sidecar(&mut receipt, &result_dir).await?;
+        read_isolated_edited_export_sidecar(&mut receipt, &result_dir).await?;
         Ok(receipt)
     }
 }
@@ -2026,6 +2335,7 @@ mod tests {
             move_node: None,
             story_range: None,
             reader_scene: None,
+            editable_export: None,
             filesystem_confinement: true,
         }
     }
