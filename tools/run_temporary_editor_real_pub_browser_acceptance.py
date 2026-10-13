@@ -153,7 +153,10 @@ def main() -> int:
                 receipt.get("source_sha256") != args.fixture_sha256 or
                 receipt.get("changed_idml_geometry_proven") is not True or
                 receipt.get("changed_idml_identity_proven") is not True or
-                receipt.get("changed_idml_geometry_form") != "idml_path_geometry"):
+                receipt.get("changed_idml_geometry_form") != "idml_path_geometry" or
+                receipt.get("same_browser_session_delete_proven") is not True or
+                receipt.get("revoked_old_current_scene_export_denied") is not True or
+                receipt.get("temporary_bearer_cleared_after_delete") is not True):
             raise AssertionError("full physical browser receipt invalid")
         print(json.dumps({
             "schema": receipt["schema"],

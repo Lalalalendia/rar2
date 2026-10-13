@@ -332,6 +332,53 @@ try {
     "guest capability leaked into HTTP URL");
   assert.equal(browserErrors.length,0,"real guest browser emitted page errors");
 
+  // Close the full real-PUB gesture/export/reload journey in the SAME browser
+  // session by clicking the actual user Delete button. 204 is not simulated.
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#temporary-delete").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#temporary-status")?.textContent.includes(
+      "Сессия удалена с сервера"), null, {timeout:45000});
+  const deletedBase = "/v1/editor/temporary-sessions/" + oldHead.document_id;
+  assert.equal(observed.requests.filter(x =>
+    x.path === deletedBase && x.method === "DELETE").length,1,
+    "user deletion did not issue exactly one private DELETE");
+  assert.ok(observed.responses.some(x =>
+    x.path === "/v1/editor/temporary-sessions/{session}" && x.status === 204),
+    "physical server did not acknowledge the guest DELETE with 204");
+  const editedQuery = "?revision_id=" + encodeURIComponent(accepted.revision_id) +
+    "&canonical_authoring_revision_id=" +
+    encodeURIComponent(accepted.canonical_authoring_revision_id);
+  const revokedPaths = [
+    deletedBase + "/current", deletedBase + "/scene",
+    deletedBase + "/exports/idml" + editedQuery,
+  ];
+  const revokedCodes = await page.evaluate(async ({paths,token}) => {
+    const result=[];
+    for(const path of paths){
+      let status=429;
+      for(let i=0;i<8;i++){
+        const response=await fetch(path,{
+          method:"GET",credentials:"omit",cache:"no-store",
+          headers:{"x-chaptera-reader-session":token},
+        });
+        status=response.status;
+        if(status!==429)break;
+        await new Promise(done=>setTimeout(done,2200));
+      }
+      result.push(status);
+    }
+    return result;
+  },{paths:revokedPaths,token:cap});
+  assert.ok(revokedCodes.every(code=>code===404||code===410),
+    "deleted browser bearer still accessed private current/scene/export");
+  await page.reload({waitUntil:"domcontentloaded"});
+  assert.equal(await page.evaluate(() =>
+    sessionStorage.getItem("chaptera.temporary-edit.v0")),null,
+    "guest tab kept the private bearer after physical deletion");
+  assert.equal(await page.locator("#temporary-resume").isHidden(),true,
+    "browser offered to resume a deleted guest session");
+
   const receipt = {
     schema:"chaptera.tempedit-real-pub-chromium-https.v1",
     status:"PASS",
@@ -349,6 +396,9 @@ try {
     changed_idml_geometry_proven:true,
     changed_idml_identity_proven:true,
     changed_idml_geometry_form:consumer.geometry_form,
+    same_browser_session_delete_proven:true,
+    revoked_old_current_scene_export_denied:true,
+    temporary_bearer_cleared_after_delete:true,
     loss_report_checked:true,
     original_pub_immutable:true,
     auth_product_routes_blocked:true,
