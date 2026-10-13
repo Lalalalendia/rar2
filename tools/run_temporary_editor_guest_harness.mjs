@@ -173,7 +173,15 @@ try {
   await page.mouse.down();
   await page.mouse.move(x+15,y+11,{steps:5});
   await page.mouse.up();
-  await page.waitForFunction(() => document.querySelector("#temporary-status")?.textContent.includes("Правка сохранена"),null,{timeout:30000});
+  try {
+    await page.waitForFunction(() => document.querySelector("#temporary-status")?.textContent.includes("Правка сохранена"),null,{timeout:8000});
+  } catch {
+    const status = await page.locator("#temporary-status").textContent();
+    throw new Error("drag was not accepted; status=" + JSON.stringify(status)
+      + " accepted=" + JSON.stringify(accepted)
+      + " browserErrors=" + JSON.stringify(pageErrors)
+      + " requests=" + JSON.stringify(requests.map(x => x.method + " " + x.path)));
+  }
   if(!accepted)throw Error("Chromium did not send canonical guest MoveNode");
   const newNode=page.locator('[data-node-id="'+nodeId+'"] rect');
   const newX=await newNode.getAttribute("x");
