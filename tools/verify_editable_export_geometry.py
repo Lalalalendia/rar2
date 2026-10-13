@@ -89,7 +89,17 @@ def expected_idml_anchors(rect: RectEmu) -> list[str]:
 
 
 def verify_idml(package: zipfile.ZipFile, node_id: str, rect: RectEmu) -> dict:
-    frame_self = "uf" + canonical_node_hex(node_id)
+    """Independently reopen edited TextFrame *or* embedded ImageFrame IDML geometry.
+
+    The existing source-neutral IDML writer uses uf<node> TextFrame or
+    uif<node> graphic Rectangle + ui<node> embedded Image. Keep both exact
+    identities: accepting arbitrary Rectangle geometry would produce a false
+    positive when the edited node was omitted from export.
+    """
+    node_hex = canonical_node_hex(node_id)
+    text_self = "uf" + node_hex
+    image_self = "uif" + node_hex
+    image_child_self = "ui" + node_hex
     matches = []
 
     for name in package.namelist():
@@ -97,23 +107,41 @@ def verify_idml(package: zipfile.ZipFile, node_id: str, rect: RectEmu) -> dict:
             continue
         root = ET.fromstring(package.read(name))
         for element in root.iter():
-            if local_name(element.tag) != "TextFrame":
+            tag = local_name(element.tag)
+            identity = element.attrib.get("Self")
+            if tag == "TextFrame" and identity == text_self:
+                object_kind = "text_frame"
+                geometry_form = "idml_path_geometry"
+            elif tag == "Rectangle" and identity == image_self:
+                if element.attrib.get("ContentType") != "GraphicType":
+                    raise AssertionError("IDML image Rectangle is not GraphicType")
+                images = [
+                    child for child in element.iter()
+                    if local_name(child.tag) == "Image"
+                    and child.attrib.get("Self") == image_child_self
+                ]
+                if len(images) != 1:
+                    raise AssertionError(
+                        "IDML image Rectangle lacks its exact embedded Image identity"
+                    )
+                object_kind = "image_frame"
+                geometry_form = "idml_image_path_geometry"
+            else:
                 continue
-            if element.attrib.get("Self") != frame_self:
-                continue
+
             anchors = [
                 child.attrib["Anchor"]
                 for child in element.iter()
                 if local_name(child.tag) == "PathPointType" and "Anchor" in child.attrib
             ]
-            matches.append((name, anchors))
+            matches.append((name, anchors, identity, object_kind, geometry_form))
 
     if len(matches) != 1:
         raise AssertionError(
-            f"expected exactly one IDML TextFrame for {node_id}, found {len(matches)}"
+            f"expected exactly one IDML canonical frame for {node_id}, found {len(matches)}"
         )
 
-    part, anchors = matches[0]
+    part, anchors, identity, object_kind, geometry_form = matches[0]
     expected = expected_idml_anchors(rect)
     if anchors != expected:
         raise AssertionError(
@@ -121,12 +149,12 @@ def verify_idml(package: zipfile.ZipFile, node_id: str, rect: RectEmu) -> dict:
         )
 
     return {
-        "identity_binding": frame_self,
+        "identity_binding": identity,
         "package_part": part,
-        "geometry_form": "idml_path_geometry",
+        "geometry_form": geometry_form,
+        "object_kind": object_kind,
         "observed": {"anchors_pt": anchors},
     }
-
 
 def verify_odg(package: zipfile.ZipFile, node_id: str, rect: RectEmu) -> dict:
     if "content.xml" not in package.namelist():
