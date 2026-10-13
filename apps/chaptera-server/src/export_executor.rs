@@ -855,6 +855,25 @@ mod tests {
                 marker_in_xml,
                 "new Story marker must survive the target XML package"
             );
+            if let Some(root) = std::env::var_os("CHAPTERA_EXPORT_EVIDENCE_DIR") {
+                let root = std::path::PathBuf::from(root);
+                std::fs::create_dir_all(&root).expect("private Story consumer directory");
+                let extension = if target == IDML_BOUNDED_EDITABLE_PROFILE {
+                    "idml"
+                } else {
+                    "odg"
+                };
+                std::fs::write(
+                    root.join(format!("story-edited.{extension}")),
+                    &export.artifact_bytes,
+                )
+                .expect("private Story target consumer output");
+                std::fs::write(
+                    root.join(format!("story-edited.{extension}.loss.json")),
+                    &export.loss_report_json,
+                )
+                .expect("private canonical Story LossReport");
+            }
             artifact_hashes.push(export.artifact_sha256);
 
             let mut mismatched_identity = payload;
