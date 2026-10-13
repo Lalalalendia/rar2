@@ -4,12 +4,14 @@
 Only PDF-to-PDF placement is performed here. The canonical imposition planner
 owns all rectangles; the current EditorSession fixed-output producer owns the
 source PDF. Embedded text, paint, and images stay in the PDF, not a raster copy.
+The output path uses permissively licensed pypdf and PDFium (no AGPL in runtime).
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 from pathlib import Path
 import stat
@@ -81,65 +83,95 @@ def compose_editor_card_a4_9up_pdf_v1(
             raise PrintComposerNupError("source_pub_identity_mismatch")
 
     try:
-        import fitz  # PyMuPDF, already used by the repo's PDF research tools
+        from pypdf import PdfReader, PdfWriter, Transformation
+        import pypdfium2 as pdfium
     except ImportError as exc:
-        raise PrintComposerNupError("pymupdf_1_26_7_required") from exc
+        raise PrintComposerNupError("licensed_pdf_composition_runtime_missing") from exc
 
-    source = None
-    target = None
     try:
-        try:
-            source = fitz.open(stream=current_fixed_pdf_bytes, filetype="pdf")
-        except Exception as exc:
-            raise PrintComposerNupError("fixed_pdf_invalid") from exc
-        if source.needs_pass or source.is_encrypted:
+        source = PdfReader(io.BytesIO(current_fixed_pdf_bytes), strict=True)
+        if source.is_encrypted:
             raise PrintComposerNupError("fixed_pdf_encrypted")
-        if source.is_repaired:
-            raise PrintComposerNupError("fixed_pdf_was_repaired")
-        if len(source) != 1:
+        if len(source.pages) != 1:
             raise PrintComposerNupError("fixed_pdf_must_have_one_logical_page")
-        page = source[0]
+        page = source.pages[0]
+        # One exact origin-zero, unrotated MediaBox is the only admitted class.
+        bounds = page.mediabox
+        crop = page.cropbox
+        points = tuple(float(v) for v in bounds)
+        crop_points = tuple(float(v) for v in crop)
+        if any(abs(v - w) > 0.01 for v, w in zip(points, crop_points)):
+            raise PrintComposerNupError("fixed_pdf_cropped_page_unsupported")
+        if abs(points[0]) > 0.01 or abs(points[1]) > 0.01:
+            raise PrintComposerNupError("fixed_pdf_nonzero_media_origin_unsupported")
         if page.rotation != 0:
             raise PrintComposerNupError("fixed_pdf_page_rotation_unsupported")
-        if page.first_annot is not None or page.first_widget is not None or page.get_links():
+        root = source.trailer.get("/Root")
+        if page.get("/Annots") or page.get("/AA") or (
+            root is not None and (root.get("/OpenAction") or root.get("/AA") or root.get("/Names"))
+        ):
             raise PrintComposerNupError("fixed_pdf_interactive_elements_unsupported")
         width_points = 85 * EMU_PER_MM / EMU_PER_POINT
         height_points = 55 * EMU_PER_MM / EMU_PER_POINT
         if (
-            abs(page.rect.width - width_points) > CARD_SIZE_TOLERANCE_POINTS
-            or abs(page.rect.height - height_points) > CARD_SIZE_TOLERANCE_POINTS
+            abs(points[2] - points[0] - width_points) > CARD_SIZE_TOLERANCE_POINTS
+            or abs(points[3] - points[1] - height_points) > CARD_SIZE_TOLERANCE_POINTS
         ):
             raise PrintComposerNupError("fixed_pdf_card_size_mismatch")
 
-        target = fitz.open()
-        sheet = target.new_page(
+        writer = PdfWriter()
+        sheet = writer.add_blank_page(
             width=plan.sheet_width_emu / EMU_PER_POINT,
             height=plan.sheet_height_emu / EMU_PER_POINT,
         )
         for placement in plan.placements:
-            rect = fitz.Rect(
-                placement.x_emu / EMU_PER_POINT,
-                placement.y_top_emu / EMU_PER_POINT,
-                (placement.x_emu + placement.width_emu) / EMU_PER_POINT,
-                (placement.y_top_emu + placement.height_emu) / EMU_PER_POINT,
+            # Canonical top-origin geometry -> physical PDF bottom-left.
+            tx = placement.x_emu / EMU_PER_POINT
+            ty = placement.pdf_bottom_left_y_emu(plan.sheet_height_emu) / EMU_PER_POINT
+            sheet.merge_transformed_page(
+                page, Transformation().translate(tx=tx, ty=ty),
+                over=True, expand=False,
             )
-            sheet.show_pdf_page(rect, source, 0, keep_proportion=True, overlay=True)
-        pdf_bytes = target.tobytes(garbage=4, deflate=True, no_new_id=True)
+        sink = io.BytesIO()
+        writer.write(sink)
+        pdf_bytes = sink.getvalue()
         if len(pdf_bytes) > MAX_IMPOSED_PDF_BYTES:
             raise PrintComposerNupError("imposed_pdf_size_out_of_bounds")
-        # Render the actual imposed PDF for sheet preview, not a separate
-        # raster-layout interpretation that might disagree with printing.
-        raster = sheet.get_pixmap(
-            matrix=fitz.Matrix(PREVIEW_SCALE, PREVIEW_SCALE), alpha=False
-        )
-        preview_bytes = raster.tobytes("png")
+    except PrintComposerNupError:
+        raise
+    except Exception as exc:
+        # Do not reveal source PDF internals in a user-facing diagnostic.
+        raise PrintComposerNupError("fixed_pdf_invalid") from exc
+
+    # The PNG is rasterized from exactly the PDF handed to the printer,
+    # using PDFium's permissively licensed renderer (no AGPL runtime).
+    pdf_doc = None
+    pdf_page = None
+    bitmap = None
+    try:
+        pdf_doc = pdfium.PdfDocument(pdf_bytes)
+        if len(pdf_doc) != 1:
+            raise PrintComposerNupError("imposed_pdf_page_count_mismatch")
+        pdf_page = pdf_doc[0]
+        bitmap = pdf_page.render(scale=PREVIEW_SCALE)
+        pil_image = bitmap.to_pil()
+        png_sink = io.BytesIO()
+        pil_image.save(png_sink, format="PNG", optimize=False, compress_level=9)
+        preview_bytes = png_sink.getvalue()
+        pil_image.close()
         if len(preview_bytes) > MAX_PREVIEW_PNG_BYTES:
             raise PrintComposerNupError("preview_png_size_out_of_bounds")
+    except PrintComposerNupError:
+        raise
+    except Exception as exc:
+        raise PrintComposerNupError("preview_render_failed") from exc
     finally:
-        if target is not None:
-            target.close()
-        if source is not None:
-            source.close()
+        if bitmap is not None:
+            bitmap.close()
+        if pdf_page is not None:
+            pdf_page.close()
+        if pdf_doc is not None:
+            pdf_doc.close()
 
     if source_pub_bytes is not None and (
         hashlib.sha256(source_pub_bytes).hexdigest() != plan.source_pub_sha256
