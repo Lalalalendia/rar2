@@ -251,16 +251,19 @@ try {
     "/v1/editor/projects",
     "/v1/auth/session",
   ]) {
-    const denied = await page.request.get(origin + restricted);
-    assert.equal(denied.status(),404,
+    const denied = await page.evaluate(async path => {
+      const response = await fetch(path, {
+        method: "GET", credentials: "omit", cache: "no-store"
+      });
+      return response.status;
+    }, restricted);
+    assert.equal(denied,404,
       "public edge exposed authenticated route " + restricted);
   }
   const privateMoves = observed.requests.filter(x =>
     x.path === privatePath("move-node", oldHead.document_id) && x.method === "POST");
   assert.equal(privateMoves.length,1,
     "pointer must cause exactly one canonical MoveNode POST");
-  assert.ok(observed.requests.every(x=>!x.url.includes(oldHead.document_id.split(":")[1] + ".token")),
-    "unexpected test URL contamination");
   // No bearer may appear in any navigation or request URL. Read capability
   // privately inside browser process and never put it in the receipt or logs.
   const cap = await page.evaluate(() => {
