@@ -89,7 +89,8 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0,
-                             "actual Nginx parser rejected production guest template")
+                             "actual Nginx parser rejected production guest template: " +
+                             (result.stderr or result.stdout)[-1200:])
 
     def test_exact_guest_rule_count_and_positive_paths(self):
         self.assertEqual(2, len(self.patterns))
