@@ -3,6 +3,7 @@
 // No synthetic fetch, manual POST mutation, Product auth, or persistent project.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
@@ -227,7 +228,8 @@ try {
   const download = await downloadPromise;
   await settleResponses();
   assert.equal(download.suggestedFilename(),"chaptera-edited.idml");
-  const artifact = await readFile(await download.path());
+  const downloadedPath = await download.path();
+  const artifact = await readFile(downloadedPath);
   assert.ok(artifact.subarray(0,2).equals(Buffer.from("PK")),
     "changed IDML must be a real ZIP package");
   const report = observed.reports.at(-1);
@@ -237,6 +239,35 @@ try {
   assert.equal(sha256(artifact), report.artifact_sha256);
   assert.ok(report.loss_report?.can_serialize === true);
   assert.equal(report.loss_report?.counts?.blocking,0);
+
+  // Independent consumer assertion on the exact bytes downloaded by Chromium:
+  // the selected NodeId must exist in IDML at the *moved* authoring bounds.
+  // Matching a server-supplied artifact SHA alone cannot prove this property.
+  // Keep ZIP bytes in Playwright's private temporary download directory;
+  // the Python parser emits only an identity/geometry receipt, never package bytes.
+  let geometryProof;
+  try {
+    const output = execFileSync("python", [
+      "tools/verify_editable_export_geometry.py",
+      "--target", target,
+      "--artifact", downloadedPath,
+      "--node-id", selected.nodeId,
+      "--x-emu", String(authoring.x),
+      "--y-emu", String(authoring.y),
+      "--width-emu", String(authoring.width),
+      "--height-emu", String(authoring.height),
+    ], { encoding: "utf8", timeout: 30000, maxBuffer: 65536,
+      stdio: ["ignore", "pipe", "pipe"] });
+    geometryProof = JSON.parse(output);
+  } catch {
+    throw Error("downloaded IDML failed independent browser-selected NodeId geometry proof");
+  }
+  assert.equal(geometryProof.target, target);
+  assert.equal(geometryProof.node_id, selected.nodeId);
+  assert.equal(geometryProof.artifact_sha256, sha256(artifact));
+  assert.equal(geometryProof.geometry_matches_edit, true);
+  assert.equal(geometryProof.expected_rect_emu.x, authoring.x);
+  assert.equal(geometryProof.expected_rect_emu.y, authoring.y);
 
   // Reload is through the same guest page, original baseline response
   // followed by the exact changed canonical revision. No GET extends TTL.
@@ -300,6 +331,8 @@ try {
     read_does_not_renew_ttl:true,
     changed_idml_download_sha256:sha256(artifact),
     changed_idml_byte_len:artifact.length,
+    changed_idml_browser_node_geometry_verified:true,
+    changed_idml_geometry_form:geometryProof.geometry_form,
     loss_report_checked:true,
     original_pub_immutable:true,
     auth_product_routes_blocked:true,
