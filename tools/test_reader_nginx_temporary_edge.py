@@ -81,7 +81,7 @@ class ReaderNginxGuestEdgeTests(unittest.TestCase):
                 "pid " + str(Path(tmp) / "nginx.pid") + ";\n"
                 "error_log stderr;\n"
                 "events { worker_connections 32; }\n"
-                "http { include " + str(CONFIG) + "; }\n",
+                "http { access_log off; include " + str(CONFIG) + "; }\n",
                 encoding="utf-8",
             )
             result = subprocess.run(
