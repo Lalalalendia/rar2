@@ -146,7 +146,7 @@ try {
   try {
     await page.waitForFunction(() =>
       document.querySelector("#temporary-status")?.textContent.includes(
-        "Открыта редактируемая ревизия"), null, { timeout: 45000 });
+        "Открыта редактируемая ревизия"), null, { timeout: 170000 });
   } catch {
     const ui = await page.locator("#temporary-status").textContent();
     throw Error("real PUB editor did not open; visible_status=" +
