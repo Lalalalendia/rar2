@@ -185,3 +185,48 @@ test("4xx from post-acceptance GET does not unlock an already committed edit", a
   assert.equal(client.status.pending_reconciliation, true);
   await assert.rejects(client.refresh(), /temporary_move_reconciliation_required/);
 });
+
+
+test("edited PDF remains revision-bound and fails closed without server PDF support", async () => {
+  const { client, requests } = harness([after, [{error: "temporary_editor_export_request_invalid"}, 400]]);
+  await client.refresh();
+  await assert.rejects(client.exportEdited("pdf"), error => error.status === 400);
+  assert.equal(client.status.refresh_required, true);
+  assert.equal(requests.length, 2);
+  assert.ok(requests[1].url.includes("/exports/pdf?"));
+  assert.equal(requests[1].options.headers.accept, "application/pdf");
+  assert.ok(!requests[1].url.includes(bearer));
+});
+
+test("PDF report does not trust a foreign authoring revision", async () => {
+  const { client } = harness([after, {
+    protocol_version: "chaptera.temporary-edited-export-report.v1",
+    revision_id: afterRev, canonical_authoring_revision_id: beforeCanon,
+    source_hash: source, target: "pdf", artifact_sha256: "e".repeat(64),
+    loss_report: {counts: {blocking: 0}},
+  }]);
+  await client.refresh();
+  await assert.rejects(client.exportEdited("pdf", {reportOnly: true}), /temporary_export_report_identity_mismatch/);
+  assert.equal(client.status.refresh_required, true);
+});
+
+test("PDF download rejects forged signature even with matching HTTP digest", async () => {
+  const actual = new TextEncoder().encode("not-a-PDF");
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", actual));
+  const hash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+  const { client } = harness([after]);
+  await client.refresh();
+  const fakeResponse = new Response(actual, {headers: {
+    "content-type": "application/pdf",
+    "x-chaptera-edit-revision": afterRev,
+    "x-chaptera-export-sha256": hash,
+  }});
+  // A separately provisioned client proves the PDF signature is checked in the download path.
+  const download = new TemporaryGuestMoveClientV1({
+    sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+    fetchImpl: (() => {let n = 0;return async () => ++n === 1 ? reply(after) : fakeResponse;})(),
+    operationIdFactory: () => "test-move-1",
+  });
+  await download.refresh();
+  await assert.rejects(download.exportEdited("pdf"), /temporary_export_pdf_signature_invalid/);
+});

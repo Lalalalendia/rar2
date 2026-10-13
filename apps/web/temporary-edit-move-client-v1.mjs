@@ -245,7 +245,7 @@ export class TemporaryGuestMoveClientV1 {
   // A private edited-revision report or physical download, never original PUB.
   // Only query-bound public revision identities appear in the URL, never bearer.
   async exportEdited(target, { reportOnly = false } = {}) {
-    if (!["idml", "odg"].includes(target)) {
+    if (!["idml", "odg", "pdf"].includes(target)) {
       throw failure("temporary_export_target_invalid");
     }
     if (this.#busy || this.#pending || this.#refreshRequired ||
@@ -263,7 +263,7 @@ export class TemporaryGuestMoveClientV1 {
       {
         method: "GET",
         headers: {
-          accept: reportOnly ? "application/json" : "application/octet-stream",
+          accept: reportOnly ? "application/json" : target === "pdf" ? "application/pdf" : "application/octet-stream",
           "x-chaptera-reader-session": this.#token,
           "x-csrf-token": this.#csrf,
         },
@@ -292,7 +292,7 @@ export class TemporaryGuestMoveClientV1 {
     }
     const expectedType = target === "idml"
       ? "application/vnd.adobe.indesign-idml-package"
-      : "application/vnd.oasis.opendocument.graphics";
+      : target === "odg" ? "application/vnd.oasis.opendocument.graphics" : "application/pdf";
     const expectedHash = response.headers?.get("x-chaptera-export-sha256");
     if (response.headers?.get("content-type") !== expectedType ||
         response.headers?.get("x-chaptera-edit-revision") !== head.revision_id ||
@@ -301,8 +301,16 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_export_download_identity_mismatch");
     }
     const blob = await response.blob();
-    if (blob.size <= 0) {
-      throw failure("temporary_export_download_empty");
+    if (blob.size <= 0 || blob.size > 16 * 1024 * 1024) {
+      throw failure("temporary_export_download_size_invalid");
+    }
+    // PDF is never admitted by MIME and digest alone: require physical PDF signature.
+    if (target === "pdf") {
+      const signature = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+      if (signature.length !== 5 ||
+          String.fromCharCode(...signature) !== "%PDF-") {
+        throw failure("temporary_export_pdf_signature_invalid");
+      }
     }
     const subtle = globalThis.crypto?.subtle;
     if (!subtle || typeof subtle.digest !== "function") {
