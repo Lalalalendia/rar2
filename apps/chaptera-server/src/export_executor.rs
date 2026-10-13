@@ -660,7 +660,6 @@ mod tests {
         }
     }
 
-
     /// Proves the existing exact-revision exporter consumes a real Story edit
     /// from a pinned PUB. It does NOT claim native PUB write-back or a target
     /// application's successful reopen; those are separate release gates.
@@ -670,16 +669,14 @@ mod tests {
 
         use base64::Engine as _;
         use chaptera_cdm_model::{
-            AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1,
-            derive_authoring_revision_id_v1,
+            AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1, derive_authoring_revision_id_v1,
         };
         use pub_editor::open_mature_0x2c_editor;
 
         use crate::{
             revision_materializer::{
                 ExactRevisionMaterializationReceipt, ExactRevisionMaterializedState,
-                MATERIALIZATION_RECEIPT_SCHEMA_V1, cloud_revision_project,
-                project_sha256,
+                MATERIALIZATION_RECEIPT_SCHEMA_V1, cloud_revision_project, project_sha256,
             },
             source_baseline::{
                 derive_commit_revision_identities, derive_import_baseline_identities,
@@ -714,7 +711,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
         ));
-        let fixture = encoded.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        let fixture = encoded
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
         let source = base64::engine::general_purpose::STANDARD
             .decode(fixture)
             .expect("pinned public PUB fixture must decode");
@@ -725,11 +725,9 @@ mod tests {
             "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
         );
 
-        let mut session = open_mature_0x2c_editor(
-            &source,
-            Sha256Digest::from_str(&source_hash).unwrap(),
-        )
-        .expect("pinned real PUB must open in the canonical EditorSession");
+        let mut session =
+            open_mature_0x2c_editor(&source, Sha256Digest::from_str(&source_hash).unwrap())
+                .expect("pinned real PUB must open in the canonical EditorSession");
         let baseline_project = cloud_revision_project(&session.project());
         let story = session
             .graph()
@@ -745,7 +743,10 @@ mod tests {
             .replace_story_range(story.0, 0, 1, story.1, marker)
             .expect("isolated canonical Story edit must be admitted");
         let edited_project = cloud_revision_project(&session.project());
-        assert_eq!(edited_project.operations.len(), baseline_project.operations.len() + 1);
+        assert_eq!(
+            edited_project.operations.len(),
+            baseline_project.operations.len() + 1
+        );
 
         let document_id = "document:real-story-export";
         let tenant_id = "tenant:real-story-export";
@@ -765,10 +766,8 @@ mod tests {
             &operation,
         )
         .unwrap();
-        let canonical_parent: AuthoringRevisionIdV1 = baseline
-            .canonical_authoring_revision_id
-            .parse()
-            .unwrap();
+        let canonical_parent: AuthoringRevisionIdV1 =
+            baseline.canonical_authoring_revision_id.parse().unwrap();
         let canonical_child =
             derive_authoring_revision_id_v1(&edited_project, Some(canonical_parent))
                 .unwrap()
@@ -792,8 +791,7 @@ mod tests {
             },
             source_bytes: source.clone(),
         };
-        let exporter =
-            ExactRevisionEditableExporter::new(Arc::new(PinnedRevision(materialized)));
+        let exporter = ExactRevisionEditableExporter::new(Arc::new(PinnedRevision(materialized)));
         let mut artifact_hashes = Vec::new();
 
         for target in [IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE] {
@@ -814,11 +812,19 @@ mod tests {
             assert_eq!(export.exact_revision_id, child.service_revision_id);
             assert_eq!(export.canonical_authoring_revision_id, canonical_child);
             assert_eq!(export.source_sha256, source_hash);
-            assert_eq!(export.project_sha256, project_sha256(
-                &exporter.materializer.materialize_state(
-                    tenant_id, document_id, &child.service_revision_id,
-                ).await.unwrap().receipt.project,
-            ).unwrap());
+            assert_eq!(
+                export.project_sha256,
+                project_sha256(
+                    &exporter
+                        .materializer
+                        .materialize_state(tenant_id, document_id, &child.service_revision_id,)
+                        .await
+                        .unwrap()
+                        .receipt
+                        .project,
+                )
+                .unwrap()
+            );
             assert_eq!(
                 export.artifact_sha256,
                 format!("sha256:{:x}", Sha256::digest(&export.artifact_bytes))
@@ -845,7 +851,10 @@ mod tests {
                     break;
                 }
             }
-            assert!(marker_in_xml, "new Story marker must survive the target XML package");
+            assert!(
+                marker_in_xml,
+                "new Story marker must survive the target XML package"
+            );
             artifact_hashes.push(export.artifact_sha256);
 
             let mut mismatched_identity = payload;
