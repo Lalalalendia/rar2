@@ -90,8 +90,13 @@ function contains(node, x, y) {
 function candidatePoints(scene, current) {
   const shapes = scene.nodes.filter(n =>
     direct(n) && current.authoring_graph?.nodes?.[n.node_id]);
+  // Only an actual canonical TextFrame is guaranteed to have a matching
+  // TextFrame identity in the bounded IDML consumer. Visual Reader "kind"
+  // describes paint and must never be used as export admission evidence.
+  const textFrames = shapes.filter(n =>
+    current.authoring_graph.nodes[n.node_id].kind === "text_frame");
   const choices = [];
-  for (const node of shapes) {
+  for (const node of textFrames) {
     // Require an unambiguous page-local hit; the browser must never edit
     // projected, master, group-child or nonauthoritative stacking candidates.
     for (const fraction of [[.5,.5],[.25,.25],[.75,.25],[.25,.75],[.75,.75]]) {
@@ -107,13 +112,7 @@ function candidatePoints(scene, current) {
       }
     }
   }
-  choices.sort((a,b) => {
-    // Shapes with real paint are more likely to be visually selectable.
-    // IDML currently serializes supported text frames; prefer a direct
-    // text node so the same browser-selected NodeId has an IDML consumer oracle.
-    const ka = a.kind === "text" ? 0 : 1, kb = b.kind === "text" ? 0 : 1;
-    return ka - kb || a.area - b.area;
-  });
+  choices.sort((a,b) => a.area - b.area || a.nodeId.localeCompare(b.nodeId));
   return choices;
 }
 async function hitOnScreen(choice) {
@@ -170,7 +169,8 @@ try {
     "real isolated Publisher scene did not render");
 
   const candidates = candidatePoints(sourceScene, oldHead);
-  assert.ok(candidates.length, "real PUB has no unambiguous direct editable candidate");
+  assert.ok(candidates.length,
+    "real PUB has no unambiguous direct canonical TextFrame for IDML consumer");
   let selected = null;
   for (const choice of candidates.slice(0, 120)) {
     const screen = await hitOnScreen(choice);
@@ -179,7 +179,9 @@ try {
       break;
     }
   }
-  assert.ok(selected, "no actual browser-visible canonical node is selectable");
+  assert.ok(selected, "no actual browser-visible canonical TextFrame is selectable");
+  assert.equal(oldHead.authoring_graph.nodes[selected.nodeId].kind, "text_frame",
+    "chosen node is not a canonical IDML-representable TextFrame");
   const originalBounds = oldHead.authoring_graph.nodes[selected.nodeId].header.bounds;
 
   // This is a real pointer-driven Chromium event. The test does not call POST
@@ -266,8 +268,18 @@ try {
     "--width-emu", String(geometry.width),
     "--height-emu", String(geometry.height),
   ], { encoding: "utf8", timeout: 60000, maxBuffer: 65536 });
-  assert.equal(verifier.status, 0,
-    "browser-downloaded IDML failed independent ZIP/XML moved-Node geometry proof");
+  if (verifier.status !== 0) {
+    // Never leak private package paths, identity, bounds or XML on CI failure.
+    // Emit only a stable structural class for the exact consumer defect.
+    const stderr = verifier.stderr || "";
+    const reason = /expected exactly one IDML TextFrame/.test(stderr)
+      ? "idml_frame_identity_missing"
+      : /IDML geometry mismatch/.test(stderr)
+        ? "idml_frame_geometry_mismatch"
+        : /BadZipFile|CRC failed|corrupt zip/i.test(stderr)
+          ? "idml_package_corrupt" : "idml_consumer_error";
+    throw Error("browser-downloaded IDML independent proof failed: " + reason);
+  }
   let consumer;
   try {
     consumer = JSON.parse(verifier.stdout);
