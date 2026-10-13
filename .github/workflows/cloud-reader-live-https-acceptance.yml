@@ -17,6 +17,7 @@ on:
       - "deploy/caddy/CloudReader.Caddyfile.example"
       - "tools/migration_pdf_worker_isolation.py"
       - "tools/run_cloud_reader_live_acceptance.py"
+      - "tools/run_temporary_editor_current_acceptance.py"
       - ".github/workflows/cloud-reader-live-https-acceptance.yml"
   workflow_dispatch:
 
@@ -50,7 +51,7 @@ jobs:
       - name: Verify acceptance host dependencies
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/migration_pdf_worker_isolation.py
+          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/migration_pdf_worker_isolation.py
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "libseccomp is required"
@@ -66,6 +67,13 @@ jobs:
           curl --fail --location --retry 4 --retry-delay 2             "$FIXTURE_URL"             --output "$RUNNER_TEMP/live-reader/source.pub"
           printf '%s  %s\n' "$FIXTURE_SHA256" "$RUNNER_TEMP/live-reader/source.pub" | sha256sum -c -
           test "$(stat -c '%s' "$RUNNER_TEMP/live-reader/source.pub")" = "161792"
+
+      - name: Fetch pinned authorable PUB for temporary-current proof
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 --retry-delay 2 "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" --output "$RUNNER_TEMP/live-reader/temp-current.pub"
+          printf '%s  %s\n' "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" "$RUNNER_TEMP/live-reader/temp-current.pub" | sha256sum -c -
+          test "$(stat -c '%s' "$RUNNER_TEMP/live-reader/temp-current.pub")" = "291840"
 
       - name: Install pinned Caddy
         run: |
@@ -84,6 +92,15 @@ jobs:
         run: |
           python tools/run_cloud_reader_live_acceptance.py             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera"             --structural-worker "$GITHUB_WORKSPACE/target/debug/chaptera"             --caddy "$RUNNER_TEMP/live-reader/caddy"             --fixture "$RUNNER_TEMP/live-reader/source.pub"             --fixture-sha256 "$FIXTURE_SHA256"             --repository-commit "$REPOSITORY_COMMIT_SHA"             --out "$GITHUB_WORKSPACE/target/cloud-reader-live-https"
 
+      - name: Prove filesystem-only temporary EditorSession current through real HTTPS
+        run: |
+          python tools/run_temporary_editor_current_acceptance.py \
+            --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --caddy "$RUNNER_TEMP/live-reader/caddy" \
+            --fixture "$RUNNER_TEMP/live-reader/temp-current.pub" \
+            --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
+            --out "$GITHUB_WORKSPACE/target/temporary-editor-current"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -92,5 +109,8 @@ jobs:
             target/cloud-reader-live-https/receipt.json
             target/cloud-reader-live-https/chaptera.log
             target/cloud-reader-live-https/caddy.log
+            target/temporary-editor-current/receipt.json
+            target/temporary-editor-current/chaptera.log
+            target/temporary-editor-current/caddy.log
           if-no-files-found: warn
           retention-days: 30

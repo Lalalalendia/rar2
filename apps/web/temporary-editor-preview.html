@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Chaptera — временный просмотр PUB</title>
+<link rel="stylesheet" href="/editor/temporary-editor-preview.css">
+</head>
+<body>
+<main id="temporary-preview-root" class="page-shell">
+  <header>
+    <strong>Chaptera</strong>
+    <h1>Временный просмотр PUB</h1>
+    <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
+    <p class="notice"><strong>Пока только просмотр.</strong> Редактирование и скачивание изменённого файла не поддерживаются в этом режиме. Оригинальный PUB не изменяется.</p>
+  </header>
+  <section aria-labelledby="open-heading" class="panel">
+    <h2 id="open-heading">Открыть файл</h2>
+    <form id="temporary-upload-form">
+      <label for="temporary-file">Выберите файл .pub</label>
+      <input id="temporary-file" name="pub" type="file" accept=".pub,application/vnd.ms-publisher" required>
+      <button id="temporary-start" type="submit">Открыть временно</button>
+    </form>
+    <div class="actions">
+      <button id="temporary-resume" type="button" hidden>Восстановить в этой вкладке</button>
+      <button id="temporary-forget" type="button" hidden>Забыть в этой вкладке</button>
+    </div>
+    <p id="temporary-status" role="status" aria-live="polite">Выберите PUB. Данные временной сессии не добавляются в постоянные проекты.</p>
+    <p id="temporary-expiry" class="secondary"></p>
+    <p class="secondary">Вкладка хранит приватный ключ сессии только для восстановления просмотра. «Забыть» очищает ключ в этой вкладке, но не удаляет файл с сервера досрочно. Сервер блокирует доступ по истечении TTL и удаляет временные данные.</p>
+  </section>
+  <section class="panel" aria-labelledby="pages-heading">
+    <h2 id="pages-heading">Страницы</h2>
+    <div id="temporary-pages" class="pages" role="region" aria-label="Предварительный просмотр страниц PUB"></div>
+  </section>
+</main>
+<script type="module" src="/editor/temporary-editor-preview.mjs"></script>
+</body>
+</html>

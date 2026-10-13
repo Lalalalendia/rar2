@@ -5,6 +5,10 @@ on:
     paths:
       - "apps/web/temporary-edit-browser-session-v0.mjs"
       - "apps/web/temporary-edit-browser-session-v0.test.mjs"
+      - "apps/web/temporary-editor-preview.html"
+      - "apps/web/temporary-editor-preview.css"
+      - "apps/web/temporary-editor-preview.mjs"
+      - "apps/web/temporary-editor-preview.test.mjs"
       - ".github/workflows/web-temporary-editor-browser-v0.yml"
   workflow_dispatch:
 
@@ -25,4 +29,6 @@ jobs:
         with:
           node-version: "22"
       - name: Verify anonymous temporary session, expiry and privacy fences
-        run: node --test apps/web/temporary-edit-browser-session-v0.test.mjs
+        run: |
+          node --check apps/web/temporary-editor-preview.mjs
+          node --test apps/web/temporary-edit-browser-session-v0.test.mjs apps/web/temporary-editor-preview.test.mjs
