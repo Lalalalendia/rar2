@@ -150,7 +150,10 @@ def main() -> int:
                 receipt.get("real_pub") is not True or
                 receipt.get("real_chromium") is not True or
                 receipt.get("browser_pointer_commits") != 1 or
-                receipt.get("source_sha256") != args.fixture_sha256):
+                receipt.get("source_sha256") != args.fixture_sha256 or
+                receipt.get("changed_idml_geometry_proven") is not True or
+                receipt.get("changed_idml_identity_proven") is not True or
+                receipt.get("changed_idml_geometry_form") != "idml_path_geometry"):
             raise AssertionError("full physical browser receipt invalid")
         print(json.dumps({
             "schema": receipt["schema"],
@@ -158,6 +161,7 @@ def main() -> int:
             "real_pub_browser_https": True,
             "browser_pointer_commits": receipt["browser_pointer_commits"],
             "edited_idml_sha256": receipt["changed_idml_download_sha256"],
+            "downloaded_idml_consumer_geometry_proven": True,
             "v0_go": False,
         }, sort_keys=True))
         return 0
