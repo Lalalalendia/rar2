@@ -111,7 +111,7 @@ test("real temporary browser client drives same-origin upload and uses existing 
   }
   assert.equal(renders.length, 1);
   assert.equal(renders[0].host, nodes["temporary-pages"]);
-  assert.equal(renders[0].payload, scene);
+  assert.deepEqual(renders[0].payload, scene);
   assert.match(nodes["temporary-status"].textContent, /Редактирование пока недоступно/);
   assert.equal(nodes["temporary-resume"].hidden, false);
   assert.equal(nodes["temporary-forget"].hidden, false);
