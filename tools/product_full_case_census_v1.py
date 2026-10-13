@@ -17,6 +17,16 @@ FAILURES = frozenset({
     'fidelity_disclosure','chromium_image_paint','external_image_denied',
     'anonymous_denial','oidc_session_contract','source_identity_contract',
     'unclassified_browser_failure','bounded_stage_failure','unclassified',
+    # A failure at one of these fixed phases is NOT an accepted Product image.
+    'visual_scene_input','visual_image_ablation','visual_chromium_init',
+    'visual_before_navigation','visual_before_render',
+    'visual_before_page_identity','visual_before_raster',
+    'visual_after_navigation','visual_after_render',
+    'visual_after_page_identity','visual_after_raster',
+    'visual_final_checks','visual_finished','visual_unclassified',
+    'http_both_unanswered','http_both_unrequested','http_both_mixed',
+    'http_current_unanswered','http_current_unrequested',
+    'http_scene_unanswered','http_scene_unrequested',
 })
 PUBLIC = frozenset({
     'redacted','grant_missing','grant_expired','capability_denied',
