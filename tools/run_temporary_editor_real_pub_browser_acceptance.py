@@ -60,6 +60,15 @@ def main() -> int:
         source = config.read_text(encoding="utf-8")
         if source.count('provider = "s3-compatible"') != 1:
             raise AssertionError("fixture must override exactly one storage provider")
+        origin_setting = 'public_origin = "https://' + live.EDGE_HOST + '"'
+        if source.count(origin_setting) != 1:
+            raise AssertionError("expected one canonical public browser origin")
+        # Chromium sends Origin and Host with the ephemeral TLS port. The
+        # real Rust edge enforces an exact scheme/host/port + CSRF equality.
+        source = source.replace(
+            origin_setting,
+            'public_origin = "https://' + live.EDGE_HOST + f':{httpsport}"',
+        )
         config.write_text(
             source.replace('provider = "s3-compatible"', 'provider = "filesystem"'),
             encoding="utf-8",
