@@ -1,0 +1,30 @@
+name: Web Temporary Edited IDML Geometry Oracle
+
+on:
+  pull_request:
+    paths:
+      - "tools/verify_editable_export_geometry.py"
+      - "tools/test_editable_export_geometry.py"
+      - ".github/workflows/web-temporary-idml-geometry-oracle.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  idml-geometry-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile independent IDML and ODG ZIP consumers
+        run: python -m py_compile tools/verify_editable_export_geometry.py tools/test_editable_export_geometry.py
+      - name: Verify exact text/image identity, geometry and tampering rejection
+        run: python tools/test_editable_export_geometry.py -v
