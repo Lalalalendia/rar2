@@ -199,5 +199,63 @@ class PhysicalNupPdfV1Tests(unittest.TestCase):
             self.assertEqual(PUB_BYTES, src_path.read_bytes())
 
 
+
+    def test_real_embedded_image_edit_reaches_all_nine_pdf_positions(self):
+        import io
+        from PIL import Image
+
+        def image_pdf(rgb):
+            raster = Image.new("RGB", (32, 32), rgb)
+            sink = io.BytesIO()
+            raster.save(sink, format="PNG")
+            doc = fitz.open()
+            try:
+                page = doc.new_page(width=85 * 72 / 25.4, height=55 * 72 / 25.4)
+                page.insert_image(fitz.Rect(20, 20, 80, 80), stream=sink.getvalue())
+                return doc.tobytes(garbage=4, deflate=True, no_new_id=True)
+            finally:
+                doc.close()
+
+        before, after = image_pdf((220, 12, 9)), image_pdf((10, 35, 220))
+        self.assertNotEqual(before, after)
+        def imposed(current):
+            plan = plan_editor_card_a4_9up_v1(
+                source_pub_sha256=PUB_SHA,
+                editor_revision_id="accepted-replace-image-v1",
+                current_fixed_pdf_sha256=hashlib.sha256(current).hexdigest(),
+                logical_page_id="card-page-1",
+            )
+            return compose_editor_card_a4_9up_pdf_v1(
+                plan=plan, current_fixed_pdf_bytes=current, source_pub_bytes=PUB_BYTES
+            )
+
+        red, blue = imposed(before), imposed(after)
+        self.assertNotEqual(red.receipt["pdf"]["sha256"], blue.receipt["pdf"]["sha256"])
+        with fitz.open(stream=blue.pdf_bytes, filetype="pdf") as final:
+            page = final[0]
+            unique_xrefs = {image[0] for image in page.get_images(full=True)}
+            self.assertEqual(1, len(unique_xrefs))
+            image_rects = page.get_image_rects(next(iter(unique_xrefs)))
+            self.assertEqual(9, len(image_rects))
+            for rect, placement in zip(
+                sorted(image_rects, key=lambda v:(v.y0,v.x0)),
+                blue.receipt["placements"],
+            ):
+                self.assertAlmostEqual(
+                    rect.x0,
+                    placement["x_emu"] / 12700 + 20,
+                    delta=0.5,
+                )
+                self.assertAlmostEqual(
+                    rect.y0,
+                    placement["y_top_emu"] / 12700 + 20,
+                    delta=0.5,
+                )
+            rendered = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+            for rect in image_rects:
+                pixel = rendered.pixel(int(rect.x0 + 20), int(rect.y0 + 20))
+                self.assertGreater(pixel[2], pixel[0] * 2)  # blue, never old red
+                self.assertGreater(pixel[2], pixel[1] * 2)
+
 if __name__ == "__main__":
     unittest.main()

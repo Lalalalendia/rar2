@@ -28,7 +28,8 @@ def receipt(pdf):
         "current_revision":{"project_state_id":"sha256:"+"a"*64,"mutation_target_count":4,
                             "story_target_state_current":True,"move_geometry_current":True,
                             "resize_geometry_current":True,"replacement_image_current":True},
-        "renderer":{"target_reports":{name:{"disposition":"painted"} for name in
+        "renderer":{"summary":{"page_count":1,"node_painted":3,"node_partial":0,"node_unsupported":0,"diagnostic_codes":[]},
+                    "target_reports":{name:{"disposition":"painted"} for name in
                                     ("move_node","resize_node","replace_image")}},
         "source_neutral_chain":{name:"sha256:"+"b"*64 for name in
                ("resource_input_sha256","render_request_sha256","scene_snapshot_id",

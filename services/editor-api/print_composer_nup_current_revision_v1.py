@@ -74,7 +74,29 @@ def validate_current_fixed_pdf_receipt_v2(*, receipt, source_bytes, project_byte
                 "replacement_image_current"):
         eq(current.get(key),True,key)
     eq(current.get("mutation_target_count"),4,"mutation_count")
-    reports=obj(obj(receipt.get("renderer"), "renderer").get("target_reports"),"reports")
+
+    renderer = obj(receipt.get("renderer"), "renderer")
+    summary = obj(renderer.get("summary"), "summary")
+    eq(summary.get("page_count"), 1, "page_count")
+    for key in ("node_painted", "node_partial", "node_unsupported"):
+        value = summary.get(key)
+        if type(value) is not int or value < 0 or value > 100_000:
+            raise PrintComposerNupError("current_receipt_" + key + "_invalid")
+    if summary["node_painted"] < 3:
+        raise PrintComposerNupError("current_fixed_pdf_missing_painted_targets")
+    codes = summary.get("diagnostic_codes")
+    if (
+        not isinstance(codes, list)
+        or len(codes) > 100
+        or any(not isinstance(code, str) or not (0 < len(code) <= 96) for code in codes)
+    ):
+        raise PrintComposerNupError("current_fixed_pdf_diagnostics_invalid")
+    # V1 does not silently print repeated partial/unsupported source content.
+    # Require loss-free upstream rendering; customer-facing override is
+    # deliberately out of scope.
+    if summary["node_partial"] or summary["node_unsupported"] or codes:
+        raise PrintComposerNupError("current_fixed_pdf_visual_loss_unresolved")
+    reports=obj(renderer.get("target_reports"),"reports")
     for name in ("move_node", "resize_node", "replace_image"):
         eq(obj(reports.get(name),name).get("disposition"),"painted",name)
     chain=obj(receipt.get("source_neutral_chain"),"chain")

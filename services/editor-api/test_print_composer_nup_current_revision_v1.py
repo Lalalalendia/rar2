@@ -29,7 +29,8 @@ def receipt(pdf):
           "mutation_target_count":4,"story_target_state_current":True,
           "move_geometry_current":True,"resize_geometry_current":True,
           "replacement_image_current":True},
-      "renderer":{"target_reports":{x:{"disposition":"painted"} for x in
+      "renderer":{"summary":{"page_count":1,"node_painted":3,"node_partial":0,"node_unsupported":0,"diagnostic_codes":[]},
+          "target_reports":{x:{"disposition":"painted"} for x in
           ("move_node","resize_node","replace_image")}},
       "source_neutral_chain":{x:"sha256:"+"b"*64 for x in
           ("resource_input_sha256","render_request_sha256","scene_snapshot_id","resources_id",
@@ -73,5 +74,22 @@ class CurrentRevisionBindingTests(unittest.TestCase):
         with self.assertRaises(PrintComposerNupError):
             validate_current_fixed_pdf_receipt_v2(
                 receipt=bad,source_bytes=SRC,project_bytes=PROJECT,fixed_pdf_bytes=blob)
+
+    def test_partial_unsupported_and_diagnostic_pdf_cannot_be_printed_silently(self):
+        blob=sample()
+        for field,value in (
+            ("node_partial",1),
+            ("node_unsupported",1),
+            ("diagnostic_codes",["pdf.image.unsupported"]),
+            ("page_count",2),
+            ("node_painted",0),
+            ("node_partial",True),
+        ):
+            degraded=deepcopy(receipt(blob))
+            degraded["renderer"]["summary"][field]=value
+            with self.subTest(field=field,value=value), self.assertRaises(PrintComposerNupError):
+                validate_current_fixed_pdf_receipt_v2(
+                    receipt=degraded,source_bytes=SRC,project_bytes=PROJECT,fixed_pdf_bytes=blob)
+
 if __name__=="__main__":
     unittest.main()
