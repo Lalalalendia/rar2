@@ -815,15 +815,15 @@ async fn temporary_editor_current_inner(
         .source_sha256
         .as_deref()
         .ok_or_else(|| GuestReaderError::internal("temporary_editor_source_identity_missing"))?;
-    let source_bytes = read_exact_temporary_editor_source(&state, &session).await?;
+    let source_bytes = read_exact_temporary_editor_source(state, &session).await?;
     let baseline_project = backend
         .worker
-        .baseline_project(&session_id, source_hash, &source_bytes)
+        .baseline_project(session_id, source_hash, &source_bytes)
         .await
         .map_err(|_| GuestReaderError::unprocessable("temporary_editor_canonical_unsupported"))?;
     let mut project = cloud_revision_project(&baseline_project);
     let baseline = derive_import_baseline_identities(
-        &session_id,
+        session_id,
         source_hash,
         &project.schema_version,
         &project,
@@ -837,7 +837,7 @@ async fn temporary_editor_current_inner(
         .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
     let edges = backend
         .revisions
-        .load_document_edges(&session_id)
+        .load_document_edges(session_id)
         .await
         .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
     if edges.len() > MAX_TEMPORARY_EDITOR_REVISIONS {
@@ -881,7 +881,7 @@ async fn temporary_editor_current_inner(
         }
         let identity = backend
             .revisions
-            .require_revision_identity(&session_id, &edge.child_revision)
+            .require_revision_identity(session_id, &edge.child_revision)
             .await
             .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
         canonical_revision_id = identity.canonical_revision_id;
@@ -891,7 +891,7 @@ async fn temporary_editor_current_inner(
     let authoring_graph = backend
         .worker
         .project_authoring_graph(
-            &session_id,
+            session_id,
             source_hash,
             &source_bytes,
             &project,
@@ -903,7 +903,7 @@ async fn temporary_editor_current_inner(
     // Long-running worker input/read must not resurrect an expired session.
     // This rechecks the bearer and the current SQLite TTL without touching it.
     let current = state
-        .authorized_session(&session_id, &headers, now_ms()?)
+        .authorized_session(session_id, headers, now_ms()?)
         .await?;
     require_temporary_editor_current_session(&current)?;
     if current.source_sha256 != session.source_sha256 {
