@@ -109,7 +109,9 @@ function candidatePoints(scene, current) {
   }
   choices.sort((a,b) => {
     // Shapes with real paint are more likely to be visually selectable.
-    const ka = a.kind === "shape" ? 0 : 1, kb = b.kind === "shape" ? 0 : 1;
+    // IDML currently serializes supported text frames; prefer a direct
+    // text node so the same browser-selected NodeId has an IDML consumer oracle.
+    const ka = a.kind === "text" ? 0 : 1, kb = b.kind === "text" ? 0 : 1;
     return ka - kb || a.area - b.area;
   });
   return choices;
