@@ -16,7 +16,7 @@ const ttl0 = Date.now() + 3_600_000, ttl1 = ttl0 + 120_000;
 const editedBytes = Buffer.from("PK\u0003\u0004Chaptera temporary browser synthetic edited IDML proof");
 const outputSha = createHash("sha256").update(editedBytes).digest("hex");
 const route = "/v1/editor/temporary-sessions/" + id;
-let accepted = null, requests = [], editedReportRequests = 0;
+let accepted = null, requests = [], editedReportRequests = 0, deleted = false;
 const assets = new Map([
   ["/editor/temporary-preview", "apps/web/temporary-editor-preview.html"],
   ["/editor/temporary-editor-preview.mjs", "apps/web/temporary-editor-preview.mjs"],
@@ -82,6 +82,14 @@ const server = createServer(async (req,res) => {
   if (!path.includes(id) || req.headers["x-chaptera-reader-session"] !== token) {
     json(res,403,{error:"guest_session_not_found"});return;
   }
+  if (path === route && req.method === "DELETE") {
+    if (deleted) { json(res,404,{error:"guest_session_not_found"});return; }
+    deleted = true;
+    res.writeHead(204,{"cache-control":"no-store"});
+    res.end();
+    return;
+  }
+  if (deleted) { json(res,404,{error:"guest_session_not_found"});return; }
   if (path.endsWith("/content") && req.method === "PUT") {
     json(res,200,{protocol_version:"chaptera.reader-guest-session.v1",
       session_id:id,state:"stored",expires_at_ms:ttl0});return;
@@ -214,6 +222,18 @@ try {
   await page.locator("#temporary-resume").click();
   await page.waitForFunction((expected) => Number(document.querySelector('[data-node-id] rect')?.getAttribute("x")) === expected,
     accepted.x_emu,{timeout:30000});
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#temporary-delete").click();
+  await page.waitForFunction(() => document.querySelector("#temporary-status")?.textContent.includes("Сессия удалена"),null,{timeout:15000});
+  if (!deleted) throw Error("user-clicked temporary session delete never reached server");
+  const denied = await fetch(origin+route+"/current", {
+    headers: {"x-chaptera-reader-session": token}, cache: "no-store",
+  });
+  if (denied.status !== 404) throw Error("old guest capability could still read after DELETE");
+  await page.reload();
+  if (!(await page.locator("#temporary-resume").isHidden())) {
+    throw Error("guest browser retained locally deleted session token");
+  }
   const movePosts=requests.filter(x=>x.path===route+"/move-node");
   if(movePosts.length!==1)throw Error("browser replay silently committed twice");
   if(requests.some(x=>x.path.includes(token)||x.query.includes(token)))throw Error("capability leaked into URI");
@@ -222,6 +242,8 @@ try {
     private_guest_capability:true,commit_count:movePosts.length,
     exact_scene_after_move:true,exact_scene_after_reload:true,
     changed_download_preflighted:true,edited_download_offered:true,
+    explicit_server_delete_confirmed:true,deleted_capability_denied:true,
+    browser_local_key_erased_after_receipt:true,
     original_pub_unmodified:true,v0_go:false};
   await mkdir("target/web-editor-temporary",{recursive:true});
   await writeFile("target/web-editor-temporary/chromium-temporary-guest.json",
