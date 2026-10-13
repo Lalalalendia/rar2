@@ -36,7 +36,7 @@ const page = await browser.newPage({
   ignoreHTTPSErrors: true,
   viewport: { width: 1280, height: 900 },
 });
-const observed = { current: [], scenes: [], accepted: [], requests: [], reports: [] };
+const observed = { current: [], scenes: [], accepted: [], requests: [], reports: [], responses: [] };
 const pendingResponseReads = [];
 const browserErrors = [];
 page.on("pageerror", error => browserErrors.push(error.name || "PageError"));
@@ -47,8 +47,11 @@ page.on("request", request => {
   }
 });
 page.on("response", response => {
-  if (!response.url().startsWith(origin) || response.status() !== 200) return;
+  if (!response.url().startsWith(origin)) return;
   const path = new URL(response.url()).pathname;
+  observed.responses.push({path:path.replace(/tempedit:[0-9a-f]{32}/g, "{session}"),
+    status: response.status()});
+  if (response.status() !== 200) return;
   let dest;
   if (/\/v1\/editor\/temporary-sessions\/[^/]+\/current$/.test(path)) {
     dest = observed.current;
@@ -140,9 +143,17 @@ try {
   assert.equal(result?.status(), 200, "public Caddy did not expose guest editor");
   await page.locator("#temporary-file").setInputFiles(fixture);
   await page.locator("#temporary-start").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#temporary-status")?.textContent.includes(
-      "Открыта редактируемая ревизия"), null, { timeout: 90000 });
+  try {
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-status")?.textContent.includes(
+        "Открыта редактируемая ревизия"), null, { timeout: 45000 });
+  } catch {
+    const ui = await page.locator("#temporary-status").textContent();
+    throw Error("real PUB editor did not open; visible_status=" +
+      String(ui).slice(0,220) + " http=" +
+      JSON.stringify(observed.responses.slice(-18)) +
+      " page_errors=" + JSON.stringify(browserErrors));
+  }
   await settleResponses();
   const oldHead = observed.current.at(-1);
   const sourceScene = observed.scenes.at(-1)?.scene;
