@@ -41,7 +41,8 @@ const storageState = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
 const privatePath = process.env.CHAPTERA_PREVIEW_022_PRIVATE;
 const scenePath = process.env.CHAPTERA_PREVIEW_022_SCENE_OUT;
 const summaryPath = process.env.CHAPTERA_PREVIEW_022_SUMMARY;
-if ([origin, fixturePath, expectedSha, storageState, privatePath, scenePath, summaryPath].some(v => !v)) {
+const responsePhasePath = process.env.CHAPTERA_PRODUCT_HTTP_RESPONSE_PHASE_FILE;
+if ([origin, fixturePath, expectedSha, storageState, privatePath, scenePath, summaryPath, responsePhasePath].some(v => !v)) {
   throw new Error("Product 022 requires pinned source, saved real OIDC session and private receipt paths");
 }
 if (!fixture || expectedSha !== fixture.sha) {
@@ -118,10 +119,28 @@ try {
       ? /^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)
       : /^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route);
   };
-  const currentFromUi = page.waitForResponse(
-    response => isUiResponse(response, "current"), { timeout: 150000 });
-  const sceneFromUi = page.waitForResponse(
-    response => isUiResponse(response, "scene"), { timeout: 150000 });
+  // Keep both listener promises observed even if only one response arrives.
+  // The existing 150s deadline remains unchanged; this does not bypass
+  // SourceIngress/worker authentication or weaken the physical acceptance.
+  let currentRequested = false;
+  let sceneRequested = false;
+  page.on("request", request => {
+    if (request.method() !== "GET") return;
+    try {
+      const url = new URL(request.url());
+      if (url.origin !== origin) return;
+      const route = decodeURIComponent(url.pathname);
+      if (/^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)) currentRequested = true;
+      if (/^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route)) sceneRequested = true;
+    } catch {
+      // Malformed external requests are still rejected by the existing fence.
+    }
+  });
+  const observed = (kind) => page.waitForResponse(
+    response => isUiResponse(response, kind), { timeout: 150000 }
+  ).then(response => ({ response }), () => ({ response: null }));
+  const currentFromUi = observed("current");
+  const sceneFromUi = observed("scene");
   await page.locator("#pub-file").setInputFiles({
     name: "Pinned" + fixtureId + ".pub",
     mimeType: "application/x-mspublisher",
@@ -133,9 +152,28 @@ try {
   );
   const documentId = decodeURIComponent(new URL(page.url()).pathname)
     .replace("/editor/doc/", "");
-  const [currentResponse, sceneResponse] = await Promise.all([
+  const [currentObservation, sceneObservation] = await Promise.all([
     currentFromUi, sceneFromUi,
   ]);
+  if (!currentObservation.response || !sceneObservation.response) {
+    let code;
+    if (!currentObservation.response && !sceneObservation.response) {
+      code = currentRequested === sceneRequested
+        ? (currentRequested ? "http_both_unanswered" : "http_both_unrequested")
+        : "http_both_mixed";
+    } else if (!currentObservation.response) {
+      code = currentRequested ? "http_current_unanswered" : "http_current_unrequested";
+    } else {
+      code = sceneRequested ? "http_scene_unanswered" : "http_scene_unrequested";
+    }
+    // This PRIVATE fixed-value sidecar contains no URL, ID, cookies,
+    // document data, exception body, or unstable Playwright text.
+    await writeFile(responsePhasePath, code + "\n", "utf8");
+    throw new Error("Product owner HTTP response not observed");
+  }
+  const [currentResponse, sceneResponse] = [
+    currentObservation.response, sceneObservation.response,
+  ];
   const [current, scene] = await Promise.all([
     currentResponse.json().catch(() => null),
     sceneResponse.json().catch(() => null),
