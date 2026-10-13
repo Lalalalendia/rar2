@@ -6,6 +6,8 @@ on:
     paths:
       - tools/product_full_physical_receipts_v1.py
       - tools/test_product_full_physical_receipts_v1.py
+      - tools/product_full_case_census_v1.py
+      - tools/test_product_full_case_census_v1.py
       - tools/product_full_cohort_shards_v1.py
       - tools/run_product_oidc_worst_census_acceptance.py
       - tools/run_secure_origin_product_worst_browser.mjs
@@ -39,9 +41,10 @@ jobs:
       - name: Compile and validate existing 49/39/111 physical contract
         run: |
           set -euo pipefail
-          python -m py_compile tools/product_full_physical_receipts_v1.py tools/test_product_full_physical_receipts_v1.py tools/product_full_cohort_shards_v1.py tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_worst_visual_64.py
+          python -m py_compile tools/product_full_physical_receipts_v1.py tools/test_product_full_physical_receipts_v1.py tools/product_full_case_census_v1.py tools/test_product_full_case_census_v1.py tools/product_full_cohort_shards_v1.py tools/run_product_oidc_worst_census_acceptance.py tools/reader_product_worst_visual_64.py
           python tools/test_product_full_cohort_shards_v1.py -v
           python tools/test_product_full_physical_receipts_v1.py -v
+          python tools/test_product_full_case_census_v1.py -v
           node --check tools/run_secure_origin_product_worst_browser.mjs
           node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
       - name: Emit fixed, complete and source-free four-shard selection
@@ -96,51 +99,90 @@ jobs:
           run-id: 36573574820
       - name: Build existing canonical Product HTTP and isolated worker
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
-      - name: Physically run every eligible case without fallback or exclusions
+      - name: Physically attempt every case and never rank missing or rejected PUBs
         env:
-          SHARD_CASES: ${{ matrix.case_ids }}
+          SHARD_CASES: ${ matrix.case_ids }
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/product-physical-full/cases
+          mkdir -p target/product-physical-full/cases target/product-physical-full/census-cases
           for CASE_ID in $SHARD_CASES; do
-            python tools/product_full_cohort_shards_v1.py --case "$CASE_ID" > "$RUNNER_TEMP/current-product-case.json"
-            SOURCE_SHA="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_sha256"])' "$RUNNER_TEMP/current-product-case.json")"
-            SOURCE_BYTES="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_bytes"])' "$RUNNER_TEMP/current-product-case.json")"
+            python tools/product_full_cohort_shards_v1.py --case "$CASE_ID" > "$RUNNER_TEMP/product-case.json"
+            SOURCE_SHA="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_sha256"])' "$RUNNER_TEMP/product-case.json")"
+            SOURCE_BYTES="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_bytes"])' "$RUNNER_TEMP/product-case.json")"
             FIXTURE="$RUNNER_TEMP/product-full-corpus/pinned1050/materialized/native/$SOURCE_SHA.pub"
             test -f "$FIXTURE"
             printf '%s  %s\n' "$SOURCE_SHA" "$FIXTURE" | sha256sum --check
             test "$(stat -c %s "$FIXTURE")" = "$SOURCE_BYTES"
+            begin=$SECONDS
+            status=0
             CHAPTERA_PRODUCT_MULTI_ID="$CASE_ID" python tools/run_product_oidc_worst_census_acceptance.py \
               --binary target/debug/chaptera \
               --fixture "$FIXTURE" \
               --fixture-sha256 "$SOURCE_SHA" \
               --head-sha "$EXACT_HEAD" \
-              --caddy-image caddy:2.10.2-alpine
+              --caddy-image caddy:2.10.2-alpine || status=$?
             case_dir="target/product-oidc-worst-census-$CASE_ID"
-            privacy_args=()
+            private_logs=()
             for file in "$case_dir"/*.log "$case_dir"/*.json; do
-              if [ -f "$file" ]; then privacy_args+=("$file"); fi
+              if [ -f "$file" ]; then private_logs+=("$file"); fi
             done
-            test "${#privacy_args[@]}" -ge 3
-            python tools/security_leak_scan_v1.py "${privacy_args[@]}" \
+            test "${#private_logs[@]}" -ge 1
+            python tools/security_leak_scan_v1.py "${private_logs[@]}" \
               --forbid-literal "Pinned$CASE_ID.pub" \
               --forbid-literal "chaptera-local-only-secret" \
               --forbid-literal "$RUNNER_TEMP/product-full-corpus/pinned1050" \
               --json-out "$case_dir/privacy-scan.json"
-            output="target/product-physical-full/cases/$CASE_ID/document.json"
-            python tools/product_full_physical_receipts_v1.py case \
+            doc="target/product-physical-full/cases/$CASE_ID/document.json"
+            if [ "$status" -eq 0 ]; then
+              python tools/product_full_physical_receipts_v1.py case \
+                --case "$CASE_ID" --head "$EXACT_HEAD" \
+                --owner "$case_dir/owner.json" \
+                --summary "$case_dir/summary.json" \
+                --comparison "$case_dir/publisher-comparison.json" \
+                --privacy "$case_dir/privacy-scan.json" \
+                --out "$doc"
+            fi
+            python tools/product_full_case_census_v1.py record \
               --case "$CASE_ID" --head "$EXACT_HEAD" \
-              --owner "$case_dir/owner.json" \
-              --summary "$case_dir/summary.json" \
-              --comparison "$case_dir/publisher-comparison.json" \
-              --privacy "$case_dir/privacy-scan.json" \
-              --out "$output"
+              --exit-code "$status" --elapsed "$((SECONDS-begin))" \
+              --owner "$case_dir/owner.json" --document "$doc" \
+              --out "target/product-physical-full/census-cases/$CASE_ID.json"
           done
+          python tools/product_full_case_census_v1.py summarize \
+            --shard "$SHARD_ID" --head "$EXACT_HEAD" \
+            --case-dir target/product-physical-full/census-cases \
+            --out "target/product-physical-full/census-$SHARD_ID.json"
+          touch target/product-physical-full/all-private-cases-scanned
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=json.loads(Path(f"target/product-physical-full/census-{os.environ['SHARD_ID']}.json").read_text())
+          if not r['full_shard_admitted']:
+              raise SystemExit("Physical Product corpus incomplete: strict global score denied")
+          PY
           python tools/product_full_physical_receipts_v1.py shard \
             --shard "$SHARD_ID" --head "$EXACT_HEAD" \
             --case-dir target/product-physical-full/cases \
             --out "target/product-physical-full/shard-$SHARD_ID.json"
+      - name: Verify complete private scan and source-neutral diagnostic
+        id: census_privacy
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f target/product-physical-full/all-private-cases-scanned
+          test -f "target/product-physical-full/census-$SHARD_ID.json"
+          python tools/security_leak_scan_v1.py "target/product-physical-full/census-$SHARD_ID.json" \
+            --forbid-literal "chaptera-local-only-secret"
+      - name: Publish only fixed-code diagnostic, never private PUB or log files
+        if: ${ always() && steps.census_privacy.outcome == 'success' }
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-49-111-census-${ matrix.shard }
+          path: target/product-physical-full/census-${ matrix.shard }.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Ensure shard artifact contains only source-neutral allowlisted JSON
         run: |
           set -euo pipefail
