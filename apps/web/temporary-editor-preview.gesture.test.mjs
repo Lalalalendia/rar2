@@ -290,7 +290,10 @@ test("temporary Guest plain Story field posts exact private range and repaints a
         revision_id: afterRev, canonical_authoring_revision_id: afterCanon,
         client_operation_id: body.client_operation_id, expires_at_ms: 8_200_000,
         replayed: false, scene_refresh: "current",
-        canonical_operation: { replace_story_range: { story_id: storyId } },
+        canonical_operation: {
+          kind: "replace_story_range", story_id: storyId,
+          start_scalar: 0, end_scalar: 7, replacement_text: "Edited",
+        },
       });
     }
     return network.fetchImpl(url, options);
