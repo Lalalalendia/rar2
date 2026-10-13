@@ -650,7 +650,7 @@ mod tests {
         }
 
         let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
-        assert!(html.contains("Правка поддерживаемых объектов"));
+        assert!(html.contains("Просмотр и PDF без правки"));
         assert!(html.contains("/editor/temporary-editor-preview.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
         assert!(!html.contains("temporary_access_token="));
