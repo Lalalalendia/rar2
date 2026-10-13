@@ -278,7 +278,7 @@ export class TemporaryGuestMoveClientV1 {
     if (reportOnly) {
       let report;
       try { report = await response.json(); }
-      catch { throw failure("temporary_export_report_invalid"); }
+      catch { this.#refreshRequired = true; throw failure("temporary_export_report_invalid"); }
       if (report?.protocol_version !== "chaptera.temporary-edited-export-report.v1" ||
           report.revision_id !== head.revision_id ||
           report.canonical_authoring_revision_id !== head.canonical_authoring_revision_id ||
@@ -300,8 +300,14 @@ export class TemporaryGuestMoveClientV1 {
       this.#refreshRequired = true;
       throw failure("temporary_export_download_identity_mismatch");
     }
-    const blob = await response.blob();
+    let blob;
+    try { blob = await response.blob(); }
+    catch {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_download_read_failed");
+    }
     if (blob.size <= 0 || blob.size > 16 * 1024 * 1024) {
+      this.#refreshRequired = true;
       throw failure("temporary_export_download_size_invalid");
     }
     // PDF is never admitted by MIME and digest alone: require physical PDF signature.
@@ -309,16 +315,25 @@ export class TemporaryGuestMoveClientV1 {
       const signature = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
       if (signature.length !== 5 ||
           String.fromCharCode(...signature) !== "%PDF-") {
+        this.#refreshRequired = true;
         throw failure("temporary_export_pdf_signature_invalid");
       }
     }
     const subtle = globalThis.crypto?.subtle;
     if (!subtle || typeof subtle.digest !== "function") {
+      this.#refreshRequired = true;
       throw failure("temporary_export_crypto_unavailable");
     }
-    const digest = new Uint8Array(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+    let digest;
+    try {
+      digest = new Uint8Array(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+    } catch {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_digest_failed");
+    }
     const actualHash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
     if (actualHash !== expectedHash) {
+      this.#refreshRequired = true;
       throw failure("temporary_export_hash_mismatch");
     }
     return { blob, target, sha256: actualHash, revision_id: head.revision_id };
