@@ -223,6 +223,39 @@ export class TemporaryEditBrowserSessionV0 {
     }
   }
 
+  // Only an explicit confirmed physical DELETE receipt clears local authority.
+  // A lost ACK or server 5xx must not be described as completed deletion.
+  async deleteSession({ signal } = {}) {
+    if (this.#busy) throw fail("temporary_operation_pending");
+    const session = this.#restore();
+    if (!session) throw fail("temporary_session_missing");
+    this.#busy = true;
+    try {
+      const response = await this.fetchImpl.call(
+        globalThis,
+        "/v1/editor/temporary-sessions/" + session.session_id,
+        {
+          method: "DELETE",
+          headers: {
+            "x-chaptera-reader-session": session.access_token,
+            "x-csrf-token": this.csrfToken,
+            "accept": "application/json",
+          },
+          signal,
+          credentials: "omit", cache: "no-store", redirect: "error",
+          referrerPolicy: "no-referrer",
+        },
+      );
+      if (response?.status !== 204 || !response.ok) {
+        throw fail("temporary_delete_not_confirmed", response?.status);
+      }
+      this.clear();
+      return true;
+    } finally {
+      this.#busy = false;
+    }
+  }
+
   async resume({ signal } = {}) {
     if (this.#busy) throw fail("temporary_operation_pending");
     const session = this.#restore();

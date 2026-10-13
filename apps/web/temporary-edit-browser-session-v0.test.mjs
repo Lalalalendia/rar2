@@ -294,6 +294,47 @@ test("one in-flight operation blocks another write and restore", async () => {
   assert.equal(calls.length, 3);
 });
 
+test("delete uses only bearer headers and clears capability after physical 204 receipt", async () => {
+  const store = storage();
+  await new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: flow().fetchImpl,
+  }).start(file);
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: async (url, opts) => {
+      calls.push({url, opts});
+      return new Response(null, {status: 204, headers: {"cache-control": "no-store"}});
+    },
+  });
+  assert.equal(await client.deleteSession(), true);
+  assert.equal(store.getItem(TEMPORARY_EDIT_STORAGE_KEY), null);
+  assert.equal(client.hasSavedSession(), false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/v1/editor/temporary-sessions/" + id);
+  assert.equal(calls[0].opts.method, "DELETE");
+  assert.equal(calls[0].opts.headers["x-chaptera-reader-session"], token);
+  assert.equal(calls[0].opts.headers["x-csrf-token"], csrfToken);
+  assert.equal(calls[0].opts.cache, "no-store");
+  assert.equal(calls[0].opts.credentials, "omit");
+  assert.equal(calls[0].opts.redirect, "error");
+  assert.ok(!calls[0].url.includes(token));
+});
+
+test("unconfirmed delete keeps the private capability for recovery, never claims purge", async () => {
+  const store = storage();
+  await new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: flow().fetchImpl,
+  }).start(file);
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async () => new Response(JSON.stringify({error: token}), {status: 500}),
+  });
+  await assert.rejects(client.deleteSession(), e =>
+    e.code === "temporary_delete_not_confirmed" && e.status === 500 && !e.message.includes(token));
+  assert.equal(client.hasSavedSession(), true);
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).access_token, token);
+});
+
 test("constructor rejects malformed CSRF token", () => {
   assert.throws(() => new TemporaryEditBrowserSessionV0({
     csrfToken: "bad", fetchImpl: async () => response(issue),
