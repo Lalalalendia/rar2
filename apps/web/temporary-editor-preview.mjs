@@ -404,7 +404,9 @@ export async function bootTemporaryEditorPreview({
     editBusy = true;
     controls();
     try {
-      status.textContent = "Проверка потерь и подготовка изменённого " + target.toUpperCase() + "…";
+      const printableName = target === "pdf9up" ? "листа А4 с девятью карточками (PDF)" :
+        "изменённого " + target.toUpperCase();
+      status.textContent = "Проверка потерь и подготовка " + printableName + "…";
       const report = await moveClient.exportEdited(target, { reportOnly: true });
       // Explicit disclosure before the response bytes are offered for download.
       const losses = report.loss_report?.counts;
@@ -424,7 +426,9 @@ export async function bootTemporaryEditorPreview({
       } finally {
         globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       }
-      status.textContent = "Скачан " + target.toUpperCase() + " из изменённой ревизии. Потери: " +
+      const downloadedName = target === "pdf9up" ? "лист А4 с девятью карточками (PDF)" :
+        target.toUpperCase();
+      status.textContent = "Скачан " + downloadedName + " из изменённой ревизии. Потери: " +
         (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") +
         (partialFidelity ? ". Needs review / Partial: обязательно проверьте экспорт." : ".");
     } catch {

@@ -14,11 +14,11 @@ const pageId = "20000000-0000-7000-8000-000000000002";
 const base = "/v1/editor/temporary-sessions/" + id;
 const initialNode = { node_id: nodeId, page_id: pageId, kind: "shape",
   bounds: { x: 100, y: 200, width: 300, height: 300 } };
-function readerScene(rev, x = 100, y = 200) {
+function readerScene(rev, x = 100, y = 200, widthEmu = 3000, heightEmu = 4000) {
   return {
     protocol_version: "chaptera.reader-scene.v1",
     document_id: id, source_hash: source, revision_id: rev,
-    pages: [{ page_id: pageId, order: 0, width_emu: 3000, height_emu: 4000 }],
+    pages: [{ page_id: pageId, order: 0, width_emu: widthEmu, height_emu: heightEmu }],
     nodes: [{ ...initialNode, bounds: { ...initialNode.bounds, x, y } }],
   };
 }
@@ -53,6 +53,7 @@ function fakeDom() {
     "temporary-start", "temporary-resume", "temporary-forget",
     "temporary-status", "temporary-expiry", "temporary-pages",
     "temporary-export-actions", "temporary-download-idml", "temporary-download-odg",
+    "temporary-download-pdf9up",
   ];
   const nodes = {};
   for (const id of ids) {
@@ -95,9 +96,12 @@ function fakeDom() {
   });
   return { nodes, documentObject, pointer };
 }
-function server(classification = "supported") {
+function server(classification = "supported", card = false) {
   const calls = [];
   let moved = null;
+  const scene = (rev, x = 100, y = 200) => readerScene(
+    rev, x, y, card ? 3_060_000 : 3000, card ? 1_980_000 : 4000,
+  );
   return {
     calls,
     async fetchImpl(url, options) {
@@ -120,7 +124,7 @@ function server(classification = "supported") {
         protocol_version: "chaptera.reader-guest-session.v1",
         session_id: id, classification,
         source_sha256: source, expires_at_ms: 4_600_000,
-        scene: readerScene(beforeRev),
+        scene: scene(beforeRev),
       });
       if (url === base + "/current") return response(
         moved ? current(afterRev, 1, moved.x_emu, moved.y_emu) :
@@ -131,8 +135,8 @@ function server(classification = "supported") {
         document_id: id, source_hash: source,
         revision_id: moved ? afterRev : beforeRev,
         expires_at_ms: moved ? 8_200_000 : 4_600_000,
-        scene: moved ? readerScene(afterRev, moved.x_emu, moved.y_emu) :
-          readerScene(beforeRev),
+        scene: moved ? scene(afterRev, moved.x_emu, moved.y_emu) :
+          scene(beforeRev),
       });
       if (url === base + "/move-node") {
         assert.equal(options.method, "POST");
@@ -226,4 +230,26 @@ test("unsupported upload never requests authoring state or permits a move", asyn
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
   assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+});
+
+test("A4 nine-card control is available only for the exact edited 85x55 mm page", async () => {
+  for (const card of [true, false]) {
+    const dom = fakeDom(), network = server("supported", card);
+    const controller = await bootTemporaryEditorPreview({
+      documentObject: dom.documentObject,
+      cryptoObject: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+      storage: storage(), fetchImpl: network.fetchImpl,
+      renderer: async () => {},
+    });
+    await controller.start({ name: "card.pub", size: 1729 });
+    const button = dom.nodes["temporary-download-pdf9up"];
+    assert.equal(button.hidden, !card, "invalid card geometry must not offer 9-up");
+    assert.equal(button.disabled, true, "unmodified source cannot be exported as edited");
+    dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+    dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(150, 260));
+    await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
+    assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 1);
+    assert.equal(button.hidden, !card);
+    assert.equal(button.disabled, !card, "only the admitted edited card can be printed 9-up");
+  }
 });
