@@ -1,0 +1,312 @@
+// Independent physical Guest Story acceptance. Real Chromium, real PUB,
+// Caddy/TLS, real Rust Reader/Editor workers and actual browser downloads.
+// No synthetic fetch/POST edit, Product login, S3 or native PUB writer claim.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { chromium } from "playwright";
+
+function arg(name) {
+  const at = process.argv.indexOf("--" + name);
+  if (at < 0 || !process.argv[at + 1]) throw Error("missing --" + name);
+  return process.argv[at + 1];
+}
+const origin = arg("origin");
+const fixture = resolve(arg("fixture"));
+const fixtureHash = arg("fixture-sha256");
+const resultFile = resolve(arg("out"));
+const target = arg("target");
+if (!/^https:\/\/reader\.chaptera\.test:\d+$/.test(origin) ||
+    !/^[0-9a-f]{64}$/.test(fixtureHash) ||
+    !["idml", "odg"].includes(target)) {
+  throw Error("Guest Story physical acceptance requires pinned local TLS target");
+}
+const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
+const original = await readFile(fixture);
+assert.equal(original.length, 72192, "expected immutable real Sample3 fixture length");
+assert.equal(sha256(original), fixtureHash, "immutable real Publisher Story fixture hash changed");
+
+const browser = await chromium.launch({
+  headless: true, args: ["--no-proxy-server",
+    "--host-resolver-rules=MAP reader.chaptera.test 127.0.0.1"],
+});
+const page = await browser.newPage({
+  ignoreHTTPSErrors: true,
+  acceptDownloads: true,
+  viewport: {width: 1280, height: 900},
+});
+const requests = [], responses = [], errors = [];
+page.on("pageerror", error => errors.push(error.name || "pageerror"));
+page.on("request", request => {
+  if (request.url().startsWith(origin)) {
+    requests.push({path: new URL(request.url()).pathname,
+      method: request.method(), url: request.url()});
+  }
+});
+page.on("response", response => {
+  if (response.url().startsWith(origin)) {
+    responses.push({path: new URL(response.url()).pathname,
+      status: response.status()});
+  }
+});
+const basePath = id => "/v1/editor/temporary-sessions/" + id;
+const SOURCE_MARKER = "ChapteraGuestStoryProof2026";
+
+// This READ uses the same private browser bearer but creates no state/TTL.
+// Mutations MUST occur through the user-visible textarea and Apply button.
+async function readCurrent(action, documentId) {
+  return page.evaluate(async ({action, documentId}) => {
+    const saved = JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0") || "null");
+    if (!saved?.access_token || saved.session_id !== documentId) {
+      return {status: 0, body: null};
+    }
+    const url = "/v1/editor/temporary-sessions/" + documentId + "/" + action;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {"x-chaptera-reader-session": saved.access_token,
+        "accept": "application/json"},
+      credentials: "omit", mode: "same-origin", cache: "no-store",
+      redirect: "error", referrerPolicy: "no-referrer",
+    });
+    return {status: response.status,
+      body: await response.json().catch(() => null)};
+  }, {action, documentId});
+}
+try {
+  const pageResponse = await page.goto(origin + "/editor/temporary-preview", {
+    waitUntil: "domcontentloaded", timeout: 30000,
+  });
+  assert.equal(pageResponse?.status(), 200, "Guest Editor HTML not routed through TLS");
+  await page.locator("#temporary-file").setInputFiles(fixture);
+  await page.locator("#temporary-start").click();
+  try {
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-status")?.textContent.includes(
+        "Открыта редактируемая ревизия"), null, {timeout: 170000});
+  } catch {
+    throw Error("real PUB Story browser could not open: " +
+      String(await page.locator("#temporary-status").textContent()).slice(0, 160) +
+      " status=" + JSON.stringify(responses.slice(-12)));
+  }
+  const saved = await page.evaluate(() => {
+    const item = JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0") || "null");
+    return item && {session_id: item.session_id,
+      source_sha256: item.source_sha256};
+  });
+  assert.ok(/^tempedit:[0-9a-f]{32}$/.test(saved?.session_id || ""));
+  assert.equal(saved.source_sha256, fixtureHash);
+  const sessionId = saved.session_id;
+  const originalHead = await readCurrent("current", sessionId);
+  assert.equal(originalHead.status, 200);
+  const head = originalHead.body;
+  assert.equal(head.protocol_version, "chaptera.temporary-editor-current.v1");
+  assert.equal(head.source_hash, fixtureHash);
+  assert.equal(head.revision_cursor, 0);
+  assert.ok(/^sha256:[0-9a-f]{64}$/.test(head.revision_id || ""));
+  await page.locator("#temporary-story-panel").waitFor({
+    state: "visible", timeout: 45000,
+  });
+  const storyId = await page.locator("#temporary-story-select").inputValue();
+  const priorText = head.authoring_graph?.stories?.[storyId]?.text;
+  assert.ok(typeof priorText === "string" && priorText.length > 0,
+    "source-backed real Publisher Story is not exposed in Guest Current");
+  assert.equal(await page.locator("#temporary-story-text").inputValue(), priorText);
+  assert.ok(!priorText.includes(SOURCE_MARKER));
+  assert.ok(!/[\p{Cc}]/u.test(priorText));
+  assert.ok(new TextEncoder().encode(SOURCE_MARKER).length <= 8192);
+
+  const beforeScene = await readCurrent("scene", sessionId);
+  assert.equal(beforeScene.status, 200);
+  assert.equal(beforeScene.body.revision_id, head.revision_id);
+  assert.equal(beforeScene.body.scene.source_hash, fixtureHash);
+
+  // The real browser owns this mutation. No manual service POST is used.
+  await page.locator("#temporary-story-text").fill(SOURCE_MARKER);
+  const ackPromise = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    new URL(response.url()).pathname === basePath(sessionId) + "/story-range",
+    {timeout: 120000});
+  await page.locator("#temporary-story-apply").click();
+  const ackResponse = await ackPromise;
+  const submitted = ackResponse.request().postDataJSON();
+  const headers = await ackResponse.request().allHeaders();
+  const accepted = await ackResponse.json().catch(() => null);
+  assert.equal(ackResponse.status(), 200, "real Guest Story POST rejected");
+  assert.equal(submitted.document_id, sessionId);
+  assert.equal(submitted.source_hash, fixtureHash);
+  assert.equal(submitted.base_revision_id, head.revision_id);
+  assert.equal(submitted.command.kind, "replace_story_range");
+  assert.equal(submitted.command.story_id, storyId);
+  assert.equal(submitted.command.start_scalar, 0);
+  assert.equal(submitted.command.end_scalar, [...priorText].length);
+  assert.equal(submitted.command.replacement_text, SOURCE_MARKER);
+  assert.ok(headers["x-chaptera-reader-session"]?.length === 64);
+  assert.ok(headers["x-csrf-token"]?.length === 32);
+  assert.equal(accepted?.protocol_version, "chaptera.temporary-editor-story-range.v1");
+  assert.equal(accepted.document_id, sessionId);
+  assert.equal(accepted.source_hash, fixtureHash);
+  assert.equal(accepted.base_revision_id, head.revision_id);
+  assert.equal(accepted.client_operation_id, submitted.client_operation_id);
+  assert.equal(accepted.replayed, false);
+  assert.equal(accepted.scene_refresh, "current");
+  assert.notEqual(accepted.revision_id, head.revision_id);
+  assert.equal(accepted.canonical_operation?.kind, "replace_story_range");
+  assert.equal(accepted.canonical_operation?.story_id, storyId);
+  assert.equal(accepted.canonical_operation?.replacement_text, SOURCE_MARKER);
+
+  await page.waitForFunction(() =>
+    document.querySelector("#temporary-status")?.textContent.includes(
+      "Текст подтверждён сервером"), null, {timeout: 120000});
+  const revised = await readCurrent("current", sessionId);
+  assert.equal(revised.status, 200);
+  assert.equal(revised.body.revision_id, accepted.revision_id);
+  assert.equal(revised.body.canonical_authoring_revision_id,
+    accepted.canonical_authoring_revision_id);
+  assert.equal(revised.body.revision_cursor, 1);
+  assert.equal(revised.body.expires_at_ms, accepted.expires_at_ms);
+  assert.equal(revised.body.authoring_graph?.stories?.[storyId]?.text, SOURCE_MARKER);
+  const scene = await readCurrent("scene", sessionId);
+  assert.equal(scene.status, 200);
+  assert.equal(scene.body.revision_id, accepted.revision_id);
+  assert.equal(scene.body.scene?.revision_id, accepted.revision_id);
+  assert.equal(scene.body.scene?.source_hash, fixtureHash);
+  assert.ok(scene.body.scene?.stories?.some(story =>
+    story.story_id === storyId && story.text === SOURCE_MARKER),
+    "real Reader Story Scene did not project edited source-backed text");
+
+  // Identical operation-ID replay is not another accepted revision/TTL renewal.
+  const replay = await page.evaluate(async ({sessionId, request, headers}) => {
+    const response = await fetch("/v1/editor/temporary-sessions/" + sessionId + "/story-range", {
+      method: "POST",
+      headers: {"content-type": "application/json", "accept": "application/json",
+        "x-chaptera-reader-session": headers["x-chaptera-reader-session"],
+        "x-csrf-token": headers["x-csrf-token"]},
+      body: JSON.stringify(request), credentials: "omit", mode: "same-origin",
+      cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
+    });
+    return {status: response.status, body: await response.json().catch(() => null)};
+  }, {sessionId, request: submitted, headers});
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body?.replayed, true);
+  assert.equal(replay.body.revision_id, accepted.revision_id);
+  assert.equal(replay.body.expires_at_ms, accepted.expires_at_ms);
+  const reread = await readCurrent("current", sessionId);
+  assert.equal(reread.body.revision_cursor, 1);
+  assert.equal(reread.body.expires_at_ms, accepted.expires_at_ms);
+
+  // Download via the actual UI, after its own private source-neutral loss report.
+  const reportPromise = page.waitForResponse(response =>
+    response.request().method() === "GET" &&
+    new URL(response.url()).pathname === basePath(sessionId) + "/exports/" + target &&
+    new URL(response.url()).searchParams.get("report_only") === "true",
+    {timeout: 100000});
+  const downloadPromise = page.waitForEvent("download", {timeout: 120000});
+  await page.locator("#temporary-download-" + target).click();
+  const reportResponse = await reportPromise;
+  const report = await reportResponse.json().catch(() => null);
+  const download = await downloadPromise;
+  assert.equal(download.suggestedFilename(), "chaptera-edited." + target);
+  assert.equal(reportResponse.status(), 200);
+  assert.equal(report.protocol_version, "chaptera.temporary-edited-export-report.v1");
+  assert.equal(report.source_hash, fixtureHash);
+  assert.equal(report.revision_id, accepted.revision_id);
+  assert.equal(report.canonical_authoring_revision_id,
+    accepted.canonical_authoring_revision_id);
+  assert.equal(report.target, target);
+  assert.equal(report.loss_report?.counts?.blocking, 0);
+  assert.equal(report.loss_report?.can_serialize, true);
+  const downloaded = await readFile(await download.path());
+  assert.ok(downloaded.length > 100, "no real target output bytes");
+  assert.equal(sha256(downloaded), report.artifact_sha256);
+  const consumer = spawnSync("python3", [
+    "tools/verify_temporary_guest_story_export.py",
+    "--artifact", await download.path(),
+    "--target", target,
+    "--expected-text", SOURCE_MARKER,
+  ], {encoding: "utf8", timeout: 60000, maxBuffer: 16384});
+  if (consumer.status !== 0) {
+    // No raw document/Story bytes in the CI error stream.
+    throw Error("independent browser-download Story XML consumer rejected " +
+      target + " (rc=" + consumer.status + ")");
+  }
+  const consumed = JSON.parse(consumer.stdout);
+  assert.equal(consumed.schema,"chaptera.tempedit-independent-story-xml-consumer.v1");
+  assert.equal(consumed.target, target);
+  assert.equal(consumed.artifact_sha256, sha256(downloaded));
+  assert.equal(consumed.edited_text_recovered, true);
+
+  const beforeReload = await readCurrent("current", sessionId);
+  assert.equal(beforeReload.body.expires_at_ms, accepted.expires_at_ms);
+  await page.reload({waitUntil: "domcontentloaded"});
+  await page.locator("#temporary-resume").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#temporary-status")?.textContent.includes(
+      "Открыта редактируемая ревизия"), null, {timeout: 150000});
+  assert.equal(await page.locator("#temporary-story-text").inputValue(), SOURCE_MARKER);
+  const reopened = await readCurrent("current", sessionId);
+  assert.equal(reopened.body.revision_cursor, 1);
+  assert.equal(reopened.body.revision_id, accepted.revision_id);
+  assert.equal(reopened.body.expires_at_ms, accepted.expires_at_ms);
+  assert.equal(reopened.body.authoring_graph.stories[storyId].text, SOURCE_MARKER);
+
+  const cap = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem("chaptera.temporary-edit.v0")).access_token);
+  assert.ok(/^[0-9a-f]{64}$/.test(cap));
+  assert.ok(requests.every(item => !item.url.includes(cap)),
+    "temporary Guest bearer appeared in a request URL");
+  assert.equal(errors.length, 0, "real Story browser generated JavaScript errors");
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#temporary-delete").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#temporary-status")?.textContent.includes(
+      "Сессия удалена с сервера"), null, {timeout: 45000});
+  assert.ok(responses.some(x => x.path === basePath(sessionId) && x.status === 204));
+  const denied = await page.evaluate(async ({sessionId, bearer}) => {
+    const response = await fetch("/v1/editor/temporary-sessions/" + sessionId + "/current", {
+      headers: {"x-chaptera-reader-session": bearer},
+      credentials: "omit", cache: "no-store",
+    });
+    return response.status;
+  }, {sessionId, bearer: cap});
+  assert.ok([404, 410].includes(denied), "revoked temporary Story capability still reads Current");
+  assert.equal(await page.evaluate(() =>
+    sessionStorage.getItem("chaptera.temporary-edit.v0")), null);
+  assert.equal(sha256(await readFile(fixture)), fixtureHash,
+    "original PUB bytes were changed by temporary Story workflow");
+
+  const receipt = {
+    schema: "chaptera.tempedit-real-pub-story-consumer.v1",
+    status: "PASS",
+    source_sha256: fixtureHash, source_byte_len: original.length,
+    real_pub: true, real_chromium: true, tls_caddy: true,
+    guest_story_ui_commit: true, browser_story_commits: 1,
+    story_id_sha256: sha256(Buffer.from(storyId, "utf8")),
+    initial_revision_id: head.revision_id,
+    accepted_revision_id: accepted.revision_id,
+    canonical_authoring_revision_id: accepted.canonical_authoring_revision_id,
+    exact_current_story_reopened: true, exact_reader_scene_story: true,
+    identical_operation_id_replay_no_second_revision: true,
+    read_replay_export_does_not_renew_ttl: true,
+    export_target: target,
+    changed_artifact_sha256: sha256(downloaded),
+    physical_target_xml_consumer: true,
+    target_consumer_schema: consumed.schema,
+    target_consumer_text_recovered: consumed.edited_text_recovered,
+    same_browser_session_delete_proven: true,
+    revoked_bearer_denied: true,
+    bearer_absent_from_urls: true,
+    original_pub_immutable: true,
+    native_pub_writer_claim: false, public_host_proven: false,
+  };
+  await mkdir(dirname(resultFile), {recursive: true});
+  await writeFile(resultFile, JSON.stringify(receipt, null, 2) + "\n");
+  console.log(JSON.stringify({
+    schema:receipt.schema, status:receipt.status, target,
+    real_pub:true, real_chromium:true, changed_artifact_sha256:sha256(downloaded),
+    physical_target_xml_consumer:true, original_pub_immutable:true,
+  }));
+} finally {
+  await browser.close();
+}
