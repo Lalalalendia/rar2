@@ -450,13 +450,22 @@ try {
       "Сессия удалена с сервера"), null, {timeout: 45000});
   assert.ok(responses.some(x => x.path === basePath(sessionId) && x.status === 204));
   const denied = await page.evaluate(async ({sessionId, bearer}) => {
-    const response = await fetch("/v1/editor/temporary-sessions/" + sessionId + "/current", {
-      headers: {"x-chaptera-reader-session": bearer},
-      credentials: "omit", cache: "no-store",
-    });
-    return response.status;
+    const path = "/v1/editor/temporary-sessions/" + sessionId + "/current";
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const response = await fetch(path, {
+        headers: {"x-chaptera-reader-session": bearer},
+        credentials: "omit", cache: "no-store",
+      });
+      // The same-IP admission limiter may return 429 after the full physical
+      // Story journey. A 429 is NOT revocation proof: retry within a fixed
+      // budget and still demand the authority's permanent 404/410 denial.
+      if (response.status !== 429) return response.status;
+      if (attempt < 7) await new Promise(done => setTimeout(done, 2200));
+    }
+    return 429;
   }, {sessionId, bearer: cap});
-  assert.ok([404, 410].includes(denied), "revoked temporary Story capability still reads Current");
+  assert.ok([404, 410].includes(denied),
+    "revoked temporary Story capability must return 404/410, got HTTP " + denied);
   assert.equal(await page.evaluate(() =>
     sessionStorage.getItem("chaptera.temporary-edit.v0")), null);
   assert.equal(sha256(await readFile(fixture)), fixtureHash,

@@ -427,7 +427,9 @@ test("failed non-renewing GET Scene retains recovery capability without assertin
       calls.push([url, opts.method]);
       if (calls.length === 1) return response(issue);
       if (calls.length === 2) return response(stored);
-      if (calls.length === 3) return new Response("{}", {
+      // A syntactically valid {} is not a truncated /open response. Force the
+      // HTTP 200 JSON parse failure that authorizes one private Scene read-back.
+      if (calls.length === 3) return new Response("{truncated", {
         status: 200, headers: {"content-type": "application/json"},
       });
       return response({ error: "guest_scene_not_ready" }, 409);
