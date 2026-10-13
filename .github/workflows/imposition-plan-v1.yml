@@ -11,6 +11,8 @@ on:
       - "services/editor-api/test_print_composer_nup_pdf_v1.py"
       - "services/editor-api/print_composer_nup_current_revision_v1.py"
       - "services/editor-api/test_print_composer_nup_current_revision_v1.py"
+      - "tools/run_editor_nup_sheet_current_revision_v1.py"
+      - "tools/test_run_editor_nup_sheet_current_revision_v1.py"
       - ".github/workflows/imposition-plan-v1.yml"
   workflow_dispatch:
 
@@ -37,3 +39,7 @@ jobs:
         run: |
           python -m compileall -q imposition_plan_v1.py print_composer_nup_v1.py print_composer_nup_pdf_v1.py print_composer_nup_current_revision_v1.py test_imposition_plan_v1.py test_print_composer_nup_v1.py test_print_composer_nup_pdf_v1.py test_print_composer_nup_current_revision_v1.py
           python -m unittest -v test_imposition_plan_v1 test_print_composer_nup_v1 test_print_composer_nup_pdf_v1 test_print_composer_nup_current_revision_v1
+      - name: Verify fresh native-producer orchestration without invoking Publisher in CI
+        run: |
+          python -m py_compile tools/run_editor_nup_sheet_current_revision_v1.py tools/test_run_editor_nup_sheet_current_revision_v1.py
+          python -m unittest discover -s tools -p test_run_editor_nup_sheet_current_revision_v1.py -v
