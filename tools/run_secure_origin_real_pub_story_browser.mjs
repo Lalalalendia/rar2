@@ -120,6 +120,12 @@ try {
       status.includes("No supported plain Story") ||
       status.includes("not confirmed");
   }, null, { timeout: 90000 });
+  // The success text is published immediately before the load handler clears
+  // its busy guard. Wait for that public control state too, otherwise an
+  // automation-speed click can correctly be ignored while loading is active.
+  await page.waitForFunction(() =>
+    document.querySelector("#story-load-action")?.disabled === false,
+  );
   const selected = await page.evaluate(() => ({
     status: document.querySelector("#story-status")?.textContent ?? "",
     choices: document.querySelector("#story-select")?.options.length ?? 0,
