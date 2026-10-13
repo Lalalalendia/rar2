@@ -31,9 +31,18 @@ jobs:
           [[ "${GITHUB_REF}" == refs/heads/main ]]
           [[ "${PINNED_SHA}" =~ ^[0-9a-f]{40}$ ]]
 
+      # Trusted validation harness from current main, independent of the
+      # immutable release we want to verify. A deployed release may predate
+      # the addition of this manual public acceptance tool.
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_sha }}
+          path: release-source
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -44,19 +53,21 @@ jobs:
           python-version: "3.12"
 
       - name: Verify pinned source and public release identity
+        working-directory: harness
         env:
           PINNED_SHA: ${{ inputs.release_sha }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "${PINNED_SHA}" ]]
+          [[ "$(git -C ../release-source rev-parse HEAD)" == "${PINNED_SHA}" ]]
           gh release view "cloud-reader-${PINNED_SHA}" --repo Lalalalendia/rar2 \
             --json assets --jq '.assets[].name' \
             | grep -Fx chaptera-cloud-reader-linux-amd64.tar.gz
           node --check tools/run_temporary_editor_real_pub_browser.mjs
 
       - name: Fail closed on wrong live host or stale embedded browser assets
+        working-directory: harness
         shell: bash
         run: |
           set -euo pipefail
@@ -71,19 +82,20 @@ jobs:
             curl --fail --silent --show-error --max-time 25 \
               "${origin}/editor/${path}" \
               --output "${RUNNER_TEMP}/guest-live-asset"
-            cmp "apps/web/${path}" "${RUNNER_TEMP}/guest-live-asset"
+            cmp "../release-source/apps/web/${path}" "${RUNNER_TEMP}/guest-live-asset"
           done
           curl --fail --silent --show-error --max-time 25 \
             "${origin}/editor/temporary-preview" \
             --output "${RUNNER_TEMP}/guest-live-asset"
-          cmp apps/web/temporary-editor-preview.html "${RUNNER_TEMP}/guest-live-asset"
+          cmp ../release-source/apps/web/temporary-editor-preview.html "${RUNNER_TEMP}/guest-live-asset"
           curl --fail --silent --show-error --max-time 25 \
             "${origin}/cloud-reader/render-v1.mjs" \
             --output "${RUNNER_TEMP}/guest-live-asset"
-          cmp apps/cloud-reader/render-v1.mjs "${RUNNER_TEMP}/guest-live-asset"
+          cmp ../release-source/apps/cloud-reader/render-v1.mjs "${RUNNER_TEMP}/guest-live-asset"
           rm -f "${RUNNER_TEMP}/guest-live-asset"
 
       - name: Fetch pinned non-sensitive Apache POI Publisher file
+        working-directory: harness
         shell: bash
         run: |
           set -euo pipefail
@@ -94,12 +106,14 @@ jobs:
           test "$(stat -c '%s' "${RUNNER_TEMP}/fixture.pub")" = "291840"
 
       - name: Install pinned Chromium acceptance dependencies
+        working-directory: harness
         shell: bash
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
       - name: Real public Chromium MoveNode and downloaded IDML/PDF consumer
+        working-directory: harness
         shell: bash
         run: |
           set -euo pipefail
@@ -113,6 +127,7 @@ jobs:
           done
 
       - name: Require source-neutral public receipt and server DELETE
+        working-directory: harness
         shell: bash
         run: |
           python3 - <<'PY'
