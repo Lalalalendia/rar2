@@ -517,6 +517,13 @@ def main() -> int:
                                     or not story_receipt.get(
                                         "composition_apply_fenced"
                                     )
+                                    or not story_receipt.get(
+                                        "physical_clipboard_paste_confirmed"
+                                    )
+                                    or story_receipt.get(
+                                        "authorized_story_commit_count"
+                                    )
+                                    != 2
                                 )
                             )
                             or (
@@ -575,6 +582,11 @@ def main() -> int:
                         "browser_layout_is_canonical": False,
                         "authoritative_relayout_overset_verified": False,
                         "story_undo_redo_claim": False,
+                        "physical_clipboard_paste_claim": any(
+                            receipt.get("physical_clipboard_paste_confirmed")
+                            for receipt in story_receipts
+                            if receipt.get("browser_engine") == "chromium"
+                        ),
                         "export_job_claim": all(
                             receipt.get("export_job_claim")
                             for receipt in story_receipts

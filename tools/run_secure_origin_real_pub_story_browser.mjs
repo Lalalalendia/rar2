@@ -40,6 +40,12 @@ try {
     storageState,
     viewport: { width: 1180, height: 830 },
   });
+  if (browserEngine === "chromium") {
+    await context.grantPermissions(
+      ["clipboard-read", "clipboard-write"],
+      { origin },
+    );
+  }
   const session = (await context.cookies(origin)).find(cookie =>
     cookie.name === "__Host-chaptera_session");
   if (!session?.secure || !session.httpOnly) {
@@ -303,6 +309,94 @@ try {
     throw new Error("fresh Product reopened an inconsistent Story revision");
   }
 
+  let finalRevisionId = receipt.revision_id;
+  let finalCanonical = desiredCanonical;
+  let pasteInputConfirmed = false;
+  let pasteRevisionId = null;
+  if (browserEngine === "chromium") {
+    const afterFirstScalars = [...desired];
+    if (afterFirstScalars.length < 2) {
+      throw new Error("selected Story has no second scalar for physical paste acceptance");
+    }
+    const pasteReplacement = afterFirstScalars[1] === "Ω" ? "Ж" : "Ω";
+    const pastedText = afterFirstScalars[0] + pasteReplacement +
+      afterFirstScalars.slice(2).join("");
+    const pastedCanonical = textareaTextToCanonicalStory(desiredCanonical, pastedText);
+    await page.evaluate(async ({start, end, value}) => {
+      const input = document.querySelector("#story-input");
+      window.__chapteraStoryPasteTrace = [];
+      for (const type of ["beforeinput", "input", "paste"]) {
+        input.addEventListener(type, event => {
+          window.__chapteraStoryPasteTrace.push({
+            type: event.type,
+            inputType: typeof event.inputType === "string" ? event.inputType : null,
+            clipboardText: event.clipboardData?.getData("text/plain") ?? null,
+          });
+        });
+      }
+      input.focus();
+      input.setSelectionRange(start, end, "forward");
+      await navigator.clipboard.writeText(value);
+    }, {
+      start: afterFirstScalars[0].length,
+      end: afterFirstScalars[0].length + afterFirstScalars[1].length,
+      value: pasteReplacement,
+    });
+    await page.keyboard.press("Control+V");
+    if (await page.locator("#story-input").inputValue() !== pastedText) {
+      throw new Error("physical Chromium clipboard paste did not replace selected Story scalar");
+    }
+    const pasteTrace = await page.evaluate(() => window.__chapteraStoryPasteTrace);
+    pasteInputConfirmed = pasteTrace.some(event => event.type === "paste" &&
+      event.clipboardText === pasteReplacement) &&
+      pasteTrace.some(event => event.type === "input" &&
+        event.inputType === "insertFromPaste");
+    if (!pasteInputConfirmed) {
+      throw new Error("Chromium paste emitted no trusted clipboard/input receipt");
+    }
+
+    const pasteResponsePromise = page.waitForResponse(response =>
+      response.request().method() === "POST" &&
+      decodeURIComponent(new URL(response.url()).pathname) ===
+        "/v1/documents/" + documentId + "/story-commit",
+    { timeout: 90000 });
+    await page.locator("#story-apply-action").click();
+    const pasteResponse = await pasteResponsePromise;
+    const pasteSubmitted = pasteResponse.request().postDataJSON();
+    const pasteReceipt = await pasteResponse.json().catch(() => null);
+    if (pasteResponse.status() !== 200 ||
+        pasteSubmitted?.base_revision_id !== receipt.revision_id ||
+        pasteSubmitted?.command?.kind !== "replace_story_range" ||
+        pasteSubmitted.command.story_id !== selected.storyId ||
+        pasteSubmitted.command.start_scalar !== 1 ||
+        pasteSubmitted.command.end_scalar !== 2 ||
+        pasteSubmitted.command.replacement_text !== pasteReplacement ||
+        pasteReceipt?.protocol_version !== "chaptera.commit-accepted.v1" ||
+        pasteReceipt.base_revision_id !== receipt.revision_id ||
+        pasteReceipt.revision_id === receipt.revision_id ||
+        pasteReceipt.canonical_operation?.replacement_text !== pasteReplacement ||
+        pasteReceipt.replayed !== false || calls.length !== 2) {
+      throw new Error("physical paste did not produce one exact authorized Story commit");
+    }
+    await page.waitForFunction(() =>
+      document.querySelector("#story-status")?.textContent?.includes(
+        "Exact server revision and reopened Story text confirmed"),
+    null, { timeout: 120000 });
+    const pastedCurrent = await readProduct();
+    if (pastedCurrent.revision_id !== pasteReceipt.revision_id ||
+        pastedCurrent.authoring_graph?.stories?.[selected.storyId]?.text !== pastedCanonical) {
+      throw new Error("fresh canonical current did not preserve physical paste");
+    }
+    const pastedScene = await readScene(pasteReceipt.revision_id);
+    if (!pastedScene.stories?.some(story =>
+      story.story_id === selected.storyId && story.text === pastedCanonical)) {
+      throw new Error("Reader Scene did not project physical pasted Story text");
+    }
+    finalRevisionId = pasteReceipt.revision_id;
+    finalCanonical = pastedCanonical;
+    pasteRevisionId = pasteReceipt.revision_id;
+  }
+
   const exportResult = await page.evaluate(async ({id, revisionId}) => {
     const sessionResponse = await fetch("/v1/session", {
       credentials: "same-origin", cache: "no-store",
@@ -413,7 +507,7 @@ try {
       csrf_negative_confirmed: true,
       forged_artifact_negative_confirmed: true,
     };
-  }, {id: documentId, revisionId: receipt.revision_id});
+  }, {id: documentId, revisionId: finalRevisionId});
   if (errors.length) throw new Error("real Story browser reported JavaScript errors");
 
   // Use the actual Chromium network stack: its test-only DNS mapping for
@@ -449,7 +543,9 @@ try {
     document_id: documentId,
     story_id: selected.storyId,
     original_revision_id: baseline.revision_id,
-    committed_revision_id: receipt.revision_id,
+    committed_revision_id: finalRevisionId,
+    initial_text_revision_id: receipt.revision_id,
+    paste_revision_id: pasteRevisionId,
     real_dom_textarea_input: true,
     input_path: browserEngine === "chromium"
       ? "chromium_ime_composition"
@@ -458,6 +554,8 @@ try {
     composition_events_confirmed: compositionEventsConfirmed,
     composition_apply_fenced: compositionApplyFenced,
     caret_range_input_confirmed: caretRangeInputConfirmed,
+    physical_clipboard_paste_confirmed: pasteInputConfirmed,
+    authorized_story_commit_count: calls.length,
     one_authorized_story_commit: true,
     canonical_current_text_confirmed: true,
     source_neutral_reader_scene_text_refreshed: true,
@@ -484,7 +582,8 @@ try {
   const persisted = JSON.stringify(result);
   if (persisted.includes("Sample3.pub") ||
       (priorText.length >= 16 && persisted.includes(priorText)) ||
-      (desired.length >= 16 && persisted.includes(desired))) {
+      (desired.length >= 16 && persisted.includes(desired)) ||
+      (finalCanonical.length >= 16 && persisted.includes(finalCanonical))) {
     throw new Error("private fixture label or Story contents leaked into acceptance receipt");
   }
   await writeFile(receiptPath, JSON.stringify(result, null, 2) + "\n");
