@@ -112,6 +112,7 @@ export async function bootTemporaryEditorPreview({
   const actions = documentObject?.getElementById("temporary-export-actions");
   const idmlButton = documentObject?.getElementById("temporary-download-idml");
   const odgButton = documentObject?.getElementById("temporary-download-odg");
+  const pdfButton = documentObject?.getElementById("temporary-download-pdf");
   const editorEnabled = !!(actions && idmlButton && odgButton);
   const csrfToken = newCsrfToken(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
@@ -141,6 +142,7 @@ export async function bootTemporaryEditorPreview({
         canonicalCurrent?.revision_cursor > 0;
       idmlButton.disabled = !canDownload;
       odgButton.disabled = !canDownload;
+      if (pdfButton) pdfButton.disabled = !canDownload;
     }
   }
 
@@ -369,7 +371,7 @@ export async function bootTemporaryEditorPreview({
         maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
       });
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
-      status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML или ODG.";
+      status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML, ODG или PDF.";
     } catch {
       // Fail closed: never repaint the old stored scene as a new revision.
       pages.replaceChildren();
@@ -433,6 +435,7 @@ export async function bootTemporaryEditorPreview({
     pages.addEventListener("pointercancel", clearGesture);
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
+    pdfButton?.addEventListener("click", () => download("pdf"));
   }
   controls();
   return { start, resume, forget, deleteServer };

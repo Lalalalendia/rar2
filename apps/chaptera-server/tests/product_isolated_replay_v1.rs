@@ -183,10 +183,21 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
 
     // A real canonical moved-object revision must replay identically inside
     // the sandbox, not just the unedited import baseline.
+    let bundle = pub_viewer::open_pub_bundle(
+        &source_bytes,
+        pub_viewer::viewer_geometry_environment_v0_1(),
+    )
+    .expect("pinned real PUB must have fixed-output viewer resources");
+    let paintable = bundle.geometry.paints.iter()
+        .filter(|paint| paint.solid_fill_rgb.is_some()
+            || paint.solid_line.as_ref().is_some_and(|line| line.width_emu > 0))
+        .map(|paint| paint.node_id)
+        .collect::<std::collections::BTreeSet<_>>();
     let (node_id, x_emu, y_emu) = expected
         .graph()
         .nodes
         .iter()
+        .filter(|(node_id, _)| paintable.contains(node_id))
         .find_map(|(node_id, node)| {
             // Only scene-representable objects are admitted by the rich
             // Reader path; this mirrors real Product API acceptance.
@@ -289,6 +300,42 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
     assert_eq!(moved_scene_node["bounds"]["y"], y_emu);
     assert!(edited_scene.get("authoring_graph").is_none());
     assert!(edited_scene.get("project").is_none());
+
+    // Both physical PDFs must be produced under the same isolated worker.
+    // A new canonical MoveNode must change the fixed output itself, not just
+    // its JSON receipt or the immutable PUB source.
+    let baseline_pdf = producer
+        .export_editable_current(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &project,
+            &project_hash,
+            "pdf",
+        )
+        .await
+        .expect("baseline fixed PDF must be consumer-readable");
+    let edited_pdf = producer
+        .export_editable_current(
+            "document-sample3-isolated",
+            &source_sha256,
+            &source_bytes,
+            &edited_project,
+            &edited_sha,
+            "pdf",
+        )
+        .await
+        .expect("current edited PDF must be physically rendered");
+    assert!(baseline_pdf.artifact_bytes.starts_with(b"%PDF-"));
+    assert!(edited_pdf.artifact_bytes.starts_with(b"%PDF-"));
+    assert_ne!(
+        baseline_pdf.artifact_sha256, edited_pdf.artifact_sha256,
+        "a real MoveNode must change the physical fixed output"
+    );
+    assert_eq!(edited_pdf.loss_report["source_hash"], source_sha256);
+    assert_eq!(edited_pdf.loss_report["current_editor_state"], true);
+    assert_eq!(edited_pdf.loss_report["counts"]["moved_nodes"], 1);
+    assert_eq!(edited_pdf.loss_report["counts"]["blocking"], 0);
 
     // A forged project identity must be rejected before launching a worker.
     let denied = producer

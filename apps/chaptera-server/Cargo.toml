@@ -14,6 +14,9 @@ path = "src/main.rs"
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
 pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer", features = ["cmo-slot-compose"] }
+pub-layout = { path = "../../vendor/producer-a/crates/pub-layout" }
+pub-output = { path = "../../vendor/producer-a/crates/pub-output" }
+pub-pdf = { path = "../../vendor/producer-a/crates/pub-pdf" }
 chaptera-cdm-model = { package = "pub-model", path = "../../crates/pub-model" }
 chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
 chaptera-failure-intake-protocol = { path = "../../crates/chaptera-failure-intake-protocol" }
