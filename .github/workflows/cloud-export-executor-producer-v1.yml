@@ -85,6 +85,14 @@ jobs:
           CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
         run: cargo test -p chaptera-server --test export_executor_producer -- --ignored --nocapture
 
+      - name: Produce exact Story revision for independent IDML and ODG consumers
+        env:
+          CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
+        run: >-
+          cargo test -p chaptera-server
+          export_executor::tests::real_pub_story_range_is_exported_only_from_its_exact_revision
+          -- --exact --nocapture
+
       - name: Prove IDML survives independent Scribus consumer
         env:
           CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
@@ -97,6 +105,12 @@ jobs:
             "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
           grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.idml"
+          CHAPTERA_SCRIBUS_SLA_OUT="$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla" \
+            xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- \
+            "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.idml"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla"
+          grep -aF "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.sla"
 
       - name: Prove ODG survives independent LibreOffice Draw consumer
         env:
@@ -109,6 +123,13 @@ jobs:
           libreoffice --headless             --convert-to fodg             --outdir "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice"             "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg"
           test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
           grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.odg"
+          libreoffice --headless \
+            --convert-to fodg \
+            --outdir "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice" \
+            "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.odg"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/story-edited.fodg"
+          grep -aF "QaZx" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/story-edited.fodg"
 
       - name: Record source-safe editable-target receipt
         env:
@@ -120,6 +141,9 @@ jobs:
             echo "source_sha256=6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             echo "idml_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml" | awk '{print $1}')"
             echo "odg_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg" | awk '{print $1}')"
+            echo "story_source_sha256=424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+            echo "story_idml_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.idml" | awk '{print $1}')"
+            echo "story_odg_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/story-edited.odg" | awk '{print $1}')"
             echo "scribus=$(xvfb-run -a scribus --version 2>&1 | tr '\n' ' ')"
             echo "libreoffice=$(libreoffice --version 2>&1 | tr '\n' ' ')"
           } > "$CHAPTERA_EXPORT_EVIDENCE_DIR/consumer-receipt.txt"
