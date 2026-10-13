@@ -302,6 +302,118 @@ try {
       reopened.authoring_graph?.stories?.[selected.storyId]?.text !== desiredCanonical) {
     throw new Error("fresh Product reopened an inconsistent Story revision");
   }
+
+  const exportResult = await page.evaluate(async ({id, revisionId}) => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const session = await sessionResponse.json();
+    if (!sessionResponse.ok || typeof session.csrf_token !== "string") {
+      throw new Error("authenticated browser has no current CSRF session");
+    }
+    const layoutEnvironmentId = "sha256:" + "b".repeat(64);
+    const request = {
+      protocol_version: "chaptera.export-create.v1",
+      document_id: id,
+      revision_id: revisionId,
+      target_profile: "idml:bounded-editable",
+      layout_environment_id: layoutEnvironmentId,
+      client_request_id: "story-export-" + crypto.randomUUID(),
+    };
+    const missingCsrf = await fetch("/v1/exports", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({...request, client_request_id: request.client_request_id + "-denied"}),
+    });
+    if (missingCsrf.status !== 403) {
+      throw new Error("ExportJob create without CSRF was not denied");
+    }
+    const create = await fetch("/v1/exports", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify(request),
+    });
+    let job = await create.json().catch(() => null);
+    if (!create.ok || job?.protocol_version !== "chaptera.export-job-http.v1" ||
+        job.document_id !== id || job.revision_id !== revisionId ||
+        job.target_profile !== request.target_profile ||
+        job.layout_environment_id !== layoutEnvironmentId || !job.job_id) {
+      throw new Error("browser ExportJob did not bind the accepted Story revision");
+    }
+    const deadline = Date.now() + 120000;
+    while (job.status !== "ready" && Date.now() < deadline) {
+      if (["failed", "cancelled", "expired"].includes(job.status)) {
+        throw new Error("browser ExportJob reached terminal state " + job.status);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const status = await fetch("/v1/exports/" + encodeURIComponent(job.job_id), {
+        credentials: "same-origin", cache: "no-store",
+      });
+      job = await status.json().catch(() => null);
+      if (!status.ok || job?.revision_id !== revisionId) {
+        throw new Error("browser ExportJob status lost exact revision identity");
+      }
+    }
+    if (job.status !== "ready" || !job.artifact_id || !job.loss_report_id) {
+      throw new Error("browser ExportJob did not publish artifact and LossReport");
+    }
+
+    const forged = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/artifacts/" + encodeURIComponent(job.artifact_id + "-forged"),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    if (forged.status !== 409) {
+      throw new Error("forged export artifact identity was not rejected");
+    }
+    const artifact = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/artifacts/" + encodeURIComponent(job.artifact_id),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    const artifactBytes = new Uint8Array(await artifact.arrayBuffer());
+    if (!artifact.ok || artifact.headers.get("content-type") !==
+        "application/vnd.adobe.indesign-idml-package" ||
+        !artifact.headers.get("content-disposition")?.includes(".idml") ||
+        artifact.headers.get("cache-control") !== "private, no-store" ||
+        artifact.headers.get("x-content-type-options") !== "nosniff" ||
+        artifactBytes.length < 2 || artifactBytes[0] !== 0x50 || artifactBytes[1] !== 0x4b) {
+      throw new Error("authorized exact-revision IDML stream is invalid");
+    }
+    const loss = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/loss-reports/" + encodeURIComponent(job.loss_report_id),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    const lossBytes = new Uint8Array(await loss.arrayBuffer());
+    let lossJson = null;
+    try { lossJson = JSON.parse(new TextDecoder().decode(lossBytes)); } catch {}
+    if (!loss.ok || loss.headers.get("content-type") !== "application/json" ||
+        !loss.headers.get("content-disposition")?.includes("-loss-report.json") ||
+        loss.headers.get("cache-control") !== "private, no-store" ||
+        loss.headers.get("x-content-type-options") !== "nosniff" ||
+        !lossJson || typeof lossJson !== "object" || Array.isArray(lossJson)) {
+      throw new Error("authorized exact-revision LossReport stream is invalid");
+    }
+    const digest = async bytes => {
+      const raw = await crypto.subtle.digest("SHA-256", bytes);
+      return [...new Uint8Array(raw)].map(value => value.toString(16).padStart(2, "0")).join("");
+    };
+    return {
+      job_id: job.job_id,
+      target_profile: job.target_profile,
+      layout_environment_id: job.layout_environment_id,
+      artifact_sha256: await digest(artifactBytes),
+      artifact_byte_len: artifactBytes.length,
+      loss_report_sha256: await digest(lossBytes),
+      loss_report_byte_len: lossBytes.length,
+      csrf_negative_confirmed: true,
+      forged_artifact_negative_confirmed: true,
+    };
+  }, {id: documentId, revisionId: receipt.revision_id});
   if (errors.length) throw new Error("real Story browser reported JavaScript errors");
 
   // Use the actual Chromium network stack: its test-only DNS mapping for
@@ -314,6 +426,15 @@ try {
     });
   if (!denied || (denied.status() !== 401 && denied.status() !== 403)) {
     throw new Error("anonymous browser unexpectedly read durable Story");
+  }
+  const anonymousArtifact = await anonPage.goto(
+    origin + "/v1/exports/" + encodeURIComponent(exportResult.job_id) +
+      "/artifacts/forged",
+    { waitUntil: "domcontentloaded", timeout: 30000 },
+  );
+  if (!anonymousArtifact ||
+      (anonymousArtifact.status() !== 401 && anonymousArtifact.status() !== 403)) {
+    throw new Error("anonymous browser unexpectedly reached an export artifact");
   }
   await anonymous.close();
 
@@ -346,7 +467,18 @@ try {
     source_bytes_in_receipt: false,
     browser_layout_is_canonical: false,
     story_undo_redo_claim: false,
-    export_job_claim: false,
+    export_job_claim: true,
+    export_job_id: exportResult.job_id,
+    export_target_profile: exportResult.target_profile,
+    export_layout_environment_id: exportResult.layout_environment_id,
+    export_artifact_sha256: exportResult.artifact_sha256,
+    export_artifact_byte_len: exportResult.artifact_byte_len,
+    export_loss_report_sha256: exportResult.loss_report_sha256,
+    export_loss_report_byte_len: exportResult.loss_report_byte_len,
+    export_csrf_negative_confirmed: exportResult.csrf_negative_confirmed,
+    export_forged_artifact_negative_confirmed:
+      exportResult.forged_artifact_negative_confirmed,
+    export_anonymous_denied: true,
     two_engine_claim: false,
   };
   const persisted = JSON.stringify(result);

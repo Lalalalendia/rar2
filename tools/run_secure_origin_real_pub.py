@@ -500,6 +500,12 @@ def main() -> int:
                             or not story_receipt.get("browser_reload_preserves_story")
                             or not story_receipt.get("anonymous_read_denied")
                             or not story_receipt.get("selected_first_scalar_range")
+                            or not story_receipt.get("export_job_claim")
+                            or not story_receipt.get("export_csrf_negative_confirmed")
+                            or not story_receipt.get(
+                                "export_forged_artifact_negative_confirmed"
+                            )
+                            or not story_receipt.get("export_anonymous_denied")
                             or (
                                 story_engine == "chromium"
                                 and (
@@ -569,7 +575,10 @@ def main() -> int:
                         "browser_layout_is_canonical": False,
                         "authoritative_relayout_overset_verified": False,
                         "story_undo_redo_claim": False,
-                        "export_job_claim": False,
+                        "export_job_claim": all(
+                            receipt.get("export_job_claim")
+                            for receipt in story_receipts
+                        ),
                         "source_bytes_in_receipt": False,
                     }
                     (TARGET / "story-receipt.json").write_text(
