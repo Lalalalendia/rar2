@@ -28,6 +28,8 @@ on:
       - "apps/web/product-editor.css"
       - "apps/web/product-editor-entry-v1.mjs"
       - "apps/web/product-editor-entry-v1.test.mjs"
+      - "apps/web/temporary-edit-move-client-v1.mjs"
+      - "apps/web/temporary-edit-move-client-v1.test.mjs"
       - "tools/run_rich_reader_editor_harness.mjs"
       - "tools/run_product_editor_entry_harness.mjs"
       - "tools/run_cloud_project_new_harness.mjs"
@@ -73,6 +75,7 @@ jobs:
           node --test apps/web/reader-scene-editor-interaction-v1.test.mjs
           node --test apps/web/rich-reader-editor-shell-v1.test.mjs
           node --test apps/web/product-editor-entry-v1.test.mjs
+          node --test apps/web/temporary-edit-move-client-v1.test.mjs
           node --test apps/web/file-entry-v1.test.mjs
           node --test apps/web/chaptera-cloud-workspace-session-v1.test.mjs
           node --test apps/web/chaptera-cloud-source-ingress-v1.test.mjs
