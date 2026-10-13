@@ -19,7 +19,7 @@ function fakeDom() {
   const nodes = {};
   for (const id of [
     "temporary-preview-root", "temporary-upload-form", "temporary-file",
-    "temporary-start", "temporary-resume", "temporary-forget",
+    "temporary-start", "temporary-resume", "temporary-forget", "temporary-delete",
     "temporary-status", "temporary-expiry", "temporary-pages",
   ]) {
     nodes[id] = {
@@ -121,6 +121,61 @@ test("real temporary browser client drives same-origin upload and uses existing 
   assert.deepEqual(requests.map(({url}) => url), [
     "/v1/editor/temporary-sessions", path + "content", path + "open",
   ], "forget must never attempt a pretend server deletion");
+});
+
+test("explicit server delete requires confirmation and a verified physical 204", async () => {
+  const {nodes, documentObject} = fakeDom(), storage = memoryStorage();
+  const calls = [], replies = [issue, stored, opened];
+  let confirm = false;
+  const controller = await bootTemporaryEditorPreview({
+    documentObject, cryptoObject, storage,
+    confirmDelete: () => confirm,
+    renderer: async () => {},
+    fetchImpl: async (url, options) => {
+      calls.push({url, options});
+      return calls.length <= 3
+        ? response(replies[calls.length - 1])
+        : new Response(null, {status: 204, headers: {"cache-control": "no-store"}});
+    },
+  });
+  await controller.start(file);
+  assert.equal(nodes["temporary-delete"].hidden, false);
+  await controller.deleteServer();
+  assert.equal(calls.length, 3, "cancelled confirmation never sends DELETE");
+  confirm = true;
+  await controller.deleteServer();
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].options.method, "DELETE");
+  assert.equal(calls[3].options.headers["x-chaptera-reader-session"], bearer);
+  assert.equal(calls[3].options.cache, "no-store");
+  assert.ok(!calls[3].url.includes(bearer));
+  assert.equal(calls[3].url, "/v1/editor/temporary-sessions/" + id);
+  assert.equal(nodes["temporary-delete"].hidden, true);
+  assert.equal(storage.getItem("chaptera.temporary-edit.v0"), null);
+  assert.match(nodes["temporary-status"].textContent, /Сессия удалена/);
+});
+
+test("unconfirmed DELETE keeps session recovery and never announces deletion", async () => {
+  const {nodes, documentObject} = fakeDom(), storage = memoryStorage();
+  const replies = [issue, stored, opened];
+  let calls = 0;
+  const controller = await bootTemporaryEditorPreview({
+    documentObject, cryptoObject, storage,
+    confirmDelete: () => true,
+    renderer: async () => {},
+    fetchImpl: async () => {
+      calls++;
+      return calls <= 3
+        ? response(replies[calls - 1])
+        : response({error: "private-bytes"}, 500);
+    },
+  });
+  await controller.start(file);
+  await controller.deleteServer();
+  assert.equal(nodes["temporary-delete"].hidden, false);
+  assert.ok(storage.getItem("chaptera.temporary-edit.v0"));
+  assert.match(nodes["temporary-status"].textContent, /Удаление не подтверждено/);
+  assert.doesNotMatch(nodes["temporary-status"].textContent, /private-bytes/);
 });
 
 test("invalid extension and untrusted server errors do not reflect file contents", async () => {
