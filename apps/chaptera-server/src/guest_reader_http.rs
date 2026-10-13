@@ -2688,7 +2688,7 @@ impl SqliteGuestReaderSessionStore {
             r#"
             UPDATE reader_guest_sessions
             SET state='expired',
-                expires_at_ms=MIN(expires_at_ms, ?),
+                expires_at_ms=MAX(created_at_ms + 1, MIN(expires_at_ms, ?)),
                 terminal_code='temporary_editor_deleted_by_user',
                 updated_at_ms=MAX(updated_at_ms, ?)
             WHERE session_id=? AND state!='expired' AND expires_at_ms>?
@@ -2710,7 +2710,7 @@ impl SqliteGuestReaderSessionStore {
             UPDATE reader_guest_sessions
             SET state='expired', terminal_code=COALESCE(terminal_code, 'guest_session_expired'),
                 updated_at_ms=MAX(updated_at_ms, ?)
-            WHERE session_id=? AND expires_at_ms<=?
+            WHERE session_id=? AND (state='expired' OR expires_at_ms<=?)
             "#,
         )
         .bind(now_ms)
@@ -3389,6 +3389,40 @@ mod tests {
         assert_eq!(opened.observed_byte_len, Some(1024));
         assert_eq!(opened.quarantine_deleted_at_ms, None);
 
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn immediate_same_millisecond_delete_uses_expired_state_without_invalid_expiry() {
+        let path = migrated_path("tempedit-same-ms-delete").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:11111111111111111111111111111111".to_owned();
+        store.insert(&temporary).await.unwrap();
+        assert!(
+            store
+                .revoke_temporary(&temporary.session_id, 1_000)
+                .await
+                .unwrap()
+        );
+        let closed = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(closed.state, GuestSessionState::Expired);
+        assert_eq!(closed.expires_at_ms, closed.created_at_ms + 1);
+        assert!(
+            store
+                .mark_expired(&temporary.session_id, 1_000)
+                .await
+                .unwrap()
+        );
+        store
+            .mark_quarantine_deleted(&temporary.session_id, 1_000)
+            .await
+            .unwrap();
+        store.delete_expired(&temporary.session_id).await.unwrap();
+        assert!(store.get(&temporary.session_id).await.unwrap().is_none());
         store.close().await;
         let _ = fs::remove_file(path);
     }
