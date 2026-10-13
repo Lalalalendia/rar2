@@ -270,6 +270,105 @@ def main() -> int:
             or not isinstance(rich_scene.get("nodes"), list)
         ):
             raise AssertionError("isolated baseline Reader Scene protocol or revision invalid")
+        # Physical P0 no-edit export: the canonical baseline has no event edge.
+        # Exercise real Caddy HTTPS, the actual confined renderer, private
+        # capabilities, exact identity and independent PDF xref/page reopening.
+        original_pdf_query = urlencode({
+            "revision_id": revision,
+            "canonical_authoring_revision_id": authoring_revision,
+        })
+        baseline_pdf_path = (
+            f"/v1/editor/temporary-sessions/{session_id}/exports/pdf?"
+            + original_pdf_query
+        )
+        checked(call("GET", baseline_pdf_path)[0], 401,
+                "original PDF download requires private bearer")
+        checked(call("GET", baseline_pdf_path, headers=[
+            "x-chaptera-reader-session: " + secrets.token_hex(32),
+        ])[0], 404, "another bearer cannot export original PUB to PDF")
+        for unchanged_target in ("idml", "odg"):
+            checked(call(
+                "GET",
+                f"/v1/editor/temporary-sessions/{session_id}/exports/"
+                + unchanged_target + "?" + original_pdf_query,
+                headers=private,
+            )[0], 422, "pristine editable exports still require an edit")
+        report_status, report_body = call(
+            "GET", baseline_pdf_path + "&report_only=true", headers=private,
+        )
+        checked(report_status, 200, "current baseline PDF LossReport")
+        pristine_report = json.loads(report_body)
+        if (
+            pristine_report.get("protocol_version")
+            != "chaptera.temporary-edited-export-report.v1"
+            or pristine_report.get("revision_id") != revision
+            or pristine_report.get("canonical_authoring_revision_id")
+            != authoring_revision
+            or pristine_report.get("source_hash") != expected_hash
+            or pristine_report.get("target") != "pdf"
+            or pristine_report.get("is_baseline") is not True
+            or pristine_report.get("expires_at_ms") != expected_expiry
+            or not isinstance(pristine_report.get("loss_report"), dict)
+            or pristine_report["loss_report"].get("can_serialize") is not True
+            or pristine_report["loss_report"].get("counts", {}).get("blocking") != 0
+            or pristine_report["loss_report"].get("counts", {}).get("moved_nodes") != 0
+        ):
+            raise AssertionError("pristine report lacks exact source/zero-edit authority")
+        baseline_pdf_headers = work / "baseline-pdf-headers.txt"
+        pdf_status, pristine_pdf = call(
+            "GET", baseline_pdf_path, headers=private,
+            dump_headers=baseline_pdf_headers,
+        )
+        checked(pdf_status, 200, "physical immutable PUB to PDF download")
+        pristine_header_values = live.parse_header_file(baseline_pdf_headers)
+        pristine_sha = hashlib.sha256(pristine_pdf).hexdigest()
+        if (
+            not pristine_pdf.startswith(b"%PDF-")
+            or not pristine_pdf.rstrip().endswith(b"%%EOF")
+            or not 40 < len(pristine_pdf) <= 16 * 1024 * 1024
+            or pristine_sha != pristine_report.get("artifact_sha256")
+            or pristine_header_values.get("content-type") != "application/pdf"
+            or pristine_header_values.get("x-chaptera-export-sha256") != pristine_sha
+            or pristine_header_values.get("x-chaptera-loss-report-sha256")
+            != pristine_report.get("loss_report_sha256")
+            or pristine_header_values.get("x-chaptera-edit-revision") != revision
+            or pristine_header_values.get("cache-control") != "no-store"
+            or pristine_header_values.get("x-content-type-options") != "nosniff"
+            or 'filename="chaptera-original.pdf"' not in
+            pristine_header_values.get("content-disposition", "")
+        ):
+            raise AssertionError("physical no-edit PDF headers or bytes are not trustworthy")
+        pristine_xref = re.search(rb"startxref\s+(\d+)\s+%%EOF\s*$", pristine_pdf)
+        if pristine_xref is None:
+            raise AssertionError("pristine physical PDF has no terminal xref")
+        xref_offset = int(pristine_xref.group(1))
+        pristine_pages = pristine_pdf.count(b"/Type /Page /Parent")
+        if (
+            not 0 < xref_offset < len(pristine_pdf)
+            or not pristine_pdf[xref_offset:].startswith(b"xref\n")
+            or not 0 < pristine_pages <= 1000
+        ):
+            raise AssertionError("pristine fixed-output PDF fails independent xref/page consumer")
+        if live.sha256_file(physical_source) != expected_hash:
+            raise AssertionError("original PDF conversion mutated the source PUB")
+        with sqlite3.connect(db) as conn:
+            pristine_edges = conn.execute(
+                "SELECT COUNT(*) FROM revision_edges WHERE document_id=?",
+                (session_id.encode(),),
+            ).fetchone()[0]
+        if pristine_edges:
+            raise AssertionError("pristine PDF export fabricated a revision")
+        after_pristine_status, after_pristine_raw = call("GET", path, headers=private)
+        checked(after_pristine_status, 200, "canonical current after pristine PDF export")
+        after_pristine = json.loads(after_pristine_raw)
+        if (
+            after_pristine.get("revision_cursor") != 0
+            or after_pristine.get("revision_id") != revision
+            or after_pristine.get("project") != current["project"]
+            or after_pristine.get("expires_at_ms") != expected_expiry
+        ):
+            raise AssertionError("baseline PDF changed canonical state or renewed TTL")
+
         visible_direct_ids = {
             node["node_id"]
             for node in rich_scene["nodes"]
@@ -740,6 +839,10 @@ def main() -> int:
             "bounded_rate_retries": rate_retries,
             "private_revision_rows_after_ttl": expired_revisions,
             "private_canonical_bindings_after_ttl": expired_bindings,
+            "pristine_pdf_without_edit_proven": True,
+            "pristine_pdf_sha256": pristine_sha,
+            "pristine_pdf_pages": pristine_pages,
+            "pristine_pdf_revision_edges": pristine_edges,
             "edited_download_proven": True, "edited_fixed_pdf_proven": "pdf" in edited_formats,
             "edited_target_profiles": edited_formats,
             "revised_reader_scene_proven": True, "revised_node_id": chosen_id,
