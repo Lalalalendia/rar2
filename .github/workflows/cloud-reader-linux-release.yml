@@ -5,6 +5,17 @@ on:
     branches: [main]
     paths:
       - "apps/cloud-reader/**"
+      # Rust include_bytes! embeds these guest scripts into the release binary.
+      # A UI-only merge otherwise leaves production serving stale move/export logic.
+      # Narrow paths avoid building a Linux release for unrelated Product UI tests.
+      - "apps/web/temporary-editor-preview.html"
+      - "apps/web/temporary-editor-preview.mjs"
+      - "apps/web/temporary-editor-preview.css"
+      - "apps/web/temporary-edit-browser-session-v0.mjs"
+      - "apps/web/temporary-edit-move-client-v1.mjs"
+      - "apps/web/reader-scene-editor-interaction-v1.mjs"
+      - "apps/web/interaction-v1.mjs"
+      - "apps/web/observability-v1.mjs"
       - "apps/chaptera-server/**"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
