@@ -1,0 +1,159 @@
+name: Product 49-111 eight failures and three controls private diagnosis
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/product-49-111-diagnose-eight.yml
+      - tools/run_product_oidc_worst_census_acceptance.py
+      - tools/run_secure_origin_product_worst_browser.mjs
+      - apps/cloud-reader/product-worst-visual-browser.test.mjs
+      - tools/product_full_case_census_v1.py
+      - tools/test_product_visual_failure_diagnostics.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-49-111-diagnosis-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  diagnose:
+    name: Real OIDC physical failure slice ${{ matrix.set }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - set: worker
+            cases: '075 024 020'
+          - set: http
+            cases: '072 076 059'
+          - set: visual
+            cases: '071 060 070'
+          - set: control
+            cases: '026 043'
+    env:
+      EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      CASE_IDS: ${{ matrix.cases }}
+      SET_ID: ${{ matrix.set }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Exact pinned corpus, sandbox and private browser tools
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
+          python tools/test_product_visual_failure_diagnostics.py -v
+          python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/product_full_case_census_v1.py
+          node --check tools/run_secure_origin_product_worst_browser.mjs
+          node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
+          python - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library('seccomp'), 'real syscall sandbox required'
+          PY
+          docker version
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Fetch immutable original native PUBs
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: ${{ runner.temp }}/product-49-diagnosis/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Build canonical host and isolated worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Attempt fixed original failures and independent controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/product-physical-diagnostic/outcomes target/product-physical-diagnostic/physical
+          for CASE_ID in $CASE_IDS; do
+            python tools/product_full_cohort_shards_v1.py --case "$CASE_ID" > "$RUNNER_TEMP/product-diagnostic-case.json"
+            SOURCE_SHA="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_sha256"])' "$RUNNER_TEMP/product-diagnostic-case.json")"
+            SOURCE_BYTES="$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["source_bytes"])' "$RUNNER_TEMP/product-diagnostic-case.json")"
+            FIXTURE="$RUNNER_TEMP/product-49-diagnosis/pinned1050/materialized/native/$SOURCE_SHA.pub"
+            test -f "$FIXTURE"
+            printf '%s  %s\n' "$SOURCE_SHA" "$FIXTURE" | sha256sum --check
+            test "$(stat -c %s "$FIXTURE")" = "$SOURCE_BYTES"
+            begin=$SECONDS
+            status=0
+            CHAPTERA_PRODUCT_MULTI_ID="$CASE_ID" python tools/run_product_oidc_worst_census_acceptance.py \
+              --binary target/debug/chaptera --fixture "$FIXTURE" \
+              --fixture-sha256 "$SOURCE_SHA" --head-sha "$EXACT_HEAD" \
+              --caddy-image caddy:2.10.2-alpine || status=$?
+            case_dir="target/product-oidc-worst-census-$CASE_ID"
+            private_logs=()
+            for file in "$case_dir"/*.log "$case_dir"/*.json; do
+              if [ -f "$file" ]; then private_logs+=("$file"); fi
+            done
+            test "${#private_logs[@]}" -ge 1
+            python tools/security_leak_scan_v1.py "${private_logs[@]}" \
+              --forbid-literal "Pinned$CASE_ID.pub" \
+              --forbid-literal 'chaptera-local-only-secret' \
+              --forbid-literal "$RUNNER_TEMP/product-49-diagnosis/pinned1050" \
+              --json-out "$case_dir/privacy-scan.json"
+            doc="target/product-physical-diagnostic/physical/$CASE_ID.json"
+            if [ "$status" -eq 0 ]; then
+              python tools/product_full_physical_receipts_v1.py case \
+                --case "$CASE_ID" --head "$EXACT_HEAD" \
+                --owner "$case_dir/owner.json" --summary "$case_dir/summary.json" \
+                --comparison "$case_dir/publisher-comparison.json" \
+                --privacy "$case_dir/privacy-scan.json" --out "$doc"
+            fi
+            python tools/product_full_case_census_v1.py record \
+              --case "$CASE_ID" --head "$EXACT_HEAD" \
+              --exit-code "$status" --elapsed "$((SECONDS-begin))" \
+              --owner "$case_dir/owner.json" --document "$doc" \
+              --out "target/product-physical-diagnostic/outcomes/$CASE_ID.json"
+          done
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from product_full_cohort_shards_v1 import build
+          root=Path('target/product-physical-diagnostic')
+          rows=[]
+          ids=os.environ['CASE_IDS'].split()
+          plan={x['id']:x for shard in build()['shards'] for x in shard['fixtures']}
+          assert len(ids)==len(set(ids)) and all(x in plan for x in ids)
+          for id in ids:
+              r=json.loads((root/'outcomes'/(id+'.json')).read_text())
+              assert r['case_id']==id and r['repository_commit_sha']==os.environ['EXACT_HEAD']
+              assert r['state'] in ('accepted','rejected')
+              rows.append(r)
+          data={'schema':'chaptera.product-49-111-diagnostic-subset.v1',
+                'repository_commit_sha':os.environ['EXACT_HEAD'],
+                'set':os.environ['SET_ID'], 'attempted_cases':len(rows),
+                'accepted_cases':sum(x['state']=='accepted' for x in rows),
+                'rejected_cases':sum(x['state']=='rejected' for x in rows),
+                'global_product_score_published':False, 'case_outcomes':rows}
+          (root/('diagnostic-'+os.environ['SET_ID']+'.json')).write_text(
+              json.dumps(data,indent=2,sort_keys=True)+'\n')
+          print(json.dumps({'set':data['set'],'attempted':data['attempted_cases'],
+                'accepted':data['accepted_cases'],'rejected':data['rejected_cases']},sort_keys=True))
+          PY
+          python tools/security_leak_scan_v1.py \
+            "target/product-physical-diagnostic/diagnostic-$SET_ID.json" \
+            --forbid-literal 'chaptera-local-only-secret'
+      - name: Upload ONLY fixed public codes; no product rankings or input bytes
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-49-111-private-diag-${{ matrix.set }}
+          path: target/product-physical-diagnostic/diagnostic-${{ matrix.set }}.json
+          if-no-files-found: error
+          retention-days: 14
