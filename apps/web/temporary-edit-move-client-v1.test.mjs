@@ -229,4 +229,87 @@ test("PDF download rejects forged signature even with matching HTTP digest", asy
   });
   await download.refresh();
   await assert.rejects(download.exportEdited("pdf"), /temporary_export_pdf_signature_invalid/);
+  assert.equal(download.status.refresh_required, true);
+  await assert.rejects(download.exportEdited("pdf"), /temporary_export_current_required/);
+  await assert.rejects(download.moveNode(move), /temporary_move_current_required/);
+});
+
+test("forged edited PDF SHA fences subsequent download and MoveNode until canonical refresh", async () => {
+  const pdf = new TextEncoder().encode("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const response = new Response(pdf, { headers: {
+    "content-type": "application/pdf",
+    "x-chaptera-edit-revision": afterRev,
+    "x-chaptera-export-sha256": "0".repeat(64),
+  } });
+  const seen = [];
+  const client = new TemporaryGuestMoveClientV1({
+    sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+    fetchImpl: async (url, options) => {
+      seen.push({url, method:options.method, bearer:options.headers["x-chaptera-reader-session"]});
+      if (seen.length === 1 || seen.length === 3) return reply(after);
+      if (seen.length === 2) return response;
+      throw Error("unplanned request");
+    },
+    operationIdFactory: () => "test-move-1",
+  });
+  await client.refresh();
+  await assert.rejects(client.exportEdited("pdf"), /temporary_export_hash_mismatch/);
+  assert.equal(client.status.refresh_required, true);
+  await assert.rejects(client.exportEdited("pdf"), /temporary_export_current_required/);
+  await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
+  assert.equal(seen.length, 2, "corrupted export must not retry or mutate");
+  await client.refresh();
+  assert.equal(client.status.refresh_required, false);
+  assert.equal(client.status.revision_id, afterRev);
+  assert.deepEqual(seen.map(x => x.method), ["GET", "GET", "GET"]);
+  assert.ok(seen.every(x => x.bearer === bearer && !x.url.includes(bearer)));
+});
+
+test("malformed edited report JSON locks authoring until current is reread", async () => {
+  let calls = 0;
+  const client = new TemporaryGuestMoveClientV1({
+    sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+    fetchImpl: async () => {
+      calls++;
+      if (calls === 1) return reply(after);
+      if (calls === 2) return new Response("{malformed", {
+        headers: { "content-type": "application/json" },
+      });
+      return reply(after);
+    },
+  });
+  await client.refresh();
+  await assert.rejects(client.exportEdited("pdf", {reportOnly:true}), /temporary_export_report_invalid/);
+  assert.equal(client.status.refresh_required, true);
+  await assert.rejects(client.exportEdited("pdf"), /temporary_export_current_required/);
+  assert.equal(calls, 2);
+  await client.refresh();
+  assert.equal(client.status.refresh_required, false);
+});
+
+test("zero-byte editable output and interrupted private body read both fence the client", async () => {
+  for (const bad of [
+    new Response("", {headers: {
+      "content-type": "application/vnd.adobe.indesign-idml-package",
+      "x-chaptera-edit-revision": afterRev,
+      "x-chaptera-export-sha256": "a".repeat(64),
+    }}),
+    {ok:true, status:200, headers: new Headers({
+      "content-type": "application/vnd.adobe.indesign-idml-package",
+      "x-chaptera-edit-revision": afterRev,
+      "x-chaptera-export-sha256": "a".repeat(64),
+    }), blob: async () => {throw Error("stream interrupted");}},
+  ]) {
+    let calls = 0;
+    const client = new TemporaryGuestMoveClientV1({
+      sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+      fetchImpl: async () => ++calls === 1 ? reply(after) : bad,
+    });
+    await client.refresh();
+    await assert.rejects(client.exportEdited("idml"),
+      /temporary_export_download_(size_invalid|read_failed)/);
+    assert.equal(client.status.refresh_required, true);
+    await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
+    assert.equal(calls, 2);
+  }
 });
