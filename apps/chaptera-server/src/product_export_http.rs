@@ -81,6 +81,10 @@ pub fn router(state: ProductExportHttpState) -> Router {
             "/v1/exports/{job_id}/loss-report/download",
             post(authorize_loss_report_download),
         )
+        .route(
+            "/v1/exports/{job_id}/loss-reports/{loss_report_id}",
+            get(stream_export_loss_report),
+        )
         .with_state(state)
         .layer(middleware::from_fn(private_export_response))
 }
@@ -389,6 +393,93 @@ async fn stream_export_artifact(
     *response.status_mut() = StatusCode::OK;
     let response_headers = response.headers_mut();
     response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(representation.mime));
+    response_headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "sanitized Content-Disposition could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&byte_len.to_string()).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "verified Content-Length could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Ok(response)
+}
+
+async fn stream_export_loss_report(
+    State(state): State<ProductExportHttpState>,
+    Path((job_id, loss_report_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<Response, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&loss_report_id, "loss_report_id")?;
+
+    let principal = state
+        .auth
+        .authenticate_read_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:loss-report-http-download",
+            now_ms()?,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if loss_report_id != publication.loss_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "loss_report_identity_mismatch",
+            "requested loss report differs from the current authorized export publication",
+        ));
+    }
+
+    let bytes = read_verified_binding_bounded(
+        &state.blobs,
+        &publication.tenant_id,
+        &publication.loss_binding_id,
+    )
+    .await?;
+    let observed_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+    if observed_hash != publication.loss_report_hash {
+        return Err(ProductExportHttpError::internal(
+            "loss_report_publication_hash_mismatch",
+            "verified blob bytes differ from the immutable loss-report publication hash",
+        ));
+    }
+    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| {
+        ProductExportHttpError::internal(
+            "loss_report_json_invalid",
+            "verified loss-report publication is not valid JSON",
+        )
+    })?;
+
+    let byte_len = bytes.len();
+    let (stem, _) = safe_export_filename(&publication.document_id, "json");
+    let filename = stem.replacen(".json", "-loss-report.json", 1);
+    let (_, filename_star) = safe_export_filename(
+        &format!("{}-loss-report", publication.document_id),
+        "json",
+    );
+    let disposition =
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_star}");
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    let response_headers = response.headers_mut();
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     response_headers.insert(
         CONTENT_DISPOSITION,
         HeaderValue::from_str(&disposition).map_err(|_| {
