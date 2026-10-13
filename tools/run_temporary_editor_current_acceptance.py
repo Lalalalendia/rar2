@@ -31,18 +31,18 @@ def verify_physical_edited_pdf(data: bytes, expected: geometry.RectEmu) -> dict:
     """Independent physical PDF cross-reference + painted MoveNode geometry consumer."""
     if not data.startswith(b"%PDF-") or not data.rstrip().endswith(b"%%EOF"):
         raise AssertionError("edited PDF has invalid header or trailer")
-    marker = re.search(rb"startxref\\s+(\\d+)\\s+%%EOF\\s*$", data)
+    marker = re.search(rb"startxref\s+(\d+)\s+%%EOF\s*$", data)
     if marker is None:
         raise AssertionError("edited PDF lacks a cross-reference pointer")
     xref = int(marker.group(1))
-    if xref <= 0 or xref >= len(data) or not data[xref:].startswith(b"xref\\n"):
+    if xref <= 0 or xref >= len(data) or not data[xref:].startswith(b"xref\n"):
         raise AssertionError("edited PDF cross-reference pointer does not reopen")
     page_count = data.count(b"/Type /Page /Parent")
     if page_count <= 0 or page_count > 1000:
         raise AssertionError("edited PDF has no admissible physical pages")
     rects = re.findall(
-        rb"(-?\\d+(?:\\.\\d+)?)\\s+(-?\\d+(?:\\.\\d+)?)\\s+"
-        rb"(-?\\d+(?:\\.\\d+)?)\\s+(-?\\d+(?:\\.\\d+)?)\\s+re\\b",
+        rb"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+"
+        rb"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+re\b",
         data,
     )
     # Convert back independently from PDF points. A moved shape must have

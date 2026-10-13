@@ -8,18 +8,16 @@ use std::{collections::BTreeSet, str::FromStr};
 
 use pub_editor::{EditOperation, EditorSession, LengthEmu, NodeId, Sha256Digest};
 use pub_layout::{
-    BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText,
-    BoundedShapingRuntime, font_fingerprint_sha256, project_bounded,
-    resolve_bounded_shaped_flow,
+    BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
+    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
-    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint,
-    FixedPdfResources, FixedStroke, FixedTextRun, PdfRenderDisposition,
-    PdfTargetProfile, render_bounded_pdf,
+    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
+    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfTargetProfile, render_bounded_pdf,
 };
 use serde_json::{Value, json};
 
@@ -38,16 +36,14 @@ pub(crate) fn render_current_fixed_pdf(
     expected_source_hash: &str,
     session: &EditorSession,
 ) -> Result<CurrentFixedPdf, &'static str> {
-    let source_hash = Sha256Digest::from_str(expected_source_hash)
-        .map_err(|_| "invalid_source_hash")?;
+    let source_hash =
+        Sha256Digest::from_str(expected_source_hash).map_err(|_| "invalid_source_hash")?;
     if session.source_hash() != source_hash {
         return Err("edited_pdf_source_identity_mismatch");
     }
-    let mut bundle = pub_viewer::open_pub_bundle(
-        original,
-        pub_viewer::viewer_geometry_environment_v0_1(),
-    )
-    .map_err(|_| "edited_pdf_source_unsupported")?;
+    let mut bundle =
+        pub_viewer::open_pub_bundle(original, pub_viewer::viewer_geometry_environment_v0_1())
+            .map_err(|_| "edited_pdf_source_unsupported")?;
     if bundle.geometry.document.source.source_hash != source_hash
         || bundle.resolved_graph.source.source_hash != source_hash
     {
@@ -117,11 +113,9 @@ pub(crate) fn render_current_fixed_pdf(
     if pages.is_empty() {
         return Err("edited_pdf_no_customer_pages");
     }
-    let authoring = pub_viewer::bounded_authoring_slice_from_resolved_pages(
-        session.graph(),
-        &pages,
-    )
-    .map_err(|_| "edited_pdf_current_layout_unavailable")?;
+    let authoring =
+        pub_viewer::bounded_authoring_slice_from_resolved_pages(session.graph(), &pages)
+            .map_err(|_| "edited_pdf_current_layout_unavailable")?;
     let projection = project_bounded(authoring);
 
     // The same pinned, license-disclosed fallback used by the Chaptera Reader.
@@ -130,9 +124,7 @@ pub(crate) fn render_current_fixed_pdf(
         .map_err(|_| "edited_pdf_fallback_font_invalid")?;
     let font = chaptera_desktop_fallback_font_resource::bytes();
     let fingerprint = font_fingerprint_sha256(font);
-    let font_size = LengthEmu::new(
-        chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
-    );
+    let font_size = LengthEmu::new(chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU);
     let shaping = BoundedShapingRuntime {
         layout: BoundedLayoutEnvironment {
             engine_revision: LOSS_REPORT_SCHEMA.into(),
@@ -147,9 +139,7 @@ pub(crate) fn render_current_fixed_pdf(
         &projection,
         &BoundedShapedFlowRuntime {
             shaping,
-            line_height: LengthEmu::new(
-                chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-            ),
+            line_height: LengthEmu::new(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU),
         },
     )
     .map_err(|_| "edited_pdf_current_text_layout_unavailable")?;
@@ -178,9 +168,7 @@ pub(crate) fn render_current_fixed_pdf(
             continue;
         }
         let row = i64::from(line.frame_line_index)
-            .checked_mul(
-                chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-            )
+            .checked_mul(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU)
             .ok_or("edited_pdf_text_coordinate_overflow")?;
         let baseline_y = row
             .checked_add(font_size.get())

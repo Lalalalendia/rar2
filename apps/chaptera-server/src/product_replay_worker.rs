@@ -176,13 +176,11 @@ async fn read_isolated_edited_export_sidecar(
         ));
     }
     if edited.target == "pdf"
-        && (edited.loss_report["schema_version"]
-            != "chaptera.temporary-edited-fixed-pdf-loss.v1"
+        && (edited.loss_report["schema_version"] != "chaptera.temporary-edited-fixed-pdf-loss.v1"
             || edited.loss_report["target"] != "pdf"
             || edited.loss_report["can_serialize"] != true
             || edited.loss_report["current_editor_state"] != true
-            || edited.loss_report["source_hash"].as_str()
-                != Some(receipt.source_sha256.as_str())
+            || edited.loss_report["source_hash"].as_str() != Some(receipt.source_sha256.as_str())
             || edited.loss_report["counts"]["blocking"] != 0)
     {
         return Err(ProductReplayWorkerError::new(

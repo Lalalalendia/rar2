@@ -188,9 +188,17 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         pub_viewer::viewer_geometry_environment_v0_1(),
     )
     .expect("pinned real PUB must have fixed-output viewer resources");
-    let paintable = bundle.geometry.paints.iter()
-        .filter(|paint| paint.solid_fill_rgb.is_some()
-            || paint.solid_line.as_ref().is_some_and(|line| line.width_emu > 0))
+    let paintable = bundle
+        .geometry
+        .paints
+        .iter()
+        .filter(|paint| {
+            paint.solid_fill_rgb.is_some()
+                || paint
+                    .solid_line
+                    .as_ref()
+                    .is_some_and(|line| line.width_emu > 0)
+        })
         .map(|paint| paint.node_id)
         .collect::<std::collections::BTreeSet<_>>();
     let (node_id, x_emu, y_emu) = expected
