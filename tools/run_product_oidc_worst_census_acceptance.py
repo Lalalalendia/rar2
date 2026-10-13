@@ -46,6 +46,65 @@ PUBLIC_SCENE_FAILURE_CODES = frozenset({
     "product_replay_receipt_identity_mismatch", "reader_scene_projection_failed",
     "revision_materialization_failed", "stale_revision",
 })
+# Public codes are from literal program stages, never extracted dynamically
+# from user-controlled error messages, document IDs or private server logs.
+PRODUCT_VISUAL_PHASE_CODES = {
+    "scene_input": "visual_scene_input",
+    "ablation_ready": "visual_image_ablation",
+    "chromium_init": "visual_chromium_init",
+    "before_navigate": "visual_before_navigation",
+    "before_render": "visual_before_render",
+    "before_page_membership": "visual_before_page_identity",
+    "before_raster": "visual_before_raster",
+    "after_navigate": "visual_after_navigation",
+    "after_render": "visual_after_render",
+    "after_page_membership": "visual_after_page_identity",
+    "after_raster": "visual_after_raster",
+    "final_checks": "visual_final_checks",
+    "finished": "visual_finished",
+}
+OWNER_HTTP_PHASE_CODES = frozenset({
+    "http_both_unanswered", "http_both_unrequested", "http_both_mixed",
+    "http_current_unanswered", "http_current_unrequested",
+    "http_scene_unanswered", "http_scene_unrequested",
+})
+
+
+def read_private_fixed_code(path_string: str | None, allowed: set[str] | frozenset[str],
+                            default: str) -> str:
+    """Return only a fixed allowlisted enum, never text read from an artifact.
+
+    The sidecar is written by the physical browser into its private temporary
+    directory. It is never uploaded, echoed or included in the score.
+    """
+    if not path_string:
+        return default
+    try:
+        path = Path(path_string)
+        if not path.is_file() or path.stat().st_size > 64:
+            return default
+        value = path.read_text(encoding="ascii").strip()
+        return value if value in allowed else default
+    except (OSError, UnicodeError, ValueError):
+        return default
+
+
+def fixed_failure(code: str) -> dict[str, object]:
+    return {
+        "failure_code": code,
+        "current_http_status": None,
+        "scene_http_status": None,
+        "public_error_code": "redacted",
+    }
+
+
+def classify_visual_failure(phase_path: str | None) -> dict[str, object]:
+    phase = read_private_fixed_code(
+        phase_path, set(PRODUCT_VISUAL_PHASE_CODES), "unclassified")
+    return fixed_failure(
+        PRODUCT_VISUAL_PHASE_CODES.get(phase, "visual_unclassified"))
+
+
 OWNER_FAILURE_SIGNATURES = (
     ("page.waitForURL: Timeout", "ingress_navigation_timeout"),
     ("page.waitForResponse: Timeout", "product_http_response_timeout"),
@@ -67,7 +126,7 @@ OWNER_FAILURE_SIGNATURES = (
 )
 
 
-def classify_owner_failure(private_log: str) -> dict[str, object]:
+def classify_owner_failure(private_log: str, http_phase_path: str | None = None) -> dict[str, object]:
     """No caller-controlled value survives this fixed-envelope classifier."""
     match = re.search(
         r"UI Product HTTP failed: current=(\d{3}) scene=(\d{3}) "
@@ -85,6 +144,10 @@ def classify_owner_failure(private_log: str) -> dict[str, object]:
                 else "redacted"
             ),
         }
+    if "Product owner HTTP response not observed" in private_log:
+        code = read_private_fixed_code(
+            http_phase_path, OWNER_HTTP_PHASE_CODES, "unclassified_browser_failure")
+        return fixed_failure(code)
     for literal, code in OWNER_FAILURE_SIGNATURES:
         if literal in private_log:
             return {
@@ -109,14 +172,13 @@ def run_stage(name: str, command: list[str], env: dict[str, str]) -> None:
     (TARGET / (name + ".log")).write_text(private_log, encoding="utf-8")
     if result.returncode:
         failure = (
-            classify_owner_failure(private_log)
+            classify_owner_failure(
+                private_log, env.get("CHAPTERA_PRODUCT_HTTP_RESPONSE_PHASE_FILE"))
             if name == "owner-browser"
-            else {
-                "failure_code": "bounded_stage_failure",
-                "current_http_status": None,
-                "scene_http_status": None,
-                "public_error_code": "redacted",
-            }
+            else classify_visual_failure(
+                env.get("CHAPTERA_PRODUCT_VISUAL_PHASE_FILE"))
+            if name == "product-worst-visual-browser"
+            else fixed_failure("bounded_stage_failure")
         )
         # On failure this remains a source-neutral numeric/enum receipt.
         # The existing fail-closed leak scan examines the private log too.
@@ -261,6 +323,7 @@ def main() -> int:
                     "CHAPTERA_HEAD_SHA": args.head_sha,
                     "CHAPTERA_PRODUCT_MULTI_ID": CASE_ID,
                     "CHAPTERA_PRODUCT_CASE_PLAN": str(case_plan_path),
+                    "CHAPTERA_PRODUCT_HTTP_RESPONSE_PHASE_FILE": str(work / "owner-http-phase.txt"),
                     "CHAPTERA_PRODUCT_022_CROSS_SUMMARY": str(TARGET / "cross.json"),
                     "CHAPTERA_PRODUCT_022_RESTART_SUMMARY": str(TARGET / "restart.json"),
                 })
@@ -299,6 +362,7 @@ def main() -> int:
                     "CHAPTERA_PREVIEW_PROBE_SCENE_OUT": str(owner_scene),
                     "CHAPTERA_PREVIEW_BROWSER_OUTPUT": str(visual_dir),
                     "REPOSITORY_COMMIT_SHA": args.head_sha,
+                    "CHAPTERA_PRODUCT_VISUAL_PHASE_FILE": str(work / "product-visual-phase.txt"),
                 })
                 run_stage(
                     "product-worst-visual-browser",
