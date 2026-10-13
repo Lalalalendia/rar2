@@ -161,7 +161,8 @@ try {
   await fetch(origin + "/v1/reader/documents/synthetic/scene", { headers: { "x-forwarded-for": "198.51.100.10", "x-forwarded-host": "foreign.example", "x-forwarded-proto": "http" } });
   assert.equal(seen.at(-1).headers["x-forwarded-for"], "127.0.0.1");
   assert.equal(seen.at(-1).headers["x-forwarded-proto"], "https");
-  assert.equal(seen.at(-1).headers["x-forwarded-host"], "127.0.0.1");
+  assert.equal(seen.at(-1).headers["x-forwarded-host"], new URL(origin).host,
+    "trusted Caddy must overwrite a spoofed X-Forwarded-Host with exact public host:port");
   browser = await chromium.launch({ headless: true, ...(process.env.READER_UI_BROWSER ? { executablePath: process.env.READER_UI_BROWSER } : {}) });
   const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
   const errors = [];

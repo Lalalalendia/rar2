@@ -124,6 +124,7 @@ export async function bootTemporaryEditorPreview({
   let moveClient = null;
   let canonicalCurrent = null;
   let interaction = null;
+  let partialFidelity = false;
   let gesture = null;
   let gesturePage = null;
   let gestureOverlay = null;
@@ -177,11 +178,12 @@ export async function bootTemporaryEditorPreview({
   async function show(view) {
     const description = describeTemporaryPreview(view);
     clearEditor();
+    partialFidelity = view.classification === "partial";
     pages.replaceChildren();
     expiry.textContent = temporaryExpiryText(view.expires_at_ms);
 
     let effectiveScene = view.scene;
-    if (description.renderable && view.classification === "supported" && editorEnabled) {
+    if (description.renderable && ["supported", "partial"].includes(view.classification) && editorEnabled) {
       try {
         moveClient = TemporaryGuestMoveClientV1.fromTab({
           storage, csrfToken, fetchImpl, cryptoObject,
@@ -213,7 +215,9 @@ export async function bootTemporaryEditorPreview({
     }
     if (moveClient) {
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
-      status.textContent = "Открыта редактируемая ревизия. Перетащите поддерживаемый объект. Изменение подтверждает сервер.";
+      status.textContent = partialFidelity
+        ? "Открыта редактируемая ревизия — Needs review / Partial: отображение неполное. Перемещайте только поддерживаемые объекты, проверяйте LossReport перед использованием выгрузки."
+        : "Открыта редактируемая ревизия. Перетащите поддерживаемый объект. Изменение подтверждает сервер.";
     } else {
       status.textContent = description.message;
     }
@@ -371,7 +375,8 @@ export async function bootTemporaryEditorPreview({
         maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
       });
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
-      status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML, ODG или PDF.";
+      status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML, ODG или PDF." +
+        (partialFidelity ? " Needs review / Partial: результат необходимо проверить." : "");
     } catch {
       // Fail closed: never repaint the old stored scene as a new revision.
       pages.replaceChildren();
@@ -412,7 +417,8 @@ export async function bootTemporaryEditorPreview({
         globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       }
       status.textContent = "Скачан " + target.toUpperCase() + " из изменённой ревизии. Потери: " +
-        (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") + ".";
+        (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") +
+        (partialFidelity ? ". Needs review / Partial: обязательно проверьте экспорт." : ".");
     } catch {
       status.textContent = "Выгрузка текущей ревизии не подтверждена. Восстановите сессию и проверьте срок действия.";
     } finally {
