@@ -169,9 +169,15 @@ def main() -> int:
             current.get("authoring_graph"), dict
         ):
             raise AssertionError("isolated EditorSession returned no project or geometry")
-        if len(current.get("revision_id", "")) != 64 or len(
-            current.get("canonical_authoring_revision_id", "")
-        ) != 64:
+        revision = current.get("revision_id", "")
+        authoring_revision = current.get("canonical_authoring_revision_id", "")
+        if (
+            not isinstance(revision, str)
+            or not revision.startswith("sha256:")
+            or len(revision) != 71
+            or not isinstance(authoring_revision, str)
+            or len(authoring_revision) != 64
+        ):
             raise AssertionError("canonical source-derived revision identity invalid")
         if current.get("expires_at_ms") != expected_expiry:
             raise AssertionError("GET current illegally renewed temporary TTL")
