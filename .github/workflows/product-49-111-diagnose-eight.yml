@@ -123,8 +123,9 @@ jobs:
               --out "target/product-physical-diagnostic/outcomes/$CASE_ID.json"
           done
           python - <<'PY'
-          import json, os
+          import json, os, sys
           from pathlib import Path
+          sys.path.insert(0, 'tools')
           from product_full_cohort_shards_v1 import build
           root=Path('target/product-physical-diagnostic')
           rows=[]
