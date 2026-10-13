@@ -90,11 +90,16 @@ function contains(node, x, y) {
 function candidatePoints(scene, current) {
   const shapes = scene.nodes.filter(n =>
     direct(n) && current.authoring_graph?.nodes?.[n.node_id]);
-  // Only an actual canonical TextFrame is guaranteed to have a matching
-  // TextFrame identity in the bounded IDML consumer. Visual Reader "kind"
-  // describes paint and must never be used as export admission evidence.
-  const textFrames = shapes.filter(n =>
-    current.authoring_graph.nodes[n.node_id].kind === "text_frame");
+  // The actual IDML exporter uses pub-editor::frame_from_payload:
+  // payload.story_frame.story_id, NOT node.kind (imported publisher text
+  // frames may retain NodeKind::Shape). Do not infer IDML admission from the
+  // visual Reader kind or the authored NodeKind.
+  const graph = current.authoring_graph;
+  const textFrames = shapes.filter(n => {
+    const frame = graph.nodes[n.node_id]?.payload?.story_frame;
+    return typeof frame?.story_id === "string" &&
+      Object.hasOwn(graph.stories ?? {}, frame.story_id);
+  });
   const choices = [];
   for (const node of textFrames) {
     // Require an unambiguous page-local hit; the browser must never edit
@@ -180,8 +185,11 @@ try {
     }
   }
   assert.ok(selected, "no actual browser-visible canonical TextFrame is selectable");
-  assert.equal(oldHead.authoring_graph.nodes[selected.nodeId].kind, "text_frame",
-    "chosen node is not a canonical IDML-representable TextFrame");
+  const selectedNode = oldHead.authoring_graph.nodes[selected.nodeId];
+  const storyId = selectedNode.payload?.story_frame?.story_id;
+  assert.ok(typeof storyId === "string" &&
+      Object.hasOwn(oldHead.authoring_graph.stories ?? {}, storyId),
+    "chosen node lacks an exportable canonical StoryFrame");
   const originalBounds = oldHead.authoring_graph.nodes[selected.nodeId].header.bounds;
 
   // This is a real pointer-driven Chromium event. The test does not call POST
