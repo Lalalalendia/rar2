@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-server/src/guest_reader_http.rs"
-      - "apps/chaptera-server/src/product_editor_assets.rs"
       - "apps/web/temporary-editor-preview.html"
       - "apps/web/temporary-editor-preview.mjs"
       - "apps/web/temporary-editor-preview.css"
