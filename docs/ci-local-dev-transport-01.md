@@ -36,6 +36,11 @@ clean the temp area if that runner does not clear it automatically.
 1. Merge the reviewed transport PR and wait for its hosted contract tests.
 2. Install the separate runner and Git/Rust/Python/Node as required by the
    pre-existing fast-loop. Never add the dev label to the Publisher oracle.
+   Keep the repository variable `CHAPTERA_LOCAL_DEV_RUNNER_ENABLED` absent or
+   `false` until the distinct runner is actually online. Then set it to `true`
+   in Settings > Secrets and variables > Actions > Variables. With the variable
+   unset, scheduled local jobs are skipped: source code may merge safely before
+   registration without accumulating self-hosted queue backlog.
 3. Run the workflow manually on `main`, inspect its job and artifact, then
    confirm recurring operation via its scheduled event.
 4. Verify a real Windows run before marking the task DONE.

@@ -118,6 +118,7 @@ class LocalTransportTest(unittest.TestCase):
         self.assertIn("github.actor == 'Lalalalendia'", workflow)
         self.assertIn("private-logs", pathlib.Path("tools/ci/local_dev_transport.py").read_text(encoding="utf-8"))
         self.assertIn("github.event_name == 'schedule'", workflow)
+        self.assertEqual(workflow.count("vars.CHAPTERA_LOCAL_DEV_RUNNER_ENABLED == 'true'"), 2)
         self.assertIn("github.event_name == 'push'", workflow)
         self.assertNotIn("actions: write", workflow)
         self.assertNotIn("contents: write", workflow)
