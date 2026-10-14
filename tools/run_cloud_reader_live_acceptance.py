@@ -539,7 +539,11 @@ def curl_request(
     body_json: dict[str, Any] | None = None,
     upload: pathlib.Path | None = None,
     dump_headers: pathlib.Path | None = None,
+    include_origin_port: bool = False,
 ) -> tuple[int, bytes]:
+    # Physical browser acceptance uses the same explicit HTTPS port as the
+    # real external origin. The default (unported) Reader tests are unchanged.
+    authority = f"{EDGE_HOST}:{https_port}" if include_origin_port else EDGE_HOST
     command = [
         "curl",
         "--noproxy",
@@ -550,9 +554,9 @@ def curl_request(
         "--resolve",
         f"{EDGE_HOST}:{https_port}:127.0.0.1",
         "--header",
-        f"Host: {EDGE_HOST}",
+        f"Host: {authority}",
         "--header",
-        f"Origin: https://{EDGE_HOST}",
+        f"Origin: https://{authority}",
         "--request",
         method,
         "--output",
