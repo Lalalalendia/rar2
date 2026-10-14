@@ -20,6 +20,12 @@ pub struct Cli {
     pub command: Command,
 }
 
+// This startup-only Clap command preserves strongly typed, exclusive worker
+// options rather than exposing a free-form public command envelope.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one-time private worker CLI parsing keeps isolated command flags explicit"
+)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Install this exact executable as an immutable Linux release.

@@ -2077,7 +2077,7 @@ mod tests {
             },
             provenance: AuthoredEntityProvenanceV1::AuthorCreated,
         };
-        assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[shape.clone()]).is_ok());
+        assert!(append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape)).is_ok());
         assert_eq!(scene.nodes.len(), 1);
         assert_eq!(scene.nodes[0].node_id, node_id);
         assert_eq!(scene.nodes[0].page_id, page_id);
@@ -2108,7 +2108,7 @@ mod tests {
                 .contains(&"authored_rectangle_mixed_order_unsupported")
         );
         // Duplicate ID or a non-existent PageId is never represented.
-        assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[shape.clone()]).is_err());
+        assert!(append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape)).is_err());
         scene.nodes.clear();
         let mut malformed = shape;
         malformed.bounds = RectEmu::new(

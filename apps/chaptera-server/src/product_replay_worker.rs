@@ -666,8 +666,8 @@ pub fn validate_product_replay_receipt(
             "isolated MoveNode receipt violates source and project identity",
         ));
     }
-    if let Some(created) = &receipt.create_shape {
-        if receipt.baseline_project.is_some()
+    if let Some(created) = &receipt.create_shape
+        && (receipt.baseline_project.is_some()
             || receipt.move_node.is_some()
             || receipt.resize_node.is_some()
             || receipt.story_range.is_some()
@@ -680,13 +680,12 @@ pub fn validate_product_replay_receipt(
                     "product_replay_receipt_invalid",
                     "isolated CreateShape project cannot be canonically hashed",
                 )
-            })? != created.resulting_project_sha256
-        {
-            return Err(ProductReplayWorkerError::new(
-                "product_replay_receipt_invalid",
-                "isolated CreateShape violates exclusive source/project authority",
-            ));
-        }
+            })? != created.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated CreateShape violates exclusive source/project authority",
+        ));
     }
     if let Some(resize) = &receipt.resize_node
         && (receipt.baseline_project.is_some()
