@@ -511,10 +511,12 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].decoded.source_sample_model, "jpeg_adobe_cmyk");
         assert_eq!(candidates[0].decoded.decoded_sample_model, "rgb");
-        assert!(candidates[0]
-            .decoded
-            .color_disposition_ref
-            .contains("adobe-cmyk0-unprofiled-rgb-v1"));
+        assert!(
+            candidates[0]
+                .decoded
+                .color_disposition_ref
+                .contains("adobe-cmyk0-unprofiled-rgb-v1")
+        );
 
         let frames = (0..4)
             .map(|i| {
@@ -541,33 +543,44 @@ mod tests {
         admit_host_reencoded_previews(&mut scene, &candidates).unwrap();
         assert_eq!(scene["nodes"], original_nodes);
         assert_eq!(scene["nodes"].as_array().unwrap().len(), 4);
-        assert!(scene["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|node| node["resource_id"] == "star-image"));
+        assert!(
+            scene["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["resource_id"] == "star-image")
+        );
         assert_eq!(scene["resources"].as_array().unwrap().len(), 1);
         assert_eq!(scene["resources"][0]["availability"], "inline_data_url");
         let url = scene["resources"][0]["inline_data_url"].as_str().unwrap();
         assert!(url.starts_with("data:image/jpeg;base64,"));
         let derivative_bytes = BASE64.decode(url.split_once(',').unwrap().1).unwrap();
         assert_ne!(derivative_bytes, source);
-        assert_eq!(scene["resources"][0]["encoded_artifact_sha256"], sha256_hex(&derivative_bytes));
-        assert!(scene["resources"][0]["derivative_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("safe-preview:"));
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"],
+            sha256_hex(&derivative_bytes)
+        );
+        assert!(
+            scene["resources"][0]["derivative_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("safe-preview:")
+        );
         assert_eq!(scene["fidelity"]["state"], "partial");
-        assert!(scene["fidelity"]["reasons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason == PREVIEW_COLOR_REASON));
-        assert!(!scene["fidelity"]["reasons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason == "image_resource_not_inline"));
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == PREVIEW_COLOR_REASON)
+        );
+        assert!(
+            !scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "image_resource_not_inline")
+        );
     }
 
     #[test]
