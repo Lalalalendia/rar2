@@ -27,6 +27,8 @@ const assets = new Map([
   ["/editor/temporary-editor-preview.css", "apps/web/temporary-editor-preview.css"],
   ["/editor/temporary-edit-browser-session-v0.mjs", "apps/web/temporary-edit-browser-session-v0.mjs"],
   ["/editor/temporary-edit-move-client-v1.mjs", "apps/web/temporary-edit-move-client-v1.mjs"],
+  ["/editor/text-protocol-v1.mjs", "apps/web/text-protocol-v1.mjs"],
+  ["/editor/story-line-endings-v1.mjs", "apps/web/story-line-endings-v1.mjs"],
   ["/editor/interaction-v1.mjs", "apps/web/interaction-v1.mjs"],
   ["/editor/reader-scene-editor-interaction-v1.mjs", "apps/web/reader-scene-editor-interaction-v1.mjs"],
   ["/cloud-reader/render-v1.mjs", "apps/cloud-reader/render-v1.mjs"],

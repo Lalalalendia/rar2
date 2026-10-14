@@ -500,6 +500,16 @@ def main() -> int:
                             or not story_receipt.get("browser_reload_preserves_story")
                             or not story_receipt.get("anonymous_read_denied")
                             or not story_receipt.get("selected_first_scalar_range")
+                            or not story_receipt.get("export_job_claim")
+                            or not story_receipt.get("export_csrf_negative_confirmed")
+                            or not story_receipt.get(
+                                "export_forged_artifact_negative_confirmed"
+                            )
+                            or not story_receipt.get("export_anonymous_denied")
+                            or not story_receipt.get("story_undo_redo_claim")
+                            or story_receipt.get("authorized_history_call_count")
+                            != 3
+                            or not story_receipt.get("redo_unavailable_confirmed")
                             or (
                                 story_engine == "chromium"
                                 and (
@@ -511,6 +521,13 @@ def main() -> int:
                                     or not story_receipt.get(
                                         "composition_apply_fenced"
                                     )
+                                    or not story_receipt.get(
+                                        "physical_clipboard_paste_confirmed"
+                                    )
+                                    or story_receipt.get(
+                                        "authorized_story_commit_count"
+                                    )
+                                    != 2
                                 )
                             )
                             or (
@@ -568,8 +585,19 @@ def main() -> int:
                         ),
                         "browser_layout_is_canonical": False,
                         "authoritative_relayout_overset_verified": False,
-                        "story_undo_redo_claim": False,
-                        "export_job_claim": False,
+                        "story_undo_redo_claim": all(
+                            receipt.get("story_undo_redo_claim")
+                            for receipt in story_receipts
+                        ),
+                        "physical_clipboard_paste_claim": any(
+                            receipt.get("physical_clipboard_paste_confirmed")
+                            for receipt in story_receipts
+                            if receipt.get("browser_engine") == "chromium"
+                        ),
+                        "export_job_claim": all(
+                            receipt.get("export_job_claim")
+                            for receipt in story_receipts
+                        ),
                         "source_bytes_in_receipt": False,
                     }
                     (TARGET / "story-receipt.json").write_text(

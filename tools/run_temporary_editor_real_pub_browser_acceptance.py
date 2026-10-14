@@ -25,7 +25,7 @@ def main() -> int:
     for key in ("chaptera", "caddy", "fixture", "out"):
         ap.add_argument("--" + key, required=True, type=pathlib.Path)
     ap.add_argument("--fixture-sha256", required=True)
-    ap.add_argument("--target", choices=("idml", "pdf"), default="idml")
+    ap.add_argument("--target", choices=("idml", "pdf", "story-idml", "story-odg"), default="idml")
     args = ap.parse_args()
     binary = args.chaptera.resolve()
     caddy = args.caddy.resolve()
@@ -33,9 +33,11 @@ def main() -> int:
     out = args.out.resolve()
     if not binary.is_file() or not caddy.is_file():
         raise AssertionError("canonical Chaptera binary and pinned Caddy required")
+    story_mode = args.target.startswith("story-")
+    expected_length = 72192 if story_mode else 291840
     if (live.sha256_file(fixture) != args.fixture_sha256 or
-            fixture.stat().st_size != 291840):
-        raise AssertionError("public pinned SampleNewsletter.pub fixture invalid")
+            fixture.stat().st_size != expected_length):
+        raise AssertionError("public pinned real Publisher fixture invalid")
     out.mkdir(parents=True, exist_ok=True)
     work = pathlib.Path(tempfile.mkdtemp(prefix="chaptera-temp-guest-browser-"))
     db, config = work / "chaptera.sqlite", work / "config.toml"
@@ -81,6 +83,8 @@ def main() -> int:
             "header_up X-Forwarded-Host {hostport}",
             "/editor/temporary-preview",
             "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
             "/cloud-reader/render-v1.mjs",
             "/v1/editor/temporary-sessions",
@@ -128,12 +132,14 @@ def main() -> int:
         origin = f"https://{live.EDGE_HOST}:{httpsport}"
         command = [
             "node", str(live.ROOT / "tools" /
-                        "run_temporary_editor_real_pub_browser.mjs"),
+                        ("run_temporary_editor_real_pub_story_browser.mjs"
+                         if story_mode else
+                         "run_temporary_editor_real_pub_browser.mjs")),
             "--origin", origin,
             "--fixture", str(fixture),
             "--fixture-sha256", args.fixture_sha256,
             "--out", str(out / "receipt.json"),
-            "--target", args.target,
+            "--target", args.target.removeprefix("story-"),
         ]
         result = subprocess.run(
             command, env=env, cwd=live.ROOT, text=True,
@@ -148,6 +154,43 @@ def main() -> int:
                 (result.stderr or result.stdout)[-1800:]
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
+        if story_mode:
+            target = args.target.removeprefix("story-")
+            if (receipt.get("schema") != "chaptera.tempedit-real-pub-story-consumer.v1" or
+                    receipt.get("status") != "PASS" or
+                    receipt.get("source_sha256") != args.fixture_sha256 or
+                    receipt.get("source_byte_len") != expected_length or
+                    receipt.get("real_pub") is not True or
+                    receipt.get("real_chromium") is not True or
+                    receipt.get("browser_story_commits") != 1 or
+                    receipt.get("guest_story_ui_commit") is not True or
+                    receipt.get("export_target") != target or
+                    receipt.get("target_consumer_text_recovered") is not True or
+                    receipt.get("physical_target_xml_consumer") is not True or
+                    receipt.get("target_application_reopened") is not True or
+                    receipt.get("target_application_consumer") !=
+                        ("Scribus" if target == "idml" else "LibreOffice Draw") or
+                    receipt.get("exact_current_story_reopened") is not True or
+                    receipt.get("exact_reader_scene_story") is not True or
+                    receipt.get("identical_operation_id_replay_no_second_revision") is not True or
+                    receipt.get("stale_story_write_denied") is not True or
+                    receipt.get("conflicting_operation_id_denied") is not True or
+                    receipt.get("foreign_bearer_mutation_denied") is not True or
+                    receipt.get("read_replay_export_does_not_renew_ttl") is not True or
+                    receipt.get("same_browser_session_delete_proven") is not True or
+                    receipt.get("revoked_bearer_denied") is not True or
+                    receipt.get("bearer_absent_from_urls") is not True or
+                    receipt.get("original_pub_immutable") is not True):
+                raise AssertionError("physical Guest Story export receipt invalid")
+            print(json.dumps({
+                "schema": receipt["schema"],
+                "status": "PASS",
+                "real_pub_browser_https": True,
+                "target": target,
+                "changed_artifact_sha256": receipt["changed_artifact_sha256"],
+                "physical_text_consumer": True,
+            }, sort_keys=True))
+            return 0
         target = args.target
         expected_geometry = (
             "pdf_rectangle_stream" if target == "pdf" else "idml_path_geometry"
