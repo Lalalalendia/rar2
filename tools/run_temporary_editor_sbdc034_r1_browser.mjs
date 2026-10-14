@@ -36,6 +36,7 @@ for (const frame of expected.star_frames) {
   assert.ok(frame.bounds.width > 0 && frame.bounds.height > 0);
 }
 
+let stage = "browser_launch";
 const browser = await chromium.launch({
   headless: true,
   args: [
@@ -44,6 +45,7 @@ const browser = await chromium.launch({
   ],
 });
 try {
+  stage = "browser_load";
   const page = await browser.newPage({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1000 },
@@ -83,6 +85,7 @@ try {
     timeout: 30000,
   });
   assert.equal(navigation?.status(), 200);
+  stage = "resume_ui";
   await page.locator("#temporary-resume").waitFor({ state: "visible", timeout: 15000 });
   await page.locator("#temporary-resume").click();
   await page.waitForFunction(() => {
@@ -91,6 +94,7 @@ try {
       && document.querySelectorAll("#temporary-pages svg.page").length > 0;
   }, null, { timeout: 90000 });
   await Promise.all(reads);
+  stage = "revision_readback";
   const current = currentReplies.at(-1);
   const sceneReply = sceneReplies.at(-1);
   assert.equal(current?.source_hash, SHA);
@@ -112,6 +116,7 @@ try {
     assert.equal(sceneNodes[0].page_id, frame.page_id);
     assert.deepEqual(sceneNodes[0].bounds, frame.bounds);
   }
+  stage = "render_dom";
   await page.evaluate(() => document.fonts.ready);
   const dom = await page.evaluate(async data => {
     const pageId = data.star_frames[0].page_id;
@@ -159,6 +164,7 @@ try {
     expected.star_frames[0].page_id + '"]';
   const pageSvg = page.locator(pageSelector).first();
   await pageSvg.scrollIntoViewIfNeeded();
+  stage = "r1_screenshot";
   const withStars = await pageSvg.screenshot();
   await page.evaluate(data => {
     for (const frame of data.star_frames) {
@@ -172,6 +178,7 @@ try {
   }, expected);
   const withoutStars = await pageSvg.screenshot();
 
+  stage = "r1_pixel_scan";
   const pixels = await page.evaluate(async data => {
     async function decode(base64) {
       const image = new Image();
@@ -225,6 +232,7 @@ try {
   assert.ok(dom.logo_elements >= 1);
   assert.equal(errors.length, 0, "real R1 browser emitted JavaScript errors");
   assert.equal(external.length, 0, "real R1 browser fetched unapproved external resources");
+  stage = "source_safe_receipt";
   // Only source-neutral numbers can leave this process. Neither screenshot,
   // full scene, private bearer nor JPEG data is written to disk or logged.
   console.log("SBDC034_EDITOR_R1_BROWSER_PROOF " + JSON.stringify({
@@ -238,6 +246,27 @@ try {
     outbound_network_requests: external.length,
     private_screenshots_uploaded: false,
   }));
+} catch (error) {
+  // The CI runner must not expose a private bearer, Scene or source payload
+  // even when Playwright returns a verbose error. Only classify from a fixed
+  // allowlist of diagnostic strings already owned by this test.
+  const message = String(error?.message ?? "");
+  const kinds = [
+    ["missing_picture_dom", /not painted by editor|did not paint once per frame|missing star for controlled/],
+    ["image_transport", /host-authorized SafePreview|R1 image not decoded or visible/],
+    ["logo_dom_or_decode", /logo/i],
+    ["pixel_roi", /R1 star image absent|R1 star paint rectangle collapsed|screenshot size changed/],
+    ["revision_identity", /source.*mismatch|revision|cursor|expired/i],
+    ["browser_timeout", /Timeout|timeout/],
+    ["network_or_origin", /net::ERR|HTTP|response|navigate/],
+  ];
+  const code = kinds.find(([, match]) => match.test(message))?.[0] ??
+    (error?.name === "AssertionError" ? "assertion_unclassified" : "browser_unclassified");
+  console.error("SBDC034_R1_BROWSER_FAILURE " + JSON.stringify({
+    stage, code, class: error?.name === "TimeoutError" ? "TimeoutError" :
+      error?.name === "AssertionError" ? "AssertionError" : "Error",
+  }));
+  process.exitCode = 1;
 } finally {
   await browser.close();
 }
