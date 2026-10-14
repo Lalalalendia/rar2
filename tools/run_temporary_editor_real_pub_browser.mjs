@@ -17,12 +17,16 @@ const origin = arg("origin");
 // Explicit, allowlisted public-host mode; default remains the local Caddy test.
 const publicOrigin = process.argv.includes("--public-origin");
 const resizeMode = process.argv.includes("--resize");
+const keyboardNudgeMode = process.argv.includes("--keyboard-nudge");
 const fixture = resolve(arg("fixture"));
 const fixtureHash = arg("fixture-sha256");
 const receiptPath = resolve(arg("out"));
 // Preserve the existing bounded IDML proof. PDF is a separate physical
 // geometry consumer of the same browser workflow, selected explicitly by CI.
 const exportTarget = process.argv.includes("--target") ? arg("target") : "idml";
+if (keyboardNudgeMode && (resizeMode || exportTarget !== "idml")) {
+  throw Error("keyboard nudge physical proof requires non-resize IDML");
+}
 if (!(resizeMode
   ? ["idml", "odg"].includes(exportTarget)
   : ["idml", "pdf"].includes(exportTarget))) {
@@ -103,7 +107,7 @@ function contains(node, x, y) {
 function candidatePoints(scene, current, target) {
   const shapes = scene.nodes.filter(n =>
     direct(n) && current.authoring_graph?.nodes?.[n.node_id] &&
-    (!resizeMode || (() => {
+    (!(resizeMode || keyboardNudgeMode) || (() => {
       const graph = current.authoring_graph;
       const header = graph.nodes[n.node_id]?.header;
       const transform = header?.transform;
@@ -228,8 +232,26 @@ try {
   }
   const originalBounds = oldHead.authoring_graph.nodes[selected.nodeId].header.bounds;
 
-  // Both paths are REAL Chromium pointer events. No harness POST mutation.
-  if (resizeMode) {
+  // Real pointer selection focuses the canvas. Keyboard mode sends real
+  // Chromium key events, never a synthetic fetch or harness-owned mutation.
+  if (keyboardNudgeMode) {
+    await page.mouse.click(selected.screen.x, selected.screen.y);
+    const focused = await page.evaluate(() => document.activeElement?.id);
+    assert.equal(focused, "temporary-pages",
+      "real pointer selection did not focus the keyboard-authoring canvas");
+    const handles = page.locator('[data-temporary-resize-handle]' +
+      '[data-node-id="' + selected.nodeId + '"]');
+    assert.equal(await handles.count(), 8,
+      "real page-local candidate was not selected for keyboard authoring");
+    await page.keyboard.press("Control+ArrowRight");
+    await page.waitForTimeout(250);
+    assert.equal(observed.requests.filter(r => r.method === "POST" &&
+      r.path.endsWith("/move-node")).length, 0,
+      "modified Arrow key unexpectedly committed a document operation");
+    assert.equal(await page.evaluate(() => document.activeElement?.id),
+      "temporary-pages", "modified Arrow key transferred canvas focus");
+    await page.keyboard.press("ArrowRight");
+  } else if (resizeMode) {
     await page.mouse.click(selected.screen.x, selected.screen.y);
     const selector = '[data-temporary-resize-handle="bottom-right"]' +
       '[data-node-id="' + selected.nodeId + '"]';
@@ -251,12 +273,13 @@ try {
     await page.mouse.up();
   }
   try {
-    await page.waitForFunction(() =>
-      document.querySelector("#temporary-status")?.textContent.includes(
-        "Правка сохранена в ревизии"), null, { timeout: 60000 });
+    await page.waitForFunction(expected =>
+      document.querySelector("#temporary-status")?.textContent.includes(expected),
+      keyboardNudgeMode ? "Объект перемещён и сохранён" : "Правка сохранена в ревизии",
+      { timeout: 60000 });
   } catch {
     const state = await page.locator("#temporary-status").textContent();
-    throw Error("physical browser " + (resizeMode ? "ResizeNode" : "MoveNode") +
+    throw Error("physical browser " + (keyboardNudgeMode ? "Keyboard MoveNode" : resizeMode ? "ResizeNode" : "MoveNode") +
       " failed with UI status: " +
       String(state).slice(0,180) + " http=" +
       JSON.stringify(observed.responses.slice(-18)) +
@@ -289,6 +312,13 @@ try {
     ? (geometry.width !== originalBounds.width || geometry.height !== originalBounds.height)
     : (geometry.x !== originalBounds.x || geometry.y !== originalBounds.y),
     "real browser gesture left canonical geometry unchanged");
+  if (keyboardNudgeMode) {
+    assert.equal(geometry.x, originalBounds.x + 12_700,
+      "real ArrowRight must move by exactly one point in canonical EMUs");
+    assert.equal(geometry.y, originalBounds.y);
+    assert.equal(geometry.width, originalBounds.width);
+    assert.equal(geometry.height, originalBounds.height);
+  }
   if (resizeMode) {
     assert.equal(geometry.x,originalBounds.x);
     assert.equal(geometry.y,originalBounds.y);
@@ -359,7 +389,7 @@ try {
     "--before-x-emu", String(originalBounds.x),
     "--before-y-emu", String(originalBounds.y),
   ] : [
-    resizeMode ? "tools/verify_temporary_guest_resize_export.py"
+    (resizeMode || keyboardNudgeMode) ? "tools/verify_temporary_guest_resize_export.py"
       : "tools/verify_editable_export_geometry.py",
     "--target", target,
     "--artifact", artifactPath,
@@ -414,7 +444,7 @@ try {
     target === "pdf" ? "pdf_rectangle_stream"
       : target === "odg" ? "odg_frame_attributes" : "idml_path_geometry");
   assert.equal(consumer.geometry_matches_edit,true);
-  if (resizeMode) {
+  if (resizeMode || keyboardNudgeMode) {
     assert.equal(consumer.exact_xml_geometry_verified,true);
     assert.equal(consumer.target_application_consumer?.reopened,true,
       "real IDML/ODG application did not reimport the resized artifact");
@@ -471,7 +501,8 @@ try {
     x.path === privatePath(resizeMode ? "resize-node" : "move-node", oldHead.document_id)
       && x.method === "POST");
   assert.equal(privateMutations.length,1,
-    "pointer must cause exactly one canonical ResizeNode/MoveNode POST");
+    (keyboardNudgeMode ? "Arrow key" : "pointer") +
+      " must cause exactly one canonical ResizeNode/MoveNode POST");
   // No bearer may appear in any navigation or request URL. Read capability
   // privately inside browser process and never put it in the receipt or logs.
   const cap = await page.evaluate(() => {
@@ -531,8 +562,9 @@ try {
     "browser offered to resume a deleted guest session");
 
   const receipt = {
-    schema:resizeMode
-      ? "chaptera.tempedit-real-pub-resize-chromium-https.v1"
+    schema:keyboardNudgeMode
+      ? "chaptera.tempedit-real-pub-keyboard-nudge-chromium-https.v1"
+      : resizeMode ? "chaptera.tempedit-real-pub-resize-chromium-https.v1"
       : "chaptera.tempedit-real-pub-chromium-https.v1",
     status:"PASS",
     source_sha256:fixtureHash,
@@ -544,7 +576,14 @@ try {
     public_trusted_tls:publicOrigin,
     rust_server:!publicOrigin,
     isolated_worker:!publicOrigin,
-    browser_pointer_commits:privateMutations.length,
+    browser_pointer_commits:keyboardNudgeMode ? 0 : privateMutations.length,
+    browser_keyboard_commits:keyboardNudgeMode ? privateMutations.length : 0,
+    keyboard_nudge_step_emu:keyboardNudgeMode ? 12_700 : null,
+    keyboard_canvas_focus_verified:keyboardNudgeMode,
+    keyboard_modified_arrow_denied:keyboardNudgeMode,
+    keyboard_exact_one_point_reopened:keyboardNudgeMode,
+    keyboard_idml_target_application_reopened:keyboardNudgeMode &&
+      consumer.target_application_consumer?.reopened === true,
     resize_handle_pointer_commit:resizeMode,
     resized_bounds_reopened:resizeMode,
     resized_target_application_reopened:resizeMode,

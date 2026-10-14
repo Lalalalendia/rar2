@@ -27,7 +27,7 @@ def main() -> int:
     ap.add_argument("--fixture-sha256", required=True)
     ap.add_argument("--target", choices=(
         "idml", "pdf", "story-idml", "story-odg",
-        "resize-idml", "resize-odg"), default="idml")
+        "resize-idml", "resize-odg", "keyboard-idml"), default="idml")
     args = ap.parse_args()
     binary = args.chaptera.resolve()
     caddy = args.caddy.resolve()
@@ -37,6 +37,7 @@ def main() -> int:
         raise AssertionError("canonical Chaptera binary and pinned Caddy required")
     story_mode = args.target.startswith("story-")
     resize_mode = args.target.startswith("resize-")
+    keyboard_mode = args.target == "keyboard-idml"
     expected_length = 72192 if story_mode else 291840
     if (live.sha256_file(fixture) != args.fixture_sha256 or
             fixture.stat().st_size != expected_length):
@@ -143,10 +144,12 @@ def main() -> int:
             "--fixture", str(fixture),
             "--fixture-sha256", args.fixture_sha256,
             "--out", str(out / "receipt.json"),
-            "--target", args.target.removeprefix("story-").removeprefix("resize-"),
+            "--target", args.target.removeprefix("story-").removeprefix("resize-").removeprefix("keyboard-"),
         ]
         if resize_mode:
             command.append("--resize")
+        if keyboard_mode:
+            command.append("--keyboard-nudge")
         result = subprocess.run(
             command, env=env, cwd=live.ROOT, text=True,
             capture_output=True, timeout=540, check=False,
@@ -234,6 +237,42 @@ def main() -> int:
                 "physical_geometry_consumer": True,
                 "changed_artifact_sha256":
                     receipt[f"changed_{target}_download_sha256"],
+            }, sort_keys=True))
+            return 0
+        if keyboard_mode:
+            if (receipt.get("schema") !=
+                    "chaptera.tempedit-real-pub-keyboard-nudge-chromium-https.v1" or
+                    receipt.get("status") != "PASS" or
+                    receipt.get("source_sha256") != args.fixture_sha256 or
+                    receipt.get("source_byte_len") != expected_length or
+                    receipt.get("real_pub") is not True or
+                    receipt.get("real_chromium") is not True or
+                    receipt.get("browser_keyboard_commits") != 1 or
+                    receipt.get("browser_pointer_commits") != 0 or
+                    receipt.get("keyboard_nudge_step_emu") != 12700 or
+                    receipt.get("keyboard_canvas_focus_verified") is not True or
+                    receipt.get("keyboard_modified_arrow_denied") is not True or
+                    receipt.get("keyboard_exact_one_point_reopened") is not True or
+                    receipt.get("keyboard_idml_target_application_reopened") is not True or
+                    receipt.get("export_target") != "idml" or
+                    receipt.get("changed_idml_geometry_proven") is not True or
+                    receipt.get("changed_idml_identity_proven") is not True or
+                    receipt.get("changed_idml_geometry_form") != "idml_path_geometry" or
+                    receipt.get("same_browser_session_delete_proven") is not True or
+                    receipt.get("revoked_old_current_scene_export_denied") is not True or
+                    receipt.get("temporary_bearer_cleared_after_delete") is not True or
+                    receipt.get("loss_report_checked") is not True or
+                    receipt.get("original_pub_immutable") is not True or
+                    receipt.get("bearer_absent_from_urls") is not True or
+                    receipt.get("v0_go") is not False):
+                raise AssertionError("physical keyboard Guest MoveNode receipt invalid")
+            print(json.dumps({
+                "schema": receipt["schema"], "status": "PASS",
+                "real_pub_browser_https": True,
+                "browser_keyboard_commits": receipt["browser_keyboard_commits"],
+                "exact_nudge_emu": receipt["keyboard_nudge_step_emu"],
+                "target": "idml", "scribus_reopened": True,
+                "changed_artifact_sha256": receipt["changed_idml_download_sha256"],
             }, sort_keys=True))
             return 0
         target = args.target

@@ -517,3 +517,66 @@ test("selected page-owned shape exposes eight handles and one canonical pointer-
   assert.equal(dom.nodes["temporary-download-idml"].disabled,false);
   assert.match(dom.nodes["temporary-status"].textContent,/Правка сохранена/);
 });
+
+test("focused canvas ArrowRight makes exactly one canonical 1pt MoveNode and repaints the committed Scene", async () => {
+  const dom = fakeDom(), network = server(), renders = [];
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+    storage: storage(), fetchImpl: network.fetchImpl,
+    renderer: async (_, scene) => {renders.push(scene);},
+  });
+  await controller.start({name: "keyboard.pub", size: 1729});
+  const pages = dom.nodes["temporary-pages"];
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
+  let prevented = false;
+  await pages.handlers.keydown({
+    key: "ArrowRight", target: pages,
+    preventDefault() {prevented = true;},
+  });
+  const moves = network.calls.filter(call => call.url === base + "/move-node");
+  assert.equal(moves.length, 1);
+  assert.equal(prevented, true);
+  const intent = JSON.parse(moves[0].options.body);
+  assert.equal(intent.command.kind, "move_node_to");
+  assert.equal(intent.command.node_id, nodeId);
+  assert.equal(intent.command.x_emu, 100 + 12_700);
+  assert.equal(intent.command.y_emu, 200);
+  assert.equal(intent.base_revision_id, beforeRev);
+  assert.equal(moves[0].options.headers["x-chaptera-reader-session"], token);
+  assert.equal(renders.at(-1).revision_id, afterRev);
+  assert.equal(renders.at(-1).nodes[0].bounds.x, 12_800);
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+  assert.match(dom.nodes["temporary-status"].textContent, /Объект перемещён/);
+});
+
+test("nudge cannot escape canvas focus, modifiers, composition, missing selection or Escape", async () => {
+  const dom = fakeDom(), network = server();
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+    storage: storage(), fetchImpl: network.fetchImpl,
+    renderer: async () => {},
+  });
+  await controller.start({name: "keyboard.pub", size: 1729});
+  const pages = dom.nodes["temporary-pages"];
+  let prevented = 0;
+  const key = changes => pages.handlers.keydown({
+    key: "ArrowLeft", target: pages,
+    preventDefault() {prevented++;}, ...changes,
+  });
+  await key({});
+  pages.handlers.pointerdown(dom.pointer(110, 210));
+  await pages.handlers.pointerup(dom.pointer(110, 210));
+  await key({ctrlKey: true});
+  await key({altKey: true});
+  await key({metaKey: true});
+  await key({shiftKey: true});
+  await key({isComposing: true});
+  await key({target: {tagName: "TEXTAREA"}});
+  await pages.handlers.keydown({key: "Escape", target: pages});
+  await key({});
+  assert.equal(network.calls.filter(call => call.url.endsWith("/move-node")).length, 0);
+  assert.equal(prevented, 0, "unsupported keyboard routes must not consume Arrow");
+});

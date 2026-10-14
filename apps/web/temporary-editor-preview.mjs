@@ -65,6 +65,8 @@ function newCsrfToken(cryptoObject) {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const TEMPORARY_NUDGE_STEP_EMU = 12_700; // One point, not screen pixels.
+
 
 export function temporaryEditorPagePoint(pageSvg, clientX, clientY) {
   if (typeof pageSvg?.createSVGPoint !== "function" ||
@@ -491,6 +493,8 @@ export async function bootTemporaryEditorPreview({
         if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
         gesture = new MoveGestureV1(interaction, hit.node_id, point);
         drawResizeHandles(svg, hit.node_id);
+        // Keyboard authoring belongs to the canvas, not the Story textarea.
+        pages.focus?.({preventScroll: true});
       }
       gesturePage = svg;
       overlayBounds(gesture.previewBounds());
@@ -565,6 +569,76 @@ export async function bootTemporaryEditorPreview({
     }
   }
 
+
+  // One Arrow key = one canonical MoveNode for a focused, selected, admitted
+  // page-local object. Reuse the exact Guest mutation/reconciliation authority.
+  async function canvasKeydown(event) {
+    if (event.key === "Escape") {
+      clearGesture();
+      clearResizeHandles({forget: true});
+      return;
+    }
+    const delta = {
+      ArrowLeft: [-TEMPORARY_NUDGE_STEP_EMU, 0],
+      ArrowRight: [TEMPORARY_NUDGE_STEP_EMU, 0],
+      ArrowUp: [0, -TEMPORARY_NUDGE_STEP_EMU],
+      ArrowDown: [0, TEMPORARY_NUDGE_STEP_EMU],
+    }[event.key];
+    if (!delta || event.target !== pages || event.defaultPrevented ||
+        event.isComposing || composingStory || event.altKey || event.ctrlKey ||
+        event.metaKey || event.shiftKey || gesture || busy || editBusy ||
+        !moveClient || !canonicalCurrent || !interaction ||
+        moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
+    const nodeId = selectedResizeNodeId;
+    const pageId = selectedResizePageId;
+    const candidate = resizeCandidate(nodeId);
+    const projected = interaction.nodes.find(node => node.node_id === nodeId);
+    if (!candidate || projected?.page_id !== pageId) return;
+    const before = candidate.bounds;
+    const next = {
+      ...before, x: before.x + delta[0], y: before.y + delta[1],
+    };
+    if (![next.x, next.y, next.width, next.height].every(Number.isSafeInteger) ||
+        !Number.isSafeInteger(next.x + next.width) ||
+        !Number.isSafeInteger(next.y + next.height)) return;
+    event.preventDefault?.();
+    clearSheetPreview();
+    editBusy = true;
+    controls();
+    status.textContent = "Сохраняется перемещение объекта…";
+    try {
+      const result = await moveClient.moveNode({
+        nodeId, xEmu: next.x, yEmu: next.y,
+      });
+      canonicalCurrent = result.current;
+      const scene = await moveClient.readerScene();
+      const updated = scene.nodes.find(node => node.node_id === nodeId);
+      if (!updated || updated.bounds?.x !== next.x ||
+          updated.bounds?.y !== next.y ||
+          updated.bounds?.width !== before.width ||
+          updated.bounds?.height !== before.height) {
+        throw new Error("temporary_nudge_scene_geometry_mismatch");
+      }
+      interaction = projectReaderSceneToEditorInteractionScene(scene);
+      await renderer(pages, scene, {
+        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
+      });
+      refreshStoryEditor();
+      redrawResizeHandles();
+      expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
+      status.textContent = "Объект перемещён и сохранён в новой ревизии." +
+        (partialFidelity ? " Needs review / Partial: результат необходимо проверить." : "");
+    } catch {
+      // Never show a speculative position or continue editing after a lost ACK.
+      pages.replaceChildren();
+      interaction = null;
+      status.textContent = "Подтверждение перемещения недоступно. Восстановите сессию перед следующей правкой.";
+      if (!moveClient.status.pending_reconciliation) clearEditor();
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
 
   async function applyStoryEdit() {
     if (!storyEnabled || busy || editBusy || composingStory || !moveClient ||
@@ -705,12 +779,7 @@ export async function bootTemporaryEditorPreview({
     pages.addEventListener("pointermove", pointerMove);
     pages.addEventListener("pointerup", pointerUp);
     pages.addEventListener("pointercancel", clearGesture);
-    pages.addEventListener("keydown", event => {
-      if (event.key === "Escape") {
-        clearGesture();
-        clearResizeHandles({forget: true});
-      }
-    });
+    pages.addEventListener("keydown", canvasKeydown);
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
     pdfButton?.addEventListener("click", () => download("pdf"));
