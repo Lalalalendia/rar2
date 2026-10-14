@@ -493,6 +493,122 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_adobe_cmyk_one_resource_four_frames_passes_worker_host_boundary() {
+        // Generated 2x2 synthetic Adobe-CMYK JPEG (no ICC or user image bytes).
+        // Reproduces the SBDC storage topology: one picture resource, four
+        // separate page placements. It does NOT substitute for a real-PUB proof.
+        let source = BASE64.decode("/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwACAQECAQECAgICAgICAgMFAwMDAwMGBAQDBQcGBwcHBgcHCAkLCQgICggHBwoNCgoLDAwMDAcJDg8NDA4LDAwM/8AAFAgAAgACBEMRAE0RAFkRAEsRAP/EABQAAQAAAAAAAAAAAAAAAAAAAAn/xAAdEAABBQEBAQEAAAAAAAAAAAACAQMEBQYHCQgA/9oADgRDAE0AWQBLAAA/ADu9NvTb6SwXpJ9B0VF9B9wpaSl6Vo4FfXwN1aRosCO1aSQaZaaB9AbbABERAURBRERERE/G96E+hPfeCffXcMLhe4dgxeJxfQL6iz2eotlY11VRV0WxkMRoUSMy8LTEdlkAbbabEQAAERRERE/G96E+hPfeCffXcMLhe4dgxeJxfQL6iz2eotlY11VRV0WxkMRoUSMy8LTEdlkAbbabEQAAERRERE/MZ5k6y13vm38+Xt7Z2F1d3XNc5PsLCfIOTKnyHauMbrzrpqpuOGZERGSqpKqqqqq/v//Z").unwrap();
+        let (candidates, audit) = collect_worker_preview_samples_with_audit(std::iter::once((
+            "star-image".to_owned(),
+            "image/jpeg",
+            source.as_slice(),
+        )));
+        assert_eq!(audit.input_resources, 1);
+        assert_eq!(audit.eligible_mime_resources, 1);
+        assert_eq!(audit.decoded_resources, 1);
+        assert_eq!(audit.encoded_candidates, 1);
+        assert!(audit.reject_codes.is_empty());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].decoded.source_sample_model, "jpeg_adobe_cmyk");
+        assert_eq!(candidates[0].decoded.decoded_sample_model, "rgb");
+        assert!(
+            candidates[0]
+                .decoded
+                .color_disposition_ref
+                .contains("adobe-cmyk0-unprofiled-rgb-v1")
+        );
+
+        let frames = (0..4)
+            .map(|i| {
+                json!({
+                    "node_id": format!("picture-frame-{i}"),
+                    "page_id": "page-1",
+                    "kind": "picture_frame",
+                    "resource_id": "star-image",
+                    "bounds": {
+                        "x": (i % 2) * 500_000 + 100_000,
+                        "y": (i / 2) * 550_000 + 100_000,
+                        "width": 190_000,
+                        "height": 180_000
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut scene = json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "document_id": "synthetic-four-cmyk-frames",
+            "source_hash": "a".repeat(64),
+            "revision_id": "synthetic-r0",
+            "scene_authority": "unit-test-only",
+            "stacking_fidelity": "source_back_to_front",
+            "fidelity": {"state": "partial", "reasons": ["image_resource_not_inline"]},
+            "pages": [{
+                "page_id": "page-1",
+                "order": 0,
+                "width_emu": 1_500_000,
+                "height_emu": 1_500_000
+            }],
+            "nodes": frames,
+            "stories": [],
+            "resources": [{
+                "resource_id": "star-image",
+                "mime": "image/jpeg",
+                "availability": "descriptor_only"
+            }],
+            "fonts": [],
+            "diagnostics": []
+        });
+        let original_nodes = scene["nodes"].clone();
+        admit_host_reencoded_previews(&mut scene, &candidates).unwrap();
+        assert_eq!(scene["nodes"], original_nodes);
+        assert_eq!(scene["nodes"].as_array().unwrap().len(), 4);
+        assert!(
+            scene["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["resource_id"] == "star-image")
+        );
+        assert_eq!(scene["resources"].as_array().unwrap().len(), 1);
+        assert_eq!(scene["resources"][0]["availability"], "inline_data_url");
+        let url = scene["resources"][0]["inline_data_url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        let derivative_bytes = BASE64.decode(url.split_once(',').unwrap().1).unwrap();
+        assert_ne!(derivative_bytes, source);
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"],
+            sha256_hex(&derivative_bytes)
+        );
+        assert!(
+            scene["resources"][0]["derivative_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("safe-preview:")
+        );
+        assert_eq!(scene["fidelity"]["state"], "partial");
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == PREVIEW_COLOR_REASON)
+        );
+        assert!(
+            !scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "image_resource_not_inline")
+        );
+
+        // In the hosted browser workflow only, hand the resulting *synthetic*
+        // host-owned derivative directly to Chromium. Never output user assets.
+        if let Ok(path) = std::env::var("CHAPTERA_SYNTHETIC_CMYK_SCENE_OUT") {
+            std::fs::write(path, serde_json::to_vec(&scene).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
     fn host_rejects_tampered_samples_and_cross_resource_replay() {
         let original = source_png();
         let candidates = collect_worker_preview_samples(std::iter::once((
