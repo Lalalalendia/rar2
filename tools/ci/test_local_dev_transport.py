@@ -110,6 +110,8 @@ class LocalTransportTest(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tools/ci -p test_local_dev_transport.py", hosted)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("--logs-root", workflow)
+        self.assertIn("        env:\n          CHAPTERA_LOCAL_DEV_STATE:", workflow)
+        self.assertNotIn("    env:\n      CHAPTERA_LOCAL_DEV_STATE:", workflow)
         self.assertNotIn("issue_comment:", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)

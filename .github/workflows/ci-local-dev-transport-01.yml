@@ -36,10 +36,6 @@ jobs:
     if: github.repository == 'Lalalalendia/rar2' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'Lalalalendia'))
     runs-on: [self-hosted, Windows, X64, chaptera-dev-unprivileged]
     timeout-minutes: 22
-    env:
-      CHAPTERA_LOCAL_DEV_STATE: ${{ runner.tool_cache }}\chaptera-dev-state
-      CHAPTERA_LOCAL_DEV_RECEIPT: ${{ runner.temp }}\chaptera-dev-receipt.json
-      CHAPTERA_LOCAL_DEV_LOG_ROOT: ${{ runner.temp }}\chaptera-dev-private-logs
     steps:
       - uses: actions/checkout@v5
         with:
@@ -49,6 +45,10 @@ jobs:
           fetch-depth: 0
       - name: Verify exact SHA and run bounded local fast loop
         shell: pwsh
+        env:
+          CHAPTERA_LOCAL_DEV_STATE: ${{ runner.tool_cache }}\chaptera-dev-state
+          CHAPTERA_LOCAL_DEV_RECEIPT: ${{ runner.temp }}\chaptera-dev-receipt.json
+          CHAPTERA_LOCAL_DEV_LOG_ROOT: ${{ runner.temp }}\chaptera-dev-private-logs
         run: |
           $ErrorActionPreference = "Stop"
           $python = "python"
