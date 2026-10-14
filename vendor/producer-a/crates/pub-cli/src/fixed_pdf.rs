@@ -677,6 +677,7 @@ fn build_pdf_artifact(
             .collect::<Vec<_>>();
         serde_json::json!({
             "schema_version": "chaptera.pdf-paint-trace.v1",
+            "source_sha256": &bundle.resolved_graph.source.source_hash,
             "candidate_pdf_sha256": pdf_sha256,
             "pages": &rendered.report.pages,
             "paint_trace": &rendered.paint_trace,
