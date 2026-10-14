@@ -3,6 +3,9 @@ import {
   temporaryStoryTextForTextarea, temporaryStoryObservedToCanonicalStory,
 } from "./temporary-edit-move-client-v1.mjs";
 import { MoveGestureV1, hitTestSnapshot } from "./interaction-v1.mjs";
+import {
+  RESIZE_HANDLES, ResizeTransactionV1, resizeHandleCenters,
+} from "./resize-gesture-v1.mjs";
 import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 import { TemporaryEditBrowserSessionV0 } from "./temporary-edit-browser-session-v0.mjs";
 import { renderReaderScene } from "../cloud-reader/render-v1.mjs";
@@ -138,6 +141,9 @@ export async function bootTemporaryEditorPreview({
   let gesture = null;
   let gesturePage = null;
   let gestureOverlay = null;
+  let selectedResizeNodeId = null;
+  let selectedResizePageId = null;
+  let resizeHandleElements = [];
   const buttons = [startButton, resumeButton, forgetButton, deleteButton].filter(Boolean);
 
   function controls() {
@@ -184,6 +190,78 @@ export async function bootTemporaryEditorPreview({
     storyPanel.hidden = !moveClient || !selected;
   }
 
+  function clearResizeHandles({ forget = false } = {}) {
+    for (const element of resizeHandleElements) {
+      try { element.remove(); } catch {}
+    }
+    resizeHandleElements = [];
+    if (forget) {
+      selectedResizeNodeId = null;
+      selectedResizePageId = null;
+    }
+  }
+
+  function resizeCandidate(nodeId) {
+    const graph = canonicalCurrent?.authoring_graph;
+    const sourceNode = graph?.nodes?.[nodeId];
+    const bounds = sourceNode?.header?.bounds;
+    const target = interaction?.nodes?.find(node => node.node_id === nodeId);
+    if (!sourceNode || !target || !bounds ||
+        !["x", "y", "width", "height"].every(key => Number.isSafeInteger(bounds[key])) ||
+        bounds.width <= 0 || bounds.height <= 0 ||
+        !Number.isSafeInteger(bounds.x + bounds.width) ||
+        !Number.isSafeInteger(bounds.y + bounds.height)) return null;
+    if (graph?.pages && !Object.keys(graph.pages).some(key =>
+      key === sourceNode.header.parent_id)) return null;
+    const transform = sourceNode.header.transform;
+    if (transform && (String(transform.a) !== "1" ||
+        String(transform.b) !== "0" || String(transform.c) !== "0" ||
+        String(transform.d) !== "1" || transform.tx !== 0 || transform.ty !== 0)) {
+      return null;
+    }
+    return { nodeId, bounds };
+  }
+
+  function drawResizeHandles(svg, nodeId) {
+    clearResizeHandles();
+    const candidate = resizeCandidate(nodeId);
+    if (!svg || !candidate || !documentObject?.createElementNS) return;
+    const bounds = candidate.bounds;
+    const viewBox = svg.getAttribute?.("viewBox")?.trim().split(/\s+/).map(Number);
+    const pageWidth = viewBox?.length === 4 && viewBox.every(Number.isFinite)
+      ? viewBox[2] : bounds.width * 6;
+    const handleSize = Math.max(1, Math.round(Math.min(
+      Math.max(10, Math.min(bounds.width, bounds.height) / 4),
+      pageWidth / Math.max(svg.clientWidth || 700, 1) * 10,
+    )));
+    const centers = resizeHandleCenters(bounds);
+    for (const handle of RESIZE_HANDLES) {
+      const center = centers[handle];
+      const rect = documentObject.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", String(center.x - handleSize / 2));
+      rect.setAttribute("y", String(center.y - handleSize / 2));
+      rect.setAttribute("width", String(handleSize));
+      rect.setAttribute("height", String(handleSize));
+      rect.setAttribute("class", "temporary-resize-handle");
+      rect.setAttribute("data-temporary-resize-handle", handle);
+      rect.setAttribute("data-node-id", nodeId);
+      rect.setAttribute("role", "button");
+      rect.setAttribute("tabindex", "0");
+      rect.setAttribute("aria-label", "Изменить размер: " + handle);
+      svg.appendChild(rect);
+      resizeHandleElements.push(rect);
+    }
+    selectedResizeNodeId = nodeId;
+    selectedResizePageId = svg.getAttribute("data-page-id");
+  }
+
+  function redrawResizeHandles() {
+    if (!selectedResizeNodeId || !selectedResizePageId) return;
+    const svg = pages.querySelector?.("svg.page[data-page-id='" + selectedResizePageId + "']");
+    if (svg) drawResizeHandles(svg, selectedResizeNodeId);
+    else clearResizeHandles({forget: true});
+  }
+
   function clearGesture() {
     try { gestureOverlay?.remove?.(); } catch {}
     gestureOverlay = null;
@@ -194,6 +272,7 @@ export async function bootTemporaryEditorPreview({
 
   function clearEditor() {
     clearGesture();
+    clearResizeHandles({forget: true});
     moveClient = null;
     canonicalCurrent = null;
     interaction = null;
@@ -254,6 +333,7 @@ export async function bootTemporaryEditorPreview({
       }
     }
     refreshStoryEditor();
+    redrawResizeHandles();
     if (moveClient) {
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = partialFidelity
@@ -366,10 +446,21 @@ export async function bootTemporaryEditorPreview({
     if (!svg || !interaction) return;
     try {
       const point = temporaryEditorPagePoint(svg, event.clientX, event.clientY);
-      const visualId = event.target?.closest?.("[data-node-id]")?.getAttribute?.("data-node-id");
-      const hit = hitTestSnapshot(interaction, svg.getAttribute("data-page-id"), point);
-      if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
-      gesture = new MoveGestureV1(interaction, hit.node_id, point);
+      const resizeHandle = event.target?.closest?.("[data-temporary-resize-handle]");
+      if (resizeHandle) {
+        const nodeId = resizeHandle.getAttribute("data-node-id");
+        const handle = resizeHandle.getAttribute("data-temporary-resize-handle");
+        const candidate = resizeCandidate(nodeId);
+        if (!candidate || nodeId !== selectedResizeNodeId ||
+            svg.getAttribute("data-page-id") !== selectedResizePageId) return;
+        gesture = new ResizeTransactionV1(nodeId, candidate.bounds, handle, point);
+      } else {
+        const visualId = event.target?.closest?.("[data-node-id]")?.getAttribute?.("data-node-id");
+        const hit = hitTestSnapshot(interaction, svg.getAttribute("data-page-id"), point);
+        if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
+        gesture = new MoveGestureV1(interaction, hit.node_id, point);
+        drawResizeHandles(svg, hit.node_id);
+      }
       gesturePage = svg;
       overlayBounds(gesture.previewBounds());
       pages.setPointerCapture?.(event.pointerId);
@@ -391,24 +482,33 @@ export async function bootTemporaryEditorPreview({
     if (!gesture || !moveClient || editBusy || busy) return;
     const active = gesture;
     const pageSvg = gesturePage;
+    let update;
     try {
-      active.update(temporaryEditorPagePoint(pageSvg, event.clientX, event.clientY));
+      update = active.update(temporaryEditorPagePoint(pageSvg, event.clientX, event.clientY));
     } catch { clearGesture(); return; }
+    const resizing = active instanceof ResizeTransactionV1;
     const next = active.previewBounds();
     const old = interaction.nodes.find(n => n.node_id === active.nodeId)?.bounds;
     clearGesture();
-    if (!old || !next || (old.x === next.x && old.y === next.y)) return;
+    if (!old || !next || update?.kind === "invalid" ||
+        (resizing
+          ? (old.width === next.width && old.height === next.height)
+          : (old.x === next.x && old.y === next.y))) return;
     editBusy = true;
     controls();
     status.textContent = "Сохраняется каноническая правка…";
     try {
-      const result = await moveClient.moveNode({
-        nodeId: active.nodeId, xEmu: next.x, yEmu: next.y,
-      });
+      const result = resizing
+        ? await moveClient.resizeNode({nodeId: active.nodeId, bounds: next})
+        : await moveClient.moveNode({
+            nodeId: active.nodeId, xEmu: next.x, yEmu: next.y,
+          });
       canonicalCurrent = result.current;
       const exactScene = await moveClient.readerScene();
       const updated = exactScene.nodes.find(n => n.node_id === active.nodeId);
-      if (!updated || updated.bounds?.x !== next.x || updated.bounds?.y !== next.y) {
+      if (!updated || updated.bounds?.x !== next.x || updated.bounds?.y !== next.y ||
+          (resizing && (updated.bounds?.width !== next.width ||
+            updated.bounds?.height !== next.height))) {
         throw new Error("temporary_scene_geometry_mismatch");
       }
       interaction = projectReaderSceneToEditorInteractionScene(exactScene);
@@ -416,6 +516,7 @@ export async function bootTemporaryEditorPreview({
         maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
       });
       refreshStoryEditor();
+      redrawResizeHandles();
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = "Правка сохранена в ревизии. Можно скачать изменённый IDML, ODG или PDF." +
         (partialFidelity ? " Needs review / Partial: результат необходимо проверить." : "");
@@ -539,6 +640,12 @@ export async function bootTemporaryEditorPreview({
     pages.addEventListener("pointermove", pointerMove);
     pages.addEventListener("pointerup", pointerUp);
     pages.addEventListener("pointercancel", clearGesture);
+    pages.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        clearGesture();
+        clearResizeHandles({forget: true});
+      }
+    });
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
     pdfButton?.addEventListener("click", () => download("pdf"));

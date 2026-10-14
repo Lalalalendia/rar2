@@ -85,6 +85,7 @@ def main() -> int:
             "/editor/temporary-edit-move-client-v1.mjs",
             "/editor/text-protocol-v1.mjs",
             "/editor/story-line-endings-v1.mjs",
+            "/editor/resize-gesture-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
             "/cloud-reader/render-v1.mjs",
             "/v1/editor/temporary-sessions",

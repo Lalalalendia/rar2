@@ -14,7 +14,7 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId,
+    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, RectEmu, Sha256Digest, StoryId,
     open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
@@ -52,6 +52,24 @@ pub struct IsolatedMoveNodeReceiptV1 {
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedResizeNodeIntentV1 {
+    pub node_id: String,
+    pub x_emu: i64,
+    pub y_emu: i64,
+    pub width_emu: i64,
+    pub height_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedResizeNodeReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IsolatedStoryRangeIntentV1 {
@@ -108,6 +126,7 @@ pub struct IsolatedReaderSceneReceiptV1 {
 const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
+const MAX_RESIZE_INTENT_BYTES: u64 = 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EDITED_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EDITED_LOSS_REPORT_BYTES: usize = 64 * 1024;
@@ -360,6 +379,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_node: Option<IsolatedMoveNodeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resize_node: Option<IsolatedResizeNodeReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub story_range: Option<IsolatedStoryRangeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
@@ -428,6 +449,7 @@ fn take_exclusive_story_range_receipt(
 ) -> Result<(IsolatedStoryRangeReceiptV1, Value), ProductReplayWorkerError> {
     if receipt.baseline_project.is_some()
         || receipt.move_node.is_some()
+        || receipt.resize_node.is_some()
         || receipt.reader_scene.is_some()
         || receipt.editable_export.is_some()
     {
@@ -511,9 +533,30 @@ pub fn validate_product_replay_receipt(
             "isolated MoveNode receipt violates source and project identity",
         ));
     }
+    if let Some(resize) = &receipt.resize_node
+        && (receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.editable_export.is_some()
+            || !matches!(resize.operation, EditOperation::ResizeNode { .. })
+            || resize.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&resize.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated ResizeNode project cannot be canonically hashed",
+                )
+            })? != resize.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated ResizeNode receipt violates source or project identity",
+        ));
+    }
     if let Some(text) = &receipt.story_range
         && (receipt.baseline_project.is_some()
             || receipt.move_node.is_some()
+            || receipt.resize_node.is_some()
             || receipt.reader_scene.is_some()
             || !matches!(text.operation, EditOperation::ReplaceStoryRange { .. })
             || text.resulting_project.source_hash.to_string() != source_sha256
@@ -538,6 +581,7 @@ pub fn validate_product_replay_receipt(
         })?;
         if receipt.baseline_project.is_some()
             || receipt.move_node.is_some()
+            || receipt.resize_node.is_some()
             || receipt.story_range.is_some()
             || !valid_revision_id(&scene.revision_id)
             || !valid_revision_id(&scene.baseline_revision_id)
@@ -870,6 +914,7 @@ pub fn run_product_replay_worker(
     reader_scene_intent: Option<IsolatedReaderSceneIntentV1>,
     story_intent_path: Option<&Path>,
     editable_export_target: Option<&str>,
+    resize_intent_path: Option<&Path>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -886,11 +931,18 @@ pub fn run_product_replay_worker(
         + usize::from(reader_scene_intent.is_some())
         + usize::from(story_intent_path.is_some())
         + usize::from(editable_export_target.is_some())
+        + usize::from(resize_intent_path.is_some())
         > 1
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_identity_invalid",
             "isolated Product worker admits only one mutation or Scene command",
+        ));
+    }
+    if resize_intent_path.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_resize_node_invalid",
+            "ResizeNode requires an authorized exact base project",
         ));
     }
     if story_intent_path.is_some() && project_path.is_none() {
@@ -1040,6 +1092,30 @@ pub fn run_product_replay_worker(
 
     // The Story replacement is private input, never copied into process argv,
     // CI receipts or command-line telemetry. Read only before seccomp deny.
+    let resize_intent = if let Some(path) = resize_intent_path {
+        let bytes = read_bounded(path, MAX_RESIZE_INTENT_BYTES)?;
+        let intent: IsolatedResizeNodeIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "isolated ResizeNode intent is not a typed private JSON envelope",
+            )
+        })?;
+        if intent.node_id.is_empty()
+            || intent.node_id.len() > 128
+            || intent.width_emu <= 0
+            || intent.height_emu <= 0
+            || intent.x_emu.checked_add(intent.width_emu).is_none()
+            || intent.y_emu.checked_add(intent.height_emu).is_none()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "isolated ResizeNode intent has non-positive or overflowed bounds",
+            ));
+        }
+        Some(intent)
+    } else {
+        None
+    };
     let story_intent = if let Some(path) = story_intent_path {
         let bytes = read_bounded(path, MAX_STORY_INTENT_BYTES)?;
         let intent: IsolatedStoryRangeIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
@@ -1190,6 +1266,61 @@ pub fn run_product_replay_worker(
             )
         })?;
         Some(IsolatedMoveNodeReceiptV1 {
+            operation,
+            resulting_project,
+            resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
+    let resize_node = if let Some(intent) = resize_intent {
+        let node_id: NodeId =
+            serde_json::from_value(Value::String(intent.node_id)).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_resize_node_invalid",
+                    "ResizeNode target is not a canonical node identifier",
+                )
+            })?;
+        let bounds = RectEmu::new(
+            LengthEmu::new(intent.x_emu),
+            LengthEmu::new(intent.y_emu),
+            LengthEmu::new(intent.width_emu),
+            LengthEmu::new(intent.height_emu),
+        );
+        let operation = session.resize_node_to(node_id, bounds).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_resize_node_rejected",
+                "isolated canonical EditorSession rejected requested ResizeNode",
+            )
+        })?;
+        if !matches!(operation, EditOperation::ResizeNode { .. }) {
+            return Err(ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "isolated EditorSession emitted an unexpected operation kind",
+            ));
+        }
+        let resulting_project = cloud_revision_project(&session.project());
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_resize_node_invalid",
+                    "isolated ResizeNode cannot be appended to canonical source project",
+                )
+            })?;
+        if expected_project != resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "isolated ResizeNode result differs from canonical event append",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "isolated ResizeNode resulting project has invalid canonical hash",
+            )
+        })?;
+        Some(IsolatedResizeNodeReceiptV1 {
             operation,
             resulting_project,
             resulting_project_sha256,
@@ -1455,6 +1586,7 @@ pub fn run_product_replay_worker(
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
+        resize_node,
         story_range,
         reader_scene,
         editable_export,
@@ -1557,6 +1689,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1592,6 +1725,7 @@ impl IsolatedProductReplayProducer {
                 document_id,
                 source_sha256,
                 source_bytes,
+                None,
                 None,
                 None,
                 None,
@@ -1686,6 +1820,7 @@ impl IsolatedProductReplayProducer {
                 Some(intent),
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1769,6 +1904,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1843,6 +1979,137 @@ impl IsolatedProductReplayProducer {
         Ok((mutation.operation, mutation.resulting_project))
     }
 
+    /// A bounded, page-owned identity-transform ResizeNode, applied only by
+    /// the isolated canonical EditorSession from the exact authorized project.
+    pub async fn resize_node_to(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        base_project: &EditorProject,
+        expected_base_sha256: &str,
+        intent: &IsolatedResizeNodeIntentV1,
+    ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
+        if intent.width_emu <= 0
+            || intent.height_emu <= 0
+            || intent.x_emu.checked_add(intent.width_emu).is_none()
+            || intent.y_emu.checked_add(intent.height_emu).is_none()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "ResizeNode after bounds must be positive and non-overflowing",
+            ));
+        }
+        let project_bytes = serde_json::to_vec(base_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical ResizeNode base project could not be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(base_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "canonical ResizeNode base project hash could not be derived",
+                )
+            })? != expected_base_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "ResizeNode base is not the exact authorized revision",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_base_sha256)),
+                None,
+                None,
+                None,
+                None,
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_base_sha256,
+        )?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.editable_export.is_some()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated ResizeNode returned unrelated authority",
+            ));
+        }
+        let mutation = receipt.resize_node.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated ResizeNode receipt does not contain a mutation",
+            )
+        })?;
+        let node_id: NodeId = serde_json::from_value(Value::String(intent.node_id.clone()))
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_resize_node_invalid",
+                    "ResizeNode target identifier is not canonical",
+                )
+            })?;
+        match &mutation.operation {
+            EditOperation::ResizeNode {
+                node_id: actual_id,
+                after,
+                ..
+            } if *actual_id == node_id
+                && after.x.get() == intent.x_emu
+                && after.y.get() == intent.y_emu
+                && after.width.get() == intent.width_emu
+                && after.height.get() == intent.height_emu => {}
+            _ => {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated ResizeNode differs from authorized intent",
+                ));
+            }
+        }
+        let expected_project =
+            append_event_operation(base_project.clone(), mutation.operation.clone()).map_err(
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "isolated ResizeNode cannot form a canonical project transition",
+                    )
+                },
+            )?;
+        if expected_project != mutation.resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated ResizeNode project differs from exact event append",
+            ));
+        }
+        let graph = require_typed_graph(receipt.authoring_graph)?;
+        let bounds = graph.nodes.get(&node_id).map(|node| node.header.bounds);
+        if !matches!(bounds, Some(bounds) if bounds.x.get() == intent.x_emu
+            && bounds.y.get() == intent.y_emu
+            && bounds.width.get() == intent.width_emu
+            && bounds.height.get() == intent.height_emu)
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated ResizeNode graph does not represent its claimed geometry",
+            ));
+        }
+        Ok((mutation.operation, mutation.resulting_project))
+    }
+
     /// Source-backed, bounded plain Story text. The isolated EditorSession
     /// derives expected_before and owns eligibility; the host verifies the
     /// complete canonical event before any authorized RevisionStream commit.
@@ -1892,6 +2159,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                None,
                 None,
             )
             .await?;
@@ -2002,6 +2270,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(target),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2056,6 +2325,7 @@ impl IsolatedProductReplayProducer {
         reader_scene: Option<&IsolatedReaderSceneIntentV1>,
         story_range: Option<&IsolatedStoryRangeIntentV1>,
         editable_export_target: Option<&str>,
+        resize_node: Option<&IsolatedResizeNodeIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -2072,6 +2342,7 @@ impl IsolatedProductReplayProducer {
             + usize::from(reader_scene.is_some())
             + usize::from(story_range.is_some())
             + usize::from(editable_export_target.is_some())
+            + usize::from(resize_node.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -2097,6 +2368,12 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
                 "unknown edited target",
+            ));
+        }
+        if resize_node.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_resize_node_invalid",
+                "ResizeNode requires a verified exact base project",
             ));
         }
         if story_range.is_some() && project.is_none() {
@@ -2125,10 +2402,26 @@ impl IsolatedProductReplayProducer {
         let source_path = temp.path.join("source.pub");
         let project_path = temp.path.join("project.json");
         let story_intent_path = temp.path.join("story-intent.json");
+        let resize_intent_path = temp.path.join("resize-intent.json");
         let result_dir = temp.path.join("worker-result");
         write_private_replay_input(&source_path, source_bytes).await?;
         if let Some((project_bytes, _)) = project {
             write_private_replay_input(&project_path, project_bytes).await?;
+        }
+        if let Some(intent) = resize_node {
+            let bytes = serde_json::to_vec(intent).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_resize_node_invalid",
+                    "private ResizeNode intent could not be serialized",
+                )
+            })?;
+            if bytes.len() as u64 > MAX_RESIZE_INTENT_BYTES {
+                return Err(ProductReplayWorkerError::new(
+                    "product_resize_node_invalid",
+                    "private ResizeNode intent exceeded limits",
+                ));
+            }
+            write_private_replay_input(&resize_intent_path, &bytes).await?;
         }
         if let Some(intent) = story_range {
             let bytes = serde_json::to_vec(intent).map_err(|_| {
@@ -2192,6 +2485,9 @@ impl IsolatedProductReplayProducer {
         }
         if story_range.is_some() {
             command.arg("--story-intent-json").arg(&story_intent_path);
+        }
+        if resize_node.is_some() {
+            command.arg("--resize-intent-json").arg(&resize_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);

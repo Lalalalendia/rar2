@@ -39,6 +39,10 @@ const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-edito
 const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
 const TEMPORARY_EDIT_MOVE_CLIENT: &[u8] =
     include_bytes!("../../web/temporary-edit-move-client-v1.mjs");
+// This module is the SAME UI-neutral ResizeTransaction used by the desktop
+// and protocol tests, not a second browser-side geometry implementation.
+const TEMPORARY_RESIZE_GESTURE: &[u8] =
+    include_bytes!("../../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -55,7 +59,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 29] = [
+const ASSETS: [EmbeddedAsset; 30] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -201,6 +205,11 @@ const ASSETS: [EmbeddedAsset; 29] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: STORY_LINE_ENDINGS,
     },
+    EmbeddedAsset {
+        name: "resize-gesture-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_RESIZE_GESTURE,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -304,6 +313,7 @@ where
         .route("/editor/text-protocol-v1.mjs", get(text_protocol))
         .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
         .route("/editor/interaction-v1.mjs", get(interaction))
+        .route("/editor/resize-gesture-v1.mjs", get(temporary_resize_gesture))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
             get(interaction_scene),
@@ -390,6 +400,9 @@ async fn temporary_preview_css() -> Response {
 }
 async fn temporary_edit_move_client() -> Response {
     asset_response(&ASSETS[27])
+}
+async fn temporary_resize_gesture() -> Response {
+    asset_response(&ASSETS[29])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -496,6 +509,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), READER_ADAPTER);
+    }
+
+    #[tokio::test]
+    async fn guest_resize_gesture_is_the_canonical_embedded_protocol_module() {
+        let module = std::str::from_utf8(TEMPORARY_PREVIEW_ENTRY).unwrap();
+        assert!(module.contains("./resize-gesture-v1.mjs"));
+        let response = temporary_preview_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/resize-gesture-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEMPORARY_RESIZE_GESTURE);
+        assert!(std::str::from_utf8(TEMPORARY_RESIZE_GESTURE)
+            .unwrap().contains("export class ResizeTransactionV1"));
     }
 
     #[tokio::test]

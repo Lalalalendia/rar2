@@ -30,3 +30,10 @@ button:disabled { opacity: .65; cursor: wait; }
 #temporary-story-select, #temporary-story-text { display: block; width: min(100%, 750px); padding: .55rem; font: inherit; border: 1px solid #94a3b8; border-radius: .3rem; background: #fff; color: inherit; }
 #temporary-story-text { resize: vertical; min-height: 7rem; }
 #temporary-story-select:focus-visible, #temporary-story-text:focus-visible { outline: 3px solid #d79b18; outline-offset: 3px; }
+
+.temporary-resize-handle { fill: #fff; stroke: #205d9a; stroke-width: 2px; pointer-events: all; cursor: nwse-resize; }
+.temporary-resize-handle[data-temporary-resize-handle="top"],
+.temporary-resize-handle[data-temporary-resize-handle="bottom"] { cursor: ns-resize; }
+.temporary-resize-handle[data-temporary-resize-handle="left"],
+.temporary-resize-handle[data-temporary-resize-handle="right"] { cursor: ew-resize; }
+.temporary-resize-handle:focus-visible { stroke: #e2961b; outline: none; }

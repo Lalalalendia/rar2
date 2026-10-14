@@ -517,3 +517,106 @@ test("Guest Story keeps original paragraph positions: reordering a separator is 
     temporaryStoryObservedToCanonicalStory(original, "al\nphabeta"),
     /temporary_story_intent_invalid/);
 });
+
+
+const resizedRect = {x: 80, y: 180, width: 40, height: 60};
+const priorRect = {x: 100, y: 200, width: 10, height: 20};
+const resizedCurrent = {
+  ...after,
+  authoring_graph: {nodes: {[nodeId]: {header: {bounds: resizedRect}}}},
+};
+function resizeAck(replayed = false) {
+  return {
+    ...accepted(replayed),
+    protocol_version: "chaptera.temporary-editor-resize-node.v1",
+    canonical_operation: {
+      kind: "resize_node", node_id: nodeId, before: priorRect, after: resizedRect,
+    },
+  };
+}
+
+test("Guest ResizeNode posts canonical bounded rectangle and reopens exact physical geometry", async () => {
+  const {client, requests} = harness([before, resizeAck(), resizedCurrent]);
+  await client.refresh();
+  const receipt = await client.resizeNode({nodeId, bounds: resizedRect});
+  assert.deepEqual(receipt.current.authoring_graph.nodes[nodeId].header.bounds, resizedRect);
+  assert.equal(receipt.accepted.canonical_operation.kind, "resize_node");
+  assert.deepEqual(requests.map(x => [x.options.method, x.url]), [
+    ["GET", "/v1/editor/temporary-sessions/"+session+"/current"],
+    ["POST", "/v1/editor/temporary-sessions/"+session+"/resize-node"],
+    ["GET", "/v1/editor/temporary-sessions/"+session+"/current"],
+  ]);
+  const sent = JSON.parse(requests[1].options.body);
+  assert.deepEqual(sent, {
+    protocol_version: "chaptera.commit-request.v1",
+    document_id: session, source_hash: source, base_revision_id: beforeRev,
+    client_operation_id: "test-move-1",
+    command: {
+      kind:"resize_node", node_id: nodeId, x_emu:80, y_emu:180,
+      width_emu:40, height_emu:60,
+    },
+  });
+  for (const {url,options} of requests) {
+    assert.equal(options.headers["x-chaptera-reader-session"],bearer);
+    assert.equal(options.headers["x-csrf-token"],csrf);
+    assert.equal(options.credentials,"omit");
+    assert.equal(options.redirect,"error");
+    assert.ok(!url.includes(bearer));
+  }
+});
+
+test("Guest ResizeNode never posts nonpositive, overflowed, unchanged or translation-only bounds", async () => {
+  const {client,requests}=harness([before]);
+  await client.refresh();
+  const failures=[
+    {nodeId, bounds:{...resizedRect,width:0}},
+    {nodeId, bounds:{...resizedRect,height:-1}},
+    {nodeId, bounds:{...resizedRect,x:Number.MAX_SAFE_INTEGER}},
+    {nodeId, bounds:{...priorRect}},
+    {nodeId, bounds:{...priorRect,x:900}},
+    {nodeId:"foreign", bounds:resizedRect},
+  ];
+  for (const item of failures) {
+    await assert.rejects(client.resizeNode(item),/temporary_resize_intent_invalid/);
+  }
+  assert.equal(requests.length,1);
+});
+
+test("Guest ResizeNode lost ACK replays same private operation and fences different edits", async () => {
+  const {client,requests}=harness([before,new TypeError("lost"),resizeAck(true),resizedCurrent]);
+  await client.refresh();
+  await assert.rejects(client.resizeNode({nodeId,bounds:resizedRect}),/lost/);
+  assert.equal(client.status.pending_reconciliation,true);
+  await assert.rejects(client.resizeNode({nodeId,bounds:{...resizedRect,width:50}}),
+    /temporary_move_reconciliation_required/);
+  const recovery=await client.reconcileUnknown();
+  assert.equal(recovery.accepted.replayed,true);
+  const posts=requests.filter(x=>x.options.method==="POST");
+  assert.equal(posts.length,2);
+  assert.equal(posts[0].options.body,posts[1].options.body);
+  assert.equal(client.status.pending_reconciliation,false);
+});
+
+test("Guest ResizeNode forged ACK or mismatched canonical rectangle cannot unlock further writes", async () => {
+  const badAck={...resizeAck(),canonical_operation:{
+    ...resizeAck().canonical_operation,
+    after:{...resizedRect,height:6000},
+  }};
+  const {client: forged}=harness([before,badAck,resizeAck(true),resizedCurrent]);
+  await forged.refresh();
+  await assert.rejects(forged.resizeNode({nodeId,bounds:resizedRect}),
+    /temporary_resize_ack_operation_mismatch/);
+  assert.equal(forged.status.pending_reconciliation,true);
+  await forged.reconcileUnknown();
+
+  const badCurrent={
+    ...resizedCurrent,
+    authoring_graph:{nodes:{[nodeId]:{header:{bounds:{...resizedRect,height:99}}}}},
+  };
+  const {client}=harness([before,resizeAck(),badCurrent,resizeAck(true),resizedCurrent]);
+  await client.refresh();
+  await assert.rejects(client.resizeNode({nodeId,bounds:resizedRect}),
+    /temporary_move_reopened_state_mismatch/);
+  assert.equal(client.status.pending_reconciliation,true);
+  await client.reconcileUnknown();
+});
