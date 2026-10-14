@@ -243,7 +243,7 @@ mod authored_shape_probe {
             let item = report
                 .items
                 .iter()
-                .find(|item| item.origin == Some(origin) && item.feature == feature)
+                .find(|item| item.origin == Some(*origin) && item.feature == feature)
                 .ok_or_else(|| format!("missing {feature} report item"))?;
             if item.disposition != CapabilityLevel::Preserved {
                 return Err(format!("{feature} is not preserved: {:?}", item.disposition).into());
@@ -253,7 +253,7 @@ mod authored_shape_probe {
             .items
             .iter()
             .find(|item| {
-                item.origin == Some(origin) && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
+                item.origin == Some(*origin) && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
             })
             .ok_or("missing authored_shape.z_order report item")?;
         if z_order.disposition != CapabilityLevel::Unsupported {
