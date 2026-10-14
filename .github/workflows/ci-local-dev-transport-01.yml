@@ -1,12 +1,6 @@
 name: CI-LOCAL-DEV-TRANSPORT-01 Windows trusted main fast feedback
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/ci-local-dev-transport-01.yml"
-      - "tools/ci/local_dev_transport.py"
-      - "tools/ci/test_local_dev_transport.py"
-      - "docs/ci-local-dev-transport-01.md"
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
@@ -20,8 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-local-dev-transport-01-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'trusted-main' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-local-dev-transport-01-trusted-main
+  cancel-in-progress: false
 
 jobs:
   # Admission and security checks stay hosted; code from a PR is never sent to the PC.

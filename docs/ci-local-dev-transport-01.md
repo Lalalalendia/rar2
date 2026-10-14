@@ -18,9 +18,9 @@ tokens, deployments secrets, or credentials stored for other jobs. Run it only
 on an isolated machine or properly isolated VM if this PC contains private data;
 self-hosted Actions jobs run repository code with the runner user's OS rights.
 
-The workflow is hourly and manual for trusted `main` only; the workflow also
-runs hosted-only contract tests for PR changes to transport files. No PR workflow
-executes on the PC. Each production run checks out the immutable `github.sha`
+The Windows transport workflow is hourly and manual for trusted `main` only.
+PR changes to the transport are tested by the existing hosted
+`dev-fast-loop-selftest.yml` workflow. No PR workflow executes on the PC. Each production run checks out the immutable `github.sha`
 with full Git history for the last-success SHA comparison, and without persisting
 the GitHub token. The source-safe receipt is uploaded as
 a short-retention artifact; no stdout/stderr, private document, or source bundle
