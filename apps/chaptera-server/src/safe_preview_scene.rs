@@ -525,19 +525,38 @@ mod tests {
                     "page_id": "page-1",
                     "kind": "picture_frame",
                     "resource_id": "star-image",
-                    "bounds": {"x": i * 1_000, "y": (i % 2) * 2_000,
-                               "width": 900, "height": 900}
+                    "bounds": {
+                        "x": (i % 2) * 500_000 + 100_000,
+                        "y": (i / 2) * 550_000 + 100_000,
+                        "width": 190_000,
+                        "height": 180_000
+                    }
                 })
             })
             .collect::<Vec<_>>();
         let mut scene = json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "document_id": "synthetic-four-cmyk-frames",
+            "source_hash": "a".repeat(64),
+            "revision_id": "synthetic-r0",
+            "scene_authority": "unit-test-only",
+            "stacking_fidelity": "source_back_to_front",
             "fidelity": {"state": "partial", "reasons": ["image_resource_not_inline"]},
+            "pages": [{
+                "page_id": "page-1",
+                "order": 0,
+                "width_emu": 1_500_000,
+                "height_emu": 1_500_000
+            }],
             "nodes": frames,
+            "stories": [],
             "resources": [{
                 "resource_id": "star-image",
                 "mime": "image/jpeg",
                 "availability": "descriptor_only"
-            }]
+            }],
+            "fonts": [],
+            "diagnostics": []
         });
         let original_nodes = scene["nodes"].clone();
         admit_host_reencoded_previews(&mut scene, &candidates).unwrap();
@@ -581,6 +600,12 @@ mod tests {
                 .iter()
                 .any(|reason| reason == "image_resource_not_inline")
         );
+
+        // In the hosted browser workflow only, hand the resulting *synthetic*
+        // host-owned derivative directly to Chromium. Never output user assets.
+        if let Ok(path) = std::env::var("CHAPTERA_SYNTHETIC_CMYK_SCENE_OUT") {
+            std::fs::write(path, serde_json::to_vec(&scene).unwrap()).unwrap();
+        }
     }
 
     #[test]
