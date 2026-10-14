@@ -5,7 +5,10 @@ use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
+use pub_model::{
+    AuthorityClass, EMU_PER_POINT, LengthEmu, NodeId, ReadConfidence, SourceDescriptor, SourceRef,
+    SourceRole,
+};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -59,6 +62,22 @@ fn shaped_glyph_sequence_hash(glyphs: &[pub_layout::BoundedShapedGlyph]) -> Resu
         })
         .collect::<Vec<_>>();
     sha256_json_id(&serde_json::json!(normalized))
+}
+
+
+fn authoritative_source_refs<'a>(
+    references: &'a [SourceRef],
+    primary_source: &SourceDescriptor,
+) -> Vec<&'a SourceRef> {
+    references
+        .iter()
+        .filter(|reference| {
+            reference.validate_primary_source(primary_source).is_ok()
+                && reference.authority == AuthorityClass::Authoritative
+                && reference.confidence == Some(ReadConfidence::Exact)
+                && matches!(reference.role, SourceRole::Semantic | SourceRole::Projection)
+        })
+        .collect()
 }
 
 fn report_path_label(path: &Path, fallback: &str) -> String {
@@ -623,11 +642,45 @@ fn build_pdf_artifact(
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        // The converter already owns the same resolved graph used to build
+        // the Viewer scene. Never reparse PUB or guess by object coordinates.
+        let painted = rendered
+            .paint_trace
+            .iter()
+            .map(|event| event.node_origin)
+            .collect::<BTreeSet<_>>();
+        let source_nodes = painted
+            .iter()
+            .map(|node_id| {
+                let source_node = bundle.resolved_graph.nodes.get(node_id);
+                let references = source_node.map_or_else(Vec::new, |node| {
+                    authoritative_source_refs(
+                        &node.header.source_refs,
+                        &bundle.resolved_graph.source,
+                    )
+                });
+                let status = if source_node.is_none() {
+                    "unmapped_projected_node"
+                } else if references.is_empty() {
+                    "no_exact_authoritative_source_ref"
+                } else if references.iter().any(|reference| reference.byte_range.is_some()) {
+                    "exact_source_byte_range"
+                } else {
+                    "exact_source_object_only"
+                };
+                serde_json::json!({
+                    "node_origin": node_id,
+                    "status": status,
+                    "source_refs": references,
+                })
+            })
+            .collect::<Vec<_>>();
         serde_json::json!({
             "schema_version": "chaptera.pdf-paint-trace.v1",
             "candidate_pdf_sha256": pdf_sha256,
             "pages": &rendered.report.pages,
             "paint_trace": &rendered.paint_trace,
+            "source_nodes": source_nodes,
         })
     });
 
@@ -643,12 +696,56 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        fixed_image_placement_has_output_semantics, report_path_label, retain_scene_node_ids,
+        authoritative_source_refs, fixed_image_placement_has_output_semantics, report_path_label,
+        retain_scene_node_ids,
     };
     use pub_model::{CanonicalId, NodeId};
     use pub_viewer::{ViewerImagePlacementV1, ViewerImageRecolorV1, ViewerImageSourceWindowV1};
     use std::collections::BTreeSet;
     use std::path::Path;
+
+
+    #[test]
+    fn pdf_source_refs_require_validated_exact_primary_authority() {
+        use pub_model::{
+            AuthorityClass, ByteRange, ReadConfidence, Sha256Digest, SourceDescriptor, SourceRef,
+            SourceRole,
+        };
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("2c".into()),
+            adapter_version: "synthetic-v1".into(),
+            source_hash: Sha256Digest::from_bytes([7; 32]),
+        };
+        let exact = SourceRef {
+            format: source.format.clone(),
+            adapter_version: source.adapter_version.clone(),
+            source_hash: source.source_hash,
+            carrier: "PUB/Contents".into(),
+            object_key: Some("synthetic-seq".into()),
+            path: Some("SpContainer/FOPT".into()),
+            byte_range: Some(ByteRange::new(30, 12)),
+            role: SourceRole::Semantic,
+            authority: AuthorityClass::Authoritative,
+            confidence: Some(ReadConfidence::Exact),
+        };
+        let mut stale = exact.clone();
+        stale.source_hash = Sha256Digest::from_bytes([8; 32]);
+        let mut derived = exact.clone();
+        derived.authority = AuthorityClass::Derived;
+        let mut unknown = exact.clone();
+        unknown.confidence = Some(ReadConfidence::Inferred);
+        let mut cache = exact.clone();
+        cache.role = SourceRole::Cache;
+        let mut overflowing = exact.clone();
+        overflowing.byte_range = Some(ByteRange::new(u64::MAX, 1));
+        let collected = authoritative_source_refs(
+            &[exact.clone(), stale, derived, unknown, cache, overflowing],
+            &source,
+        );
+        assert_eq!(collected, vec![&exact]);
+        assert!(exact.validate_primary_source(&source).is_ok());
+    }
 
     #[test]
     fn report_label_drops_parent_directories() {
