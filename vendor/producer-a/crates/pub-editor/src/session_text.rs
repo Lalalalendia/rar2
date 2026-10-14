@@ -609,6 +609,40 @@ pub(super) fn apply_text_format_history_operation_v1(
     Ok(receipt.after_state)
 }
 
+impl EditorSession {
+    pub fn create_text_box(
+        &mut self,
+        node_id: NodeId,
+        story_id: StoryId,
+        page_id: PageId,
+        bounds: RectEmu,
+        text_preset: AuthoringTextPresetV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        validate_create_text_box_candidate(
+            &self.graph,
+            node_id,
+            story_id,
+            page_id,
+            bounds,
+            &text_preset,
+        )?;
+
+        let operation = EditOperation::CreateTextBox {
+            node_id,
+            story_id,
+            page_id,
+            bounds,
+            text_preset,
+        };
+        apply_forward(&mut self.graph, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+}
+
 #[cfg(test)]
 mod font_resource_session_tests {
     use super::*;
@@ -1161,39 +1195,5 @@ mod font_resource_session_tests {
                 .unwrap(),
             hash
         );
-    }
-}
-
-impl EditorSession {
-    pub fn create_text_box(
-        &mut self,
-        node_id: NodeId,
-        story_id: StoryId,
-        page_id: PageId,
-        bounds: RectEmu,
-        text_preset: AuthoringTextPresetV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        validate_create_text_box_candidate(
-            &self.graph,
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            &text_preset,
-        )?;
-
-        let operation = EditOperation::CreateTextBox {
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            text_preset,
-        };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
     }
 }
