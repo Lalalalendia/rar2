@@ -327,19 +327,27 @@ pub(crate) fn admit_host_reencoded_previews(
         {
             return Err("safe_preview_receipt_mismatch");
         }
+        // The hash is of the fresh host-encoded SafePreview derivative;
+        // never reuse the source PUB container or an untrusted worker URL.
+        let artifact_sha256 = preview.receipt.encoded_artifact_sha256.clone();
+        let derivative_id = format!("safe-preview:{}", preview.receipt.encode_spec_sha256);
+        let byte_len = preview.bytes.len();
         let url = format!(
             "data:{};base64,{}",
             preview.receipt.mime,
-            BASE64.encode(preview.bytes)
+            BASE64.encode(&preview.bytes)
         );
-        admitted_urls.push((index, url));
+        admitted_urls.push((index, url, artifact_sha256, derivative_id, byte_len));
     }
 
     let mut admitted_count = 0usize;
-    for (index, url) in admitted_urls {
+    for (index, url, artifact_sha256, derivative_id, byte_len) in admitted_urls {
         let old = scene["resources"][index].clone();
         scene["resources"][index]["availability"] = json!("inline_data_url");
         scene["resources"][index]["inline_data_url"] = json!(url);
+        scene["resources"][index]["encoded_artifact_sha256"] = json!(artifact_sha256);
+        scene["resources"][index]["derivative_id"] = json!(derivative_id);
+        scene["resources"][index]["byte_len"] = json!(byte_len);
         let serialized =
             serde_json::to_vec(&*scene).map_err(|_| "safe_preview_scene_serialization_failed")?;
         // Leave headroom for the final partial-fidelity diagnostic.
@@ -454,6 +462,23 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
+        let data_url = scene["resources"][0]["inline_data_url"].as_str().unwrap();
+        let encoded = BASE64.decode(data_url.split_once(',').unwrap().1).unwrap();
+        let artifact_sha256 = sha256_hex(&encoded);
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"].as_str(),
+            Some(artifact_sha256.as_str())
+        );
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"].as_str(),
+            Some(candidates[0].encoded_artifact_sha256.as_str())
+        );
+        let derivative = format!("safe-preview:{}", candidates[0].encode_spec_sha256);
+        assert_eq!(
+            scene["resources"][0]["derivative_id"].as_str(),
+            Some(derivative.as_str())
+        );
+        assert_eq!(scene["resources"][0]["byte_len"].as_u64(), Some(encoded.len() as u64));
         assert_eq!(scene["fidelity"]["state"], "partial");
         assert!(
             scene["fidelity"]["reasons"]

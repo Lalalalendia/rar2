@@ -133,18 +133,33 @@ export async function adaptReaderSceneToEditorScene(readerScene) {
     });
   }
 
-  const imageResources = [...(readerScene.resources ?? [])].map((resource) => ({
-    resource_id: resource.resource_id,
-    kind: "image",
-    mime: resource.mime,
-    content_hash: null,
-    byte_len: null,
-    availability: resource.availability,
-    fetch_handle: null,
-    inline_data_url: resource.inline_data_url ?? null,
-    expected_sha256: null,
-    family_name: null,
-  }));
+  const imageResources = [...(readerScene.resources ?? [])].map((resource) => {
+    // This is the host-reencoded SafePreview artifact hash, NOT a PUB source hash.
+    // Legacy Reader Scenes without a receipt stay unschedulable by exact identity.
+    const artifactHash = resource.encoded_artifact_sha256 ?? null;
+    if (artifactHash !== null && (
+      typeof artifactHash !== "string" || !/^[0-9a-f]{64}$/.test(artifactHash) ||
+      resource.availability !== "inline_data_url" ||
+      typeof resource.inline_data_url !== "string" ||
+      !Number.isSafeInteger(resource.byte_len) || resource.byte_len <= 0 ||
+      typeof resource.derivative_id !== "string" || !resource.derivative_id
+    )) {
+      throw new TypeError("Reader SafePreview encoded artifact identity is invalid");
+    }
+    return {
+      resource_id: resource.resource_id,
+      kind: "image",
+      mime: resource.mime,
+      content_hash: artifactHash,
+      byte_len: artifactHash === null ? null : resource.byte_len,
+      derivative_id: artifactHash === null ? "original" : resource.derivative_id,
+      availability: resource.availability,
+      fetch_handle: null,
+      inline_data_url: resource.inline_data_url ?? null,
+      expected_sha256: null,
+      family_name: null,
+    };
+  });
   const fontResources = [...(readerScene.fonts ?? [])].map((font) => ({
     resource_id: font.resource_id,
     kind: "font",
