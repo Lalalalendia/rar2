@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 from PIL import Image
-from tools.cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid
+from cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid
 
 SOURCE_SHA = "0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a"
 SOURCE_BYTES = 1019904
