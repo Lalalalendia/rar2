@@ -396,14 +396,15 @@ export class TemporaryGuestMoveClientV1 {
     return response.scene;
   }
 
-  // A private edited-revision report or physical download, never original PUB.
+  // Private current-revision reports/downloads: pristine PDF is allowed.
+  // Original PUB bytes are never downloaded here.
   // Only query-bound public revision identities appear in the URL, never bearer.
   async exportEdited(target, { reportOnly = false, expectedSha256 = null } = {}) {
     if (!["idml", "odg", "pdf", "pdf9up"].includes(target)) {
       throw failure("temporary_export_target_invalid");
     }
     if (this.#busy || this.#pending || this.#refreshRequired ||
-        !this.#current || this.#current.revision_cursor === 0) {
+        !this.#current || (this.#current.revision_cursor === 0 && target !== "pdf")) {
       throw failure("temporary_export_current_required");
     }
     if (expectedSha256 !== null && (reportOnly || !SECRET.test(expectedSha256))) {

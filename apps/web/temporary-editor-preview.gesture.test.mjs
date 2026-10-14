@@ -53,7 +53,7 @@ function fakeDom() {
     "temporary-start", "temporary-resume", "temporary-forget",
     "temporary-status", "temporary-expiry", "temporary-pages",
     "temporary-export-actions", "temporary-download-idml", "temporary-download-odg",
-    "temporary-download-pdf9up",
+    "temporary-download-pdf", "temporary-download-pdf9up",
   ];
   const nodes = {};
   for (const id of ids) {
@@ -126,6 +126,12 @@ function server(classification = "supported", card = false) {
         source_sha256: source, expires_at_ms: 4_600_000,
         scene: scene(beforeRev),
       });
+      // Resume reads the same stored Guest session without another upload.
+      if (url === "/v1/reader/guest-sessions/" + id + "/scene") return response({
+        protocol_version: "chaptera.reader-guest-session.v1",
+        session_id: id, classification, source_sha256: source,
+        expires_at_ms: 4_600_000, scene: scene(beforeRev),
+      });
       if (url === base + "/current") return response(
         moved ? current(afterRev, 1, moved.x_emu, moved.y_emu) :
           current(beforeRev, 0, 100, 200),
@@ -170,6 +176,10 @@ test("real guest UI pointer drag posts once and renders exact revised Scene", as
   await controller.start({ name: "example.pub", size: 1729 });
   assert.equal(renders.length, 1);
   assert.equal(renders[0].revision_id, beforeRev);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false,
+    "baseline PDF can be downloaded without a MoveNode");
+  assert.equal(dom.nodes["temporary-download-pdf"].textContent, "Скачать PDF");
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
   dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
   dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(150, 260));
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
@@ -180,6 +190,8 @@ test("real guest UI pointer drag posts once and renders exact revised Scene", as
   assert.equal(renders[1].nodes[0].bounds.y, 260);
   assert.match(dom.nodes["temporary-status"].textContent, /Правка сохранена/);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false);
+  assert.equal(dom.nodes["temporary-download-pdf"].textContent, "Скачать изменённый PDF");
   assert.ok(network.calls.every(x => !x.url.includes(token)));
 });
 
@@ -196,7 +208,50 @@ test("click-only selection never writes a revision", async () => {
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
   assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, false,
+    "click-only selection must not create an edit to unlock PDF");
 });
+
+for (const classification of ["supported", "partial"]) {
+  test("guest " + classification + " reopens baseline PDF after page reload without new upload or revision", async () => {
+    const sharedStorage = storage(), network = server(classification);
+    const first = fakeDom(), second = fakeDom();
+    const settings = {
+      cryptoObject: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+      storage: sharedStorage, fetchImpl: network.fetchImpl,
+      renderer: async () => {},
+    };
+    const opened = await bootTemporaryEditorPreview({
+      ...settings, documentObject: first.documentObject,
+    });
+    await opened.start({ name: "saved.pub", size: 1729 });
+    const initialExpiry = first.nodes["temporary-expiry"].textContent;
+    assert.equal(first.nodes["temporary-download-pdf"].disabled, false);
+    assert.equal(first.nodes["temporary-download-idml"].disabled, true);
+    const resumed = await bootTemporaryEditorPreview({
+      ...settings, documentObject: second.documentObject,
+    });
+    await resumed.resume();
+    assert.equal(second.nodes["temporary-download-pdf"].disabled, false);
+    assert.equal(second.nodes["temporary-download-pdf"].textContent, "Скачать PDF");
+    assert.equal(second.nodes["temporary-download-idml"].disabled, true);
+    assert.equal(second.nodes["temporary-download-odg"].disabled, true);
+    assert.equal(second.nodes["temporary-expiry"].textContent, initialExpiry,
+      "read-only Resume must not extend the server's one-hour TTL");
+    assert.equal(network.calls.filter(x => x.url ===
+      "/v1/editor/temporary-sessions" && x.options.method === "POST").length, 1,
+      "refresh/resume must never mint an extra temporary session");
+    assert.equal(network.calls.filter(x => x.url.endsWith("/content")).length, 1);
+    assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 0);
+    assert.equal(network.calls.filter(x => x.url ===
+      "/v1/reader/guest-sessions/" + id + "/scene").length, 1);
+    if (classification === "partial") {
+      assert.match(second.nodes["temporary-status"].textContent, /Needs review \/ Partial/);
+    }
+    assert.ok(network.calls.every(x => !x.url.includes(token)),
+      "the private capability must not leak into request URLs");
+  });
+}
 
 test("partial real source retains a visible Needs review fence during edit", async () => {
   const dom = fakeDom(), network = server("partial");
@@ -230,6 +285,7 @@ test("unsupported upload never requests authoring state or permits a move", asyn
   await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
   assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 0);
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true);
+  assert.equal(dom.nodes["temporary-download-pdf"].disabled, true);
 });
 
 
