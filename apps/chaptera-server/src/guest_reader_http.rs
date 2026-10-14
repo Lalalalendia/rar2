@@ -1129,6 +1129,17 @@ async fn temporary_editor_current(
     temporary_editor_current_inner(&state, &session_id, &headers).await
 }
 
+/// Only these existing canonical edit kinds may be reconstructed from an
+/// anonymous temporary session. The policy is narrower than EditorSession.
+fn temporary_editor_replay_operation_admitted(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::MoveNode { .. }
+            | EditOperation::ReplaceStoryRange { .. }
+            | EditOperation::ResizeNode { .. }
+    )
+}
+
 /// Shared private canonical Current replay. HTTP GET and Guest mutation each
 /// charge one rate-limit admission, never two admissions for the same action.
 async fn temporary_editor_current_inner(
@@ -1203,10 +1214,7 @@ async fn temporary_editor_current_inner(
                 "temporary_editor_revision_invalid",
             ));
         }
-        if !matches!(
-            event.operation,
-            EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
-        ) {
+        if !temporary_editor_replay_operation_admitted(&event.operation) {
             return Err(GuestReaderError::unprocessable(
                 "temporary_editor_revision_unsupported",
             ));
@@ -3927,6 +3935,27 @@ mod tests {
             report_only: true,
         };
         assert!(validate_temporary_export_query("odg", &malformed).is_err());
+    }
+
+    #[test]
+    fn temporary_current_replays_resize_but_rejects_unrelated_edit_kinds() {
+        let resize: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "resize_node",
+            "node_id": "20000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 5000, "height": 2000},
+            "after": {"x": 0, "y": 0, "width": 5100, "height": 2000}
+        }))
+        .unwrap();
+        assert!(temporary_editor_replay_operation_admitted(&resize));
+
+        let other: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_text",
+            "story_id": "20000000-0000-4000-8000-000000000002",
+            "before": "old",
+            "after": "new"
+        }))
+        .unwrap();
+        assert!(!temporary_editor_replay_operation_admitted(&other));
     }
 
     #[test]
