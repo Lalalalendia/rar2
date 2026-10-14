@@ -6,6 +6,7 @@ on:
       - "apps/chaptera-server/src/safe_preview_scene.rs"
       - "apps/cloud-reader/real-browser.test.mjs"
       - "tools/run_cloud_reader_live_acceptance.py"
+      - "tools/run_reader_sbdc034_host_acceptance.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -767,6 +768,20 @@ jobs:
           assert summary["all_host_and_chromium_accepted"]
           PY
 
+      - name: Verify exact existing SBDC 034 four red picture placements in real HTTPS Chromium
+        env:
+          EXACT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_reader_sbdc034_host_acceptance.py
+          python tools/run_reader_sbdc034_host_acceptance.py \
+            --corpus "out/pinned1050/materialized/native" \
+            --fingerprint "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json" \
+            --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --caddy "/tmp/chaptera-safe-preview-022/caddy" \
+            --repository-commit "$EXACT_COMMIT_SHA" \
+            --receipt-out "target/safe-preview-022-visual/sbdc034-real-host.json"
+
       - name: Retain only source-free visual and HTTPS receipts
         if: always()
         uses: actions/upload-artifact@v4
@@ -776,6 +791,7 @@ jobs:
             target/safe-preview-022-visual/summary.json
             target/safe-preview-022-visual/controls.json
             target/safe-preview-022-visual/host-001-023.json
+            target/safe-preview-022-visual/sbdc034-real-host.json
             target/safe-preview-022-live/receipt.json
           if-no-files-found: warn
           retention-days: 30
