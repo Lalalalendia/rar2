@@ -483,6 +483,10 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
             post(temporary_editor_resize_node),
         )
         .route(
+            "/v1/editor/temporary-sessions/{session_id}/create-shape",
+            post(temporary_editor_create_shape),
+        )
+        .route(
             "/v1/editor/temporary-sessions/{session_id}/scene",
             get(temporary_editor_scene),
         )
@@ -817,6 +821,147 @@ fn temporary_resize_accepted(
     }))
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditorCreateShapeRequest {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: TemporaryCreateShapeIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryCreateShapeIntent {
+    kind: String,
+    page_id: String,
+    x_emu: i64,
+    y_emu: i64,
+    width_emu: i64,
+    height_emu: i64,
+    fill_rgb: [u8; 3],
+    stroke_rgb: [u8; 3],
+    stroke_width_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorCreateShapeAccepted {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    client_operation_id: String,
+    canonical_operation: EditOperation,
+    expires_at_ms: i64,
+    replayed: bool,
+    scene_refresh: &'static str,
+}
+
+fn validate_temporary_create_shape_request(
+    request: &TemporaryEditorCreateShapeRequest,
+    path_session_id: &str,
+) -> Result<(), GuestReaderError> {
+    if request.protocol_version != "chaptera.commit-request.v1"
+        || !is_temporary_edit_session(path_session_id)
+        || request.document_id != path_session_id
+        || request.command.kind != "create_shape"
+    {
+        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_request_invalid"));
+    }
+    if request.client_operation_id.is_empty()
+        || request.client_operation_id.len() > 160
+        || !request.client_operation_id.bytes().all(|ch|
+            ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'_' | b':' | b'-'))
+        || request.command.page_id.len() != 36
+        || serde_json::from_value::<pub_editor::PageId>(
+            Value::String(request.command.page_id.clone()),
+        ).is_err()
+        || request.command.x_emu < 0
+        || request.command.y_emu < 0
+        || request.command.width_emu <= 0
+        || request.command.height_emu <= 0
+        || request.command.stroke_width_emu <= 0
+        || request.command.stroke_width_emu > 1_000_000
+        || request.command.x_emu.checked_add(request.command.width_emu).is_none()
+        || request.command.y_emu.checked_add(request.command.height_emu).is_none()
+    {
+        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_intent_invalid"));
+    }
+    let valid_hash = |value: &str| {
+        value.len() == 64
+            && value.bytes().all(|ch| ch.is_ascii_digit() || matches!(ch, b'a'..=b'f'))
+    };
+    if !valid_hash(&request.source_hash)
+        || !request.base_revision_id.strip_prefix("sha256:").is_some_and(valid_hash)
+    {
+        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_revision_invalid"));
+    }
+    Ok(())
+}
+
+fn temporary_create_shape_request_hash(
+    request: &TemporaryEditorCreateShapeRequest,
+) -> Result<String, GuestReaderError> {
+    // Deterministic idempotency includes every browser intent field, but not
+    // the newly minted server-side authored UUIDv7.
+    let bytes = canonical_revision_json_v1(request)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_create_shape_hash_failed"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn temporary_create_shape_accepted(
+    edge: RevisionEdge,
+    binding: RevisionIdentityBinding,
+    expires_at_ms: i64,
+    replayed: bool,
+) -> Result<GuestJson<TemporaryEditorCreateShapeAccepted>, GuestReaderError> {
+    if edge.document_id != binding.document_id
+        || edge.child_revision != binding.service_revision_id
+        || binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1
+    {
+        return Err(GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"));
+    }
+    let event = decode_editor_revision_event_v1(&edge)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"))?;
+    if !matches!(event.operation, EditOperation::CreateShape { .. }) {
+        return Err(GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"));
+    }
+    Ok(GuestJson(TemporaryEditorCreateShapeAccepted {
+        protocol_version: "chaptera.temporary-editor-create-shape.v1",
+        document_id: edge.document_id,
+        source_hash: event.source_sha256,
+        base_revision_id: edge.parent_revision,
+        revision_id: edge.child_revision,
+        canonical_authoring_revision_id: binding.canonical_revision_id,
+        client_operation_id: edge.operation_id,
+        canonical_operation: event.operation,
+        expires_at_ms,
+        replayed,
+        scene_refresh: "current",
+    }))
+}
+
+/// All node IDs are minted by the server; browser geometry never becomes a
+/// shape ID and duplicate retries reconcile by client operation ID first.
+fn temporary_author_uuid_v7(now_ms: i64) -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    let millis = u64::try_from(now_ms).unwrap_or(0).to_be_bytes();
+    bytes[..6].copy_from_slice(&millis[2..]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemporaryEditorStoryRangeRequest {
@@ -1137,6 +1282,7 @@ fn temporary_editor_replay_operation_admitted(operation: &EditOperation) -> bool
         EditOperation::MoveNode { .. }
             | EditOperation::ReplaceStoryRange { .. }
             | EditOperation::ResizeNode { .. }
+            | EditOperation::CreateShape { .. }
     )
 }
 
@@ -1995,6 +2141,236 @@ async fn temporary_editor_resize_node(
                 .await
                 .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
             temporary_resize_accepted(edge, identity, expiry, true)
+        }
+        AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        )),
+    }
+}
+
+async fn temporary_editor_create_shape(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<TemporaryEditorCreateShapeRequest>,
+) -> Result<GuestJson<TemporaryEditorCreateShapeAccepted>, GuestReaderError> {
+    validate_temporary_create_shape_request(&request, &session_id)?;
+    let request_hash = temporary_create_shape_request_hash(&request)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(request.source_hash.as_str()) {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+
+    // Reconcile an already accepted operation BEFORE the current-head check.
+    // It must not insert a second event or extend the session's expiry.
+    if let Some(existing) = backend
+        .revisions
+        .read_edge_by_operation(&session_id, &request.client_operation_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?
+    {
+        if existing.request_hash != request_hash
+            || existing.parent_revision != request.base_revision_id
+        {
+            return Err(GuestReaderError::conflict(
+                "temporary_editor_operation_id_conflict",
+            ));
+        }
+        let binding = backend
+            .revisions
+            .require_revision_identity(&session_id, &existing.child_revision)
+            .await
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        return temporary_create_shape_accepted(existing, binding, session.expires_at_ms, true);
+    }
+
+    // Current uses the existing isolated worker and the existing contiguous
+    // RevisionStream replay; no untrusted PUB parser runs inside Axum.
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if request.base_revision_id != current.revision_id {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        ));
+    }
+    if current.revision_cursor >= MAX_TEMPORARY_EDITOR_REVISIONS as i64 {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_revision_limit",
+        ));
+    }
+
+    // The original immutable PUB's isolated canonical page graph decides
+    // eligibility; do not trust a browser-provided page size or node identity.
+    let page_id: pub_editor::PageId = serde_json::from_value(Value::String(
+        request.command.page_id.clone(),
+    )).map_err(|_| GuestReaderError::bad_request("temporary_editor_create_shape_page_invalid"))?;
+    let page = current.authoring_graph.pages.get(&page_id).ok_or_else(|| {
+        GuestReaderError::unprocessable("temporary_editor_create_shape_page_missing")
+    })?;
+    if request.command.x_emu.checked_add(request.command.width_emu)
+        .is_none_or(|x| x > page.size.width.get())
+        || request.command.y_emu.checked_add(request.command.height_emu)
+            .is_none_or(|y| y > page.size.height.get())
+    {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_create_shape_page_bounds_invalid",
+        ));
+    }
+
+    let before_project_sha256 = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+
+    // At most two concurrent anonymous isolated workers. The host never
+    // derives source geometry eligibility from browser-provided data.
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let (operation, resulting_project) = backend
+        .worker
+        .create_shape(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &before_project_sha256,
+            &IsolatedCreateShapeIntentV1 {
+                node_id: temporary_author_uuid_v7(now),
+                page_id: request.command.page_id.clone(),
+                x_emu: request.command.x_emu,
+                y_emu: request.command.y_emu,
+                width_emu: request.command.width_emu,
+                height_emu: request.command.height_emu,
+                fill_rgb: request.command.fill_rgb,
+                stroke_rgb: request.command.stroke_rgb,
+                stroke_width_emu: request.command.stroke_width_emu,
+            },
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_create_shape_invalid" | "product_create_shape_rejected" => {
+                GuestReaderError::unprocessable("temporary_editor_create_shape_rejected")
+            }
+            _ => GuestReaderError::internal("temporary_editor_worker_failed"),
+        })?;
+    if !matches!(operation, EditOperation::CreateShape { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_worker_receipt_invalid",
+        ));
+    }
+    let after_project_sha256 = project_sha256(&resulting_project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let identities = derive_commit_revision_identities(
+        &session_id,
+        &current.source_hash,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &current.revision_id,
+        &operation,
+    )
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?;
+    let parent_canonical: AuthoringRevisionIdV1 = current
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+        GuestReaderError::internal("temporary_editor_revision_identity_invalid")
+    })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
+            .to_string();
+    let canonical_event = encode_editor_revision_event_v1(&EditorRevisionEventV1 {
+        schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: current.source_hash.clone(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        authoring_root_hash: None,
+        operation,
+    })
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_event_invalid"))?;
+    let commit_at = now_ms()?;
+    let still_live = state
+        .authorized_session(&session_id, &headers, commit_at)
+        .await?;
+    require_temporary_editor_current_session(&still_live)?;
+    if still_live.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+
+    let edge = RevisionEdge {
+        document_id: session_id.clone(),
+        parent_revision: current.revision_id,
+        parent_cursor: current.revision_cursor,
+        operation_id: request.client_operation_id,
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor: current.revision_cursor + 1,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: commit_at,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: session_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: commit_at,
+    };
+    // Shared SQLite atomic edge+identity. Schema21 trigger renews TTL ONLY
+    // on actual INSERT, and rejects edits if the session was expired/swept.
+    let outcome = backend
+        .revisions
+        .append_edge_with_revision_identity(edge, binding)
+        .await
+        .map_err(|_| GuestReaderError::conflict("temporary_editor_revision_commit_rejected"))?;
+
+    let expiry = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?
+        .expires_at_ms;
+    match outcome {
+        AppendOutcome::Committed(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_create_shape_accepted(edge, identity, expiry, false)
+        }
+        AppendOutcome::AlreadyCommitted(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_create_shape_accepted(edge, identity, expiry, true)
         }
         AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
             "temporary_editor_stale_revision",
