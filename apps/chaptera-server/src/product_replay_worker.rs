@@ -100,6 +100,7 @@ fn validate_create_shape_intent(
     intent: &IsolatedCreateShapeIntentV1,
 ) -> Result<(), ProductReplayWorkerError> {
     if intent.node_id.len() > 128
+        || intent.node_id.as_bytes().get(14) != Some(&b'7')
         || intent.page_id.len() > 128
         || serde_json::from_value::<NodeId>(Value::String(intent.node_id.clone())).is_err()
         || serde_json::from_value::<PageId>(Value::String(intent.page_id.clone())).is_err()
@@ -1517,6 +1518,22 @@ pub fn run_product_replay_worker(
         else {
             unreachable!("canonical CreateShape intent creates one CreateShape operation")
         };
+        // Only canonical, page-owned rectangles wholly inside the selected
+        // existing page are admitted; HTML/SVG never gets authoring authority.
+        let page = session.graph().pages.get(page_id).ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_create_shape_rejected",
+                "CreateShape page is absent from the source graph",
+            )
+        })?;
+        if bounds.right().is_none_or(|x| x.get() > page.size.width.get())
+            || bounds.bottom().is_none_or(|y| y.get() > page.size.height.get())
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_shape_rejected",
+                "CreateShape bounds exceed canonical page geometry",
+            ));
+        }
         let operation = session
             .create_shape(*node_id, *page_id, *bounds, paint.clone())
             .map_err(|_| {
@@ -3084,6 +3101,9 @@ mod tests {
         assert!(validate_create_shape_intent(&invalid).is_err());
         invalid = base.clone();
         invalid.stroke_width_emu = 0;
+        assert!(validate_create_shape_intent(&invalid).is_err());
+        invalid = base.clone();
+        invalid.node_id = "019a2d80-1112-4001-8001-aabbccddee01".to_owned();
         assert!(validate_create_shape_intent(&invalid).is_err());
         let mut object = serde_json::to_value(base).unwrap();
         object["unexpected"] = Value::Bool(true);
