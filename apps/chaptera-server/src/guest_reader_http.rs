@@ -42,8 +42,8 @@ use crate::{
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     product_replay_worker::{
-        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
-        IsolatedResizeNodeIntentV1, IsolatedStoryRangeIntentV1,
+        IsolatedCreateShapeIntentV1, IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer,
+        IsolatedReaderSceneIntentV1, IsolatedResizeNodeIntentV1, IsolatedStoryRangeIntentV1,
     },
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
