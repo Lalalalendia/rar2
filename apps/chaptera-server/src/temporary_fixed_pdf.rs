@@ -325,15 +325,13 @@ fn render_current_fixed_pdf_with_sheet(
             };
             if let Ok(candidate) =
                 shape_bounded_ltr_segment(&line.text, line.scalar_start, &source_runtime)
+                && candidate.total_x_advance.get() > 0
+                && candidate.total_x_advance.get() <= frame.bounds.width.get()
+                && candidate.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
             {
-                if candidate.total_x_advance.get() > 0
-                    && candidate.total_x_advance.get() <= frame.bounds.width.get()
-                    && candidate.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
-                {
-                    shaped = candidate;
-                    line_font_size = LengthEmu::new(source_size);
-                    source_sized_single_lines += 1;
-                }
+                shaped = candidate;
+                line_font_size = LengthEmu::new(source_size);
+                source_sized_single_lines += 1;
             }
         }
 
@@ -565,10 +563,10 @@ fn render_current_fixed_pdf_with_sheet(
 #[cfg(test)]
 mod source_pdf_style_tests {
     use super::*;
-    use chaptera_cdm_model::CanonicalId;
 
     fn story_id() -> StoryId {
-        StoryId::from_canonical(CanonicalId::from_bytes([31; 16]))
+        serde_json::from_str("\"1f1f1f1f-1f1f-1f1f-1f1f-1f1f1f1f1f1f\"")
+            .expect("synthetic stable StoryId")
     }
 
     fn typography(
