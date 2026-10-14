@@ -183,6 +183,70 @@ jobs:
           test -s "$out/a.pdf.loss.txt"
           echo "CHAPTERA_CLI_OUT=$out" >> "$GITHUB_ENV"
 
+      - name: Validate opted-in source-to-paint trace on pinned real PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/free-pub-pdf-trace-v1"
+          mkdir -p "$out"
+          cli="vendor/producer-a/target/debug/pub"
+          CHAPTERA_PDF_PAINT_TRACE=1 "$cli" convert "$CHAPTERA_SAMPLE_NEWSLETTER" --to pdf \
+            --output "$out/trace.pdf" --fallback-font "$CHAPTERA_FIXED_OUTPUT_FONT" \
+            > "$out/run.log"
+
+          cmp "$CHAPTERA_CLI_OUT/a.pdf" "$out/trace.pdf"
+          cmp "$CHAPTERA_CLI_OUT/a.pdf.loss.json" "$out/trace.pdf.loss.json"
+          python - "$out" <<'PY'
+          import collections
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          pdf = (root / "trace.pdf").read_bytes()
+          trace = json.loads((root / "trace.pdf.paint-trace.json").read_text())
+          assert trace["schema_version"] == "chaptera.pdf-paint-trace.v1"
+          assert trace["candidate_pdf_sha256"] == hashlib.sha256(pdf).hexdigest()
+          assert trace["source_sha256"] == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          events = trace["paint_trace"]
+          links = trace["source_nodes"]
+          assert events and links
+          painted = {event["node_origin"] for event in events}
+          assert painted == {link["node_origin"] for link in links}
+          statuses = {
+              "exact_source_byte_range",
+              "exact_source_object_only",
+              "unmapped_projected_node",
+              "no_exact_authoritative_source_ref",
+          }
+          assert all(link["status"] in statuses for link in links)
+          for link in links:
+              refs = link["source_refs"]
+              for ref in refs:
+                  assert ref["source_hash"] == trace["source_sha256"]
+                  assert ref["authority"] == "authoritative"
+                  assert ref["confidence"] == "exact"
+                  assert ref["role"] in ("semantic", "projection")
+                  if (span := ref.get("byte_range")) is not None:
+                      assert 0 <= span["offset"]
+                      assert 0 <= span["length"]
+                      assert span["offset"] + span["length"] <= (2**64 - 1)
+              if link["status"].startswith("exact_"):
+                  assert refs
+              else:
+                  assert not refs
+          # No NodeIds, raw SourceRefs, content or image bytes in public logs.
+          print(json.dumps({
+              "trace_schema": trace["schema_version"],
+              "paint_event_count": len(events),
+              "source_link_count": len(links),
+              "source_status_counts": dict(collections.Counter(link["status"] for link in links)),
+              "unchanged_pdf_and_loss_bytes": True,
+          }, sort_keys=True))
+          PY
+          rm -rf "$out"
+
       - name: Validate source-safe acceptance receipt
         shell: bash
         run: |
