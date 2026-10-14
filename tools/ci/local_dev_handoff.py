@@ -32,9 +32,9 @@ ORIGINS = {
 PATH_PREFIXES = ("apps/web/", "services/editor-api/", "vendor/producer-a/crates/pub-editor/")
 SUFFIXES = {".rs", ".py", ".mjs", ".js", ".ts", ".tsx", ".jsx", ".html",
             ".css", ".json", ".toml", ".md", ".yml", ".yaml", ".txt"}
-FORBIDDEN_BYTES = (b"-----BEGIN OPENSSH PRIVATE KEY-----",
-                   b"-----BEGIN RSA PRIVATE KEY-----",
-                   b"-----BEGIN PRIVATE KEY-----", b"sk-proj-", b"ghp_", b"gho_")
+FORBIDDEN_BYTES = ((b"-----BEGIN " + b"OPENSSH PRIVATE KEY-----"),
+                   (b"-----BEGIN " + b"RSA PRIVATE KEY-----"),
+                   (b"-----BEGIN " + b"PRIVATE KEY-----"), b"sk-proj-", b"ghp_", b"gho_")
 MAX_FILES = 120
 MAX_FILE_BYTES = 2_000_000
 
