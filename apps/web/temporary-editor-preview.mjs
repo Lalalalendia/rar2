@@ -5,7 +5,7 @@ import {
 import { MoveGestureV1, hitTestSnapshot } from "./interaction-v1.mjs";
 import {
   RESIZE_HANDLES, ResizeTransactionV1, resizeHandleCenters,
-} from "./resize-gesture-v1.mjs";
+} from "../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs";
 import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 import { TemporaryEditBrowserSessionV0 } from "./temporary-edit-browser-session-v0.mjs";
 import { renderReaderScene } from "../cloud-reader/render-v1.mjs";

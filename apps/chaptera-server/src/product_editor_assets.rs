@@ -313,7 +313,10 @@ where
         .route("/editor/text-protocol-v1.mjs", get(text_protocol))
         .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
         .route("/editor/interaction-v1.mjs", get(interaction))
-        .route("/editor/resize-gesture-v1.mjs", get(temporary_resize_gesture))
+        .route(
+            "/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs",
+            get(temporary_resize_gesture),
+        )
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
             get(interaction_scene),
@@ -514,11 +517,11 @@ mod tests {
     #[tokio::test]
     async fn guest_resize_gesture_is_the_canonical_embedded_protocol_module() {
         let module = std::str::from_utf8(TEMPORARY_PREVIEW_ENTRY).unwrap();
-        assert!(module.contains("./resize-gesture-v1.mjs"));
+        assert!(module.contains("../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"));
         let response = temporary_preview_router::<()>()
             .oneshot(
                 Request::builder()
-                    .uri("/editor/resize-gesture-v1.mjs")
+                    .uri("/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -527,8 +530,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), TEMPORARY_RESIZE_GESTURE);
-        assert!(std::str::from_utf8(TEMPORARY_RESIZE_GESTURE)
-            .unwrap().contains("export class ResizeTransactionV1"));
+        assert!(
+            std::str::from_utf8(TEMPORARY_RESIZE_GESTURE)
+                .unwrap()
+                .contains("export class ResizeTransactionV1")
+        );
     }
 
     #[tokio::test]

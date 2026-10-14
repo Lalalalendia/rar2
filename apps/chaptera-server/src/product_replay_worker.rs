@@ -14,8 +14,8 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, RectEmu, Sha256Digest, StoryId,
-    open_mature_0x2c_editor,
+    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, RectEmu, Sha256Digest,
+    StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -2667,6 +2667,7 @@ mod tests {
             authoring_graph: graph,
             baseline_project: None,
             move_node: None,
+            resize_node: None,
             story_range: None,
             reader_scene: None,
             editable_export: None,

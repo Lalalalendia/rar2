@@ -27,7 +27,7 @@
     # Exact allowlist for Reader plus guest-only Temporary Editor.
     # Static and API paths below must remain explicit; never use /editor/*
     # or /v1/editor/*, which would expose authenticated Product surfaces.
-    @reader_surface path / /index.html /favicon.svg /reader.css /reader-app.mjs /reader-model.mjs /render-v1.mjs /observability-v1.mjs /v1/reader/* /editor/temporary-preview /editor/temporary-edit-browser-session-v0.mjs /editor/temporary-editor-preview.mjs /editor/temporary-editor-preview.css /editor/temporary-edit-move-client-v1.mjs /editor/text-protocol-v1.mjs /editor/story-line-endings-v1.mjs /editor/resize-gesture-v1.mjs /editor/interaction-v1.mjs /editor/reader-scene-editor-interaction-v1.mjs /cloud-reader/render-v1.mjs /v1/editor/temporary-sessions /v1/editor/temporary-sessions/*
+    @reader_surface path / /index.html /favicon.svg /reader.css /reader-app.mjs /reader-model.mjs /render-v1.mjs /observability-v1.mjs /v1/reader/* /editor/temporary-preview /editor/temporary-edit-browser-session-v0.mjs /editor/temporary-editor-preview.mjs /editor/temporary-editor-preview.css /editor/temporary-edit-move-client-v1.mjs /editor/text-protocol-v1.mjs /editor/story-line-endings-v1.mjs /packages/protocol/editor-resize/v1/resize-gesture-v1.mjs /editor/interaction-v1.mjs /editor/reader-scene-editor-interaction-v1.mjs /cloud-reader/render-v1.mjs /v1/editor/temporary-sessions /v1/editor/temporary-sessions/*
     handle @reader_surface {
         reverse_proxy {$CHAPTERA_READER_API:127.0.0.1:8080} {
             header_up X-Forwarded-For {remote_host}
