@@ -236,6 +236,18 @@ try {
   if (browserEngine === "webkit" && !caretRangeInputConfirmed) {
     throw new Error("WebKit caret/range keyboard input emitted no matching DOM input event");
   }
+  const submittedSelection = await page.evaluate(() => {
+    const input = document.querySelector("#story-input");
+    return {
+      start: input.selectionStart,
+      end: input.selectionEnd,
+      direction: input.selectionDirection,
+      focused: document.activeElement === input,
+    };
+  });
+  if (!submittedSelection.focused) {
+    throw new Error("Story selection was not focused when the edit was submitted");
+  }
   const acceptedResponse = page.waitForResponse(response =>
     response.request().method() === "POST" &&
     decodeURIComponent(new URL(response.url()).pathname) ===
@@ -292,9 +304,10 @@ try {
       focused: document.activeElement === input,
     };
   });
-  if (firstSelection.start !== replacement.length ||
-      firstSelection.end !== replacement.length ||
-      firstSelection.direction !== "none" || !firstSelection.focused) {
+  if (firstSelection.start !== submittedSelection.start ||
+      firstSelection.end !== submittedSelection.end ||
+      firstSelection.direction !== submittedSelection.direction ||
+      !firstSelection.focused) {
     throw new Error("accepted Story edit did not restore the canonical caret");
   }
   const current = await readProduct();
@@ -373,6 +386,19 @@ try {
       throw new Error("Chromium paste emitted no trusted clipboard/input receipt");
     }
 
+    const submittedPasteSelection = await page.evaluate(() => {
+      const input = document.querySelector("#story-input");
+      return {
+        start: input.selectionStart,
+        end: input.selectionEnd,
+        direction: input.selectionDirection,
+        focused: document.activeElement === input,
+      };
+    });
+    if (!submittedPasteSelection.focused) {
+      throw new Error("Story selection was not focused when the paste was submitted");
+    }
+
     const pasteResponsePromise = page.waitForResponse(response =>
       response.request().method() === "POST" &&
       decodeURIComponent(new URL(response.url()).pathname) ===
@@ -400,7 +426,6 @@ try {
       document.querySelector("#story-status")?.textContent?.includes(
         "Exact server revision and reopened Story text confirmed"),
     null, { timeout: 120000 });
-    const pasteCaret = afterFirstScalars[0].length + pasteReplacement.length;
     const pasteSelection = await page.evaluate(() => {
       const input = document.querySelector("#story-input");
       return {
@@ -410,8 +435,10 @@ try {
         focused: document.activeElement === input,
       };
     });
-    if (pasteSelection.start !== pasteCaret || pasteSelection.end !== pasteCaret ||
-        pasteSelection.direction !== "none" || !pasteSelection.focused) {
+    if (pasteSelection.start !== submittedPasteSelection.start ||
+        pasteSelection.end !== submittedPasteSelection.end ||
+        pasteSelection.direction !== submittedPasteSelection.direction ||
+        !pasteSelection.focused) {
       throw new Error("accepted physical paste did not restore the canonical caret");
     }
     const pastedCurrent = await readProduct();
