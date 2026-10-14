@@ -191,6 +191,16 @@ jobs:
           command -v libreoffice
           command -v xvfb-run
 
+      - name: Prove real Chromium ArrowRight via canonical MoveNode and Scribus IDML consumer
+        run: |
+          python tools/run_temporary_editor_real_pub_browser_acceptance.py \
+            --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --caddy "$RUNNER_TEMP/live-reader/caddy" \
+            --fixture "$RUNNER_TEMP/live-reader/temp-current.pub" \
+            --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
+            --target keyboard-idml \
+            --out "$GITHUB_WORKSPACE/target/temporary-editor-keyboard-idml"
+
       - name: Prove real Chromium ResizeNode via physical IDML/ODG target geometry
         run: |
           set -euo pipefail
@@ -239,6 +249,7 @@ jobs:
             target/temporary-editor-browser-pdf/caddy.log
             target/temporary-editor-story-idml/receipt.json
             target/temporary-editor-story-odg/receipt.json
+            target/temporary-editor-keyboard-idml/receipt.json
             target/temporary-editor-resize-idml/receipt.json
             target/temporary-editor-resize-odg/receipt.json
           if-no-files-found: warn
