@@ -6,10 +6,11 @@
 //! renderer. The original PUB remains immutable.
 use std::{collections::BTreeSet, str::FromStr};
 
-use pub_editor::{EditOperation, EditorSession, LengthEmu, NodeId, Sha256Digest};
+use pub_editor::{EditOperation, EditorSession, LengthEmu, NodeId, Sha256Digest, StoryId};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
+    shape_bounded_ltr_segment,
 };
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
@@ -20,6 +21,7 @@ use pub_pdf::{
     FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError, PdfTargetProfile,
     render_bounded_pdf, render_bounded_pdf_a4_card_9up,
 };
+use pub_viewer::ViewerTypographyRun;
 use serde_json::{Value, json};
 
 const MAX_PRIVATE_PDF_BYTES: usize = 16 * 1024 * 1024;
@@ -28,6 +30,74 @@ const LOSS_REPORT_SCHEMA: &str = "chaptera.temporary-edited-fixed-pdf-loss.v1";
 pub(crate) struct CurrentFixedPdf {
     pub bytes: Vec<u8>,
     pub loss_report: Value,
+}
+
+const EMU_PER_POINT: i64 = 12_700;
+
+/// Only a uniform, source-hash-current typography range can authorize fixed
+/// output paint/size. A canonical StoryId alone is not enough: an edited Story
+/// invalidates source Quill spans even when the immutable PUB is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourcePdfLineStyleV1 {
+    color_rgb: Option<[u8; 3]>,
+    font_size_emu: Option<i64>,
+}
+
+fn admitted_source_line_style_v1(
+    runs: &[ViewerTypographyRun],
+    story_id: StoryId,
+    current_story_text: &str,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Option<SourcePdfLineStyleV1> {
+    if scalar_start >= scalar_end {
+        return None;
+    }
+    let mut candidates = runs
+        .iter()
+        .filter(|run| {
+            run.story_id == story_id
+                && run.applies_to_story_text(current_story_text)
+                && run.scalar_start < scalar_end
+                && run.scalar_end > scalar_start
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+
+    // Exactly cover the painted Story scalar interval; reject gaps, overlaps,
+    // duplicates and stale input, rather than fabricating an inherited style.
+    let mut cursor = scalar_start;
+    for (index, run) in candidates.iter().enumerate() {
+        if run.scalar_start > cursor
+            || (index > 0 && run.scalar_start != cursor)
+            || run.scalar_end <= cursor
+        {
+            return None;
+        }
+        cursor = run.scalar_end.min(scalar_end);
+    }
+    if cursor != scalar_end {
+        return None;
+    }
+
+    let first = candidates[0];
+    let color_rgb = candidates
+        .iter()
+        .all(|run| run.color_rgb == first.color_rgb)
+        .then_some(first.color_rgb)
+        .flatten();
+    let font_size_emu = (first.text_size_emu > 0
+        && candidates
+            .iter()
+            .all(|run| run.text_size_emu == first.text_size_emu))
+    .then_some(i64::from(first.text_size_emu));
+    Some(SourcePdfLineStyleV1 {
+        color_rgb,
+        font_size_emu,
+    })
 }
 
 /// The only source-derived authority is the already-replayed EditorSession.
@@ -184,6 +254,8 @@ fn render_current_fixed_pdf_with_sheet(
     let mut text_runs = Vec::new();
     let mut glyphs = BTreeSet::new();
     let mut unavailable_glyph_lines = 0usize;
+    let mut source_color_lines = 0usize;
+    let mut source_sized_single_lines = 0usize;
     for line in &flow.lines {
         if line.text.is_empty() {
             continue;
@@ -197,26 +269,87 @@ fn render_current_fixed_pdf_with_sheet(
             unavailable_glyph_lines += 1;
             continue;
         }
+        let current_story = session.graph().stories.get(&line.story_origin);
+        let source_style = current_story.and_then(|story| {
+            admitted_source_line_style_v1(
+                &bundle.geometry.typography_runs,
+                line.story_origin,
+                &story.text,
+                line.scalar_start,
+                line.scalar_end,
+            )
+        });
+        let color_rgb = source_style
+            .and_then(|style| style.color_rgb)
+            .unwrap_or([0, 0, 0]);
+        if source_style.is_some_and(|style| style.color_rgb.is_some()) {
+            source_color_lines += 1;
+        }
+
+        let mut shaped = BoundedShapedText {
+            environment: flow.environment.shaping.clone(),
+            units_per_em: line.units_per_em,
+            glyphs: line.glyphs.clone(),
+            total_x_advance: line.measured_width,
+        };
+        let mut line_font_size = font_size;
+        // Source size is only portable with our pinned fallback for complete,
+        // one-line Stories whose independently re-shaped glyphs fit their exact
+        // current frame. This must not silently reflow arbitrary paragraphs.
+        if let (Some(style), Some(story)) = (source_style, current_story)
+            && let Some(source_size) = style.font_size_emu
+            && (6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&source_size)
+            && source_size != font_size.get()
+            && line.scalar_start == 0
+            && line.frame_line_index == 0
+            && u32::try_from(story.text.chars().count()).ok() == Some(line.consumed_scalar_end)
+            && flow
+                .lines
+                .iter()
+                .filter(|other| other.story_origin == line.story_origin)
+                .count()
+                == 1
+            && let Some(frame) = bundle
+                .geometry
+                .scene
+                .nodes
+                .iter()
+                .find(|node| node.origin == line.frame_origin)
+            && source_size <= frame.bounds.height.get()
+        {
+            let source_runtime = BoundedShapingRuntime {
+                layout: flow.environment.shaping.layout.clone(),
+                face_index: 0,
+                font_size_emu: LengthEmu::new(source_size),
+                font_bytes: font,
+            };
+            if let Ok(candidate) =
+                shape_bounded_ltr_segment(&line.text, line.scalar_start, &source_runtime)
+                && candidate.total_x_advance.get() > 0
+                && candidate.total_x_advance.get() <= frame.bounds.width.get()
+                && candidate.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+            {
+                shaped = candidate;
+                line_font_size = LengthEmu::new(source_size);
+                source_sized_single_lines += 1;
+            }
+        }
+
         let row = i64::from(line.frame_line_index)
             .checked_mul(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU)
             .ok_or("edited_pdf_text_coordinate_overflow")?;
         let baseline_y = row
-            .checked_add(font_size.get())
+            .checked_add(line_font_size.get())
             .ok_or("edited_pdf_text_coordinate_overflow")?;
-        glyphs.extend(line.glyphs.iter().map(|glyph| glyph.glyph_id));
+        glyphs.extend(shaped.glyphs.iter().map(|glyph| glyph.glyph_id));
         text_runs.push(FixedTextRun {
             node_id: line.frame_origin,
             scalar_base: line.scalar_start,
             logical_text: line.text.clone(),
-            shaped: BoundedShapedText {
-                environment: flow.environment.shaping.clone(),
-                units_per_em: line.units_per_em,
-                glyphs: line.glyphs.clone(),
-                total_x_advance: line.measured_width,
-            },
+            shaped,
             baseline_x: LengthEmu::ZERO,
             baseline_y: LengthEmu::new(baseline_y),
-            fill_rgb: [0, 0, 0],
+            fill_rgb: color_rgb,
         });
     }
 
@@ -399,6 +532,8 @@ fn render_current_fixed_pdf_with_sheet(
             "unsupported": unsupported,
             "shaped_lines": resources.text_runs.len(),
             "font_missing_glyph_lines": unavailable_glyph_lines,
+            "source_color_lines": source_color_lines,
+            "source_sized_single_lines": source_sized_single_lines,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "layout_warnings": layout_warnings,
@@ -413,6 +548,8 @@ fn render_current_fixed_pdf_with_sheet(
         "limitations": [
             "fixed_pdf_bounded_visual_subset_not_publisher_parity",
             "fallback_ubuntu_light_not_original_source_font",
+            "source_size_only_for_exact_uniform_single_line_that_fits",
+            "mixed_or_stale_source_typography_keeps_fallback",
             "missing_fallback_glyph_lines_disclosed_not_serialized",
             "publisher_rich_vectors_and_effects_not_fully_supported"
         ]
@@ -421,4 +558,111 @@ fn render_current_fixed_pdf_with_sheet(
         bytes: rendered.bytes,
         loss_report,
     })
+}
+
+#[cfg(test)]
+mod source_pdf_style_tests {
+    use super::*;
+
+    fn story_id() -> StoryId {
+        serde_json::from_str("\"1f1f1f1f-1f1f-1f1f-1f1f-1f1f1f1f1f1f\"")
+            .expect("synthetic stable StoryId")
+    }
+
+    fn typography(
+        range: (u32, u32),
+        color_rgb: Option<[u8; 3]>,
+        text_size_emu: u32,
+        text: &str,
+    ) -> ViewerTypographyRun {
+        ViewerTypographyRun {
+            story_id: story_id(),
+            scalar_start: range.0,
+            scalar_end: range.1,
+            source_font_name: "Synthetic Family".into(),
+            source_font_index: Some(3),
+            text_size_emu,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb,
+            color_inherited: false,
+            bold: None,
+            italic: None,
+            source_story_text_sha256: pub_viewer::viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn current_uniform_source_color_and_size_admitted_for_inner_line() {
+        let text = "Heading";
+        let runs = vec![
+            typography((0, 3), Some([211, 8, 81]), 28 * 12_700, text),
+            typography((3, 7), Some([211, 8, 81]), 28 * 12_700, text),
+        ];
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), text, 0, 7),
+            Some(SourcePdfLineStyleV1 {
+                color_rgb: Some([211, 8, 81]),
+                font_size_emu: Some(28 * 12_700),
+            })
+        );
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), text, 1, 6),
+            Some(SourcePdfLineStyleV1 {
+                color_rgb: Some([211, 8, 81]),
+                font_size_emu: Some(28 * 12_700),
+            })
+        );
+    }
+
+    #[test]
+    fn stale_story_gaps_overlaps_and_mixed_styles_fail_closed() {
+        let text = "Heading";
+        let original = typography((0, 7), Some([211, 8, 81]), 28 * 12_700, text);
+        assert_eq!(
+            admitted_source_line_style_v1(
+                std::slice::from_ref(&original),
+                story_id(),
+                "Changed",
+                0,
+                7,
+            ),
+            None,
+            "a story mutation may never inherit stale Quill typography"
+        );
+        let gap = vec![
+            typography((0, 3), Some([211, 8, 81]), 28 * 12_700, text),
+            typography((4, 7), Some([211, 8, 81]), 28 * 12_700, text),
+        ];
+        assert_eq!(
+            admitted_source_line_style_v1(&gap, story_id(), text, 0, 7),
+            None
+        );
+
+        let overlaps = vec![
+            typography((0, 4), Some([211, 8, 81]), 28 * 12_700, text),
+            typography((3, 7), Some([211, 8, 81]), 28 * 12_700, text),
+        ];
+        assert_eq!(
+            admitted_source_line_style_v1(&overlaps, story_id(), text, 0, 7),
+            None
+        );
+
+        let mixed = vec![
+            typography((0, 3), Some([211, 8, 81]), 28 * 12_700, text),
+            typography((3, 7), Some([0, 0, 0]), 12 * 12_700, text),
+        ];
+        assert_eq!(
+            admitted_source_line_style_v1(&mixed, story_id(), text, 0, 7),
+            Some(SourcePdfLineStyleV1 {
+                color_rgb: None,
+                font_size_emu: None,
+            }),
+            "mixed color and size must not be flattened into a false uniform run"
+        );
+        assert_eq!(
+            admitted_source_line_style_v1(&[original], story_id(), text, 5, 5),
+            None
+        );
+    }
 }
