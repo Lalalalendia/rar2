@@ -55,7 +55,7 @@ async function readJson(response) {
     throw fail(code, response.status);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw fail("temporary_response_invalid");
+    throw fail("temporary_response_invalid", response.status);
   }
   return body;
 }
@@ -205,10 +205,25 @@ export class TemporaryEditBrowserSessionV0 {
       uploaded = true;
       session.expires_at_ms = stored.expires_at_ms;
       this.#save(session);
-      const opened = await this.#request(pathFor(session.session_id, "open"), {
-        method: "POST", body: "{}", contentType: "application/json",
-        token: session.access_token, signal,
-      });
+      let opened;
+      try {
+        opened = await this.#request(pathFor(session.session_id, "open"), {
+          method: "POST", body: "{}", contentType: "application/json",
+          token: session.access_token, signal,
+        });
+      } catch (error) {
+        // /open may have completed its authoritative transition and returned
+        // HTTP 200 while a proxy/browser truncated the response body. Never
+        // issue another upload or infer success from HTTP status alone.
+        // Exactly one private, non-renewing GET /scene may recover that ACK;
+        // its full server identity and Scene contract are checked below.
+        if (error?.code !== "temporary_response_invalid" || error?.status !== 200) {
+          throw error;
+        }
+        opened = await this.#request(pathFor(session.session_id, "scene"), {
+          token: session.access_token, signal,
+        });
+      }
       checkBinding(opened, session.session_id);
       const view = snapshot(opened);
       session.expires_at_ms = view.expires_at_ms;

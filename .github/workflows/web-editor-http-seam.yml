@@ -82,6 +82,7 @@ jobs:
           node --test apps/web/rich-reader-editor-shell-v1.test.mjs
           node --test apps/web/product-editor-entry-v1.test.mjs
           node --test apps/web/temporary-edit-move-client-v1.test.mjs
+          node --test apps/web/temporary-editor-preview.gesture.test.mjs
           node --test apps/web/file-entry-v1.test.mjs
           node --test apps/web/chaptera-cloud-workspace-session-v1.test.mjs
           node --test apps/web/chaptera-cloud-source-ingress-v1.test.mjs

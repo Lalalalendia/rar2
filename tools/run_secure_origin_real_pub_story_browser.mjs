@@ -40,6 +40,12 @@ try {
     storageState,
     viewport: { width: 1180, height: 830 },
   });
+  if (browserEngine === "chromium") {
+    await context.grantPermissions(
+      ["clipboard-read", "clipboard-write"],
+      { origin },
+    );
+  }
   const session = (await context.cookies(origin)).find(cookie =>
     cookie.name === "__Host-chaptera_session");
   if (!session?.secure || !session.httpOnly) {
@@ -302,6 +308,206 @@ try {
       reopened.authoring_graph?.stories?.[selected.storyId]?.text !== desiredCanonical) {
     throw new Error("fresh Product reopened an inconsistent Story revision");
   }
+
+  let finalRevisionId = receipt.revision_id;
+  let finalCanonical = desiredCanonical;
+  let pasteInputConfirmed = false;
+  let pasteRevisionId = null;
+  if (browserEngine === "chromium") {
+    const afterFirstScalars = [...desired];
+    if (afterFirstScalars.length < 2) {
+      throw new Error("selected Story has no second scalar for physical paste acceptance");
+    }
+    const pasteReplacement = afterFirstScalars[1] === "Ω" ? "Ж" : "Ω";
+    const pastedText = afterFirstScalars[0] + pasteReplacement +
+      afterFirstScalars.slice(2).join("");
+    const pastedCanonical = textareaTextToCanonicalStory(desiredCanonical, pastedText);
+    await page.evaluate(async ({start, end, value}) => {
+      const input = document.querySelector("#story-input");
+      window.__chapteraStoryPasteTrace = [];
+      for (const type of ["beforeinput", "input", "paste"]) {
+        input.addEventListener(type, event => {
+          window.__chapteraStoryPasteTrace.push({
+            type: event.type,
+            inputType: typeof event.inputType === "string" ? event.inputType : null,
+            clipboardText: event.clipboardData?.getData("text/plain") ?? null,
+          });
+        });
+      }
+      input.focus();
+      input.setSelectionRange(start, end, "forward");
+      await navigator.clipboard.writeText(value);
+    }, {
+      start: afterFirstScalars[0].length,
+      end: afterFirstScalars[0].length + afterFirstScalars[1].length,
+      value: pasteReplacement,
+    });
+    await page.keyboard.press("Control+V");
+    if (await page.locator("#story-input").inputValue() !== pastedText) {
+      throw new Error("physical Chromium clipboard paste did not replace selected Story scalar");
+    }
+    const pasteTrace = await page.evaluate(() => window.__chapteraStoryPasteTrace);
+    pasteInputConfirmed = pasteTrace.some(event => event.type === "paste" &&
+      event.clipboardText === pasteReplacement) &&
+      pasteTrace.some(event => event.type === "input" &&
+        event.inputType === "insertFromPaste");
+    if (!pasteInputConfirmed) {
+      throw new Error("Chromium paste emitted no trusted clipboard/input receipt");
+    }
+
+    const pasteResponsePromise = page.waitForResponse(response =>
+      response.request().method() === "POST" &&
+      decodeURIComponent(new URL(response.url()).pathname) ===
+        "/v1/documents/" + documentId + "/story-commit",
+    { timeout: 90000 });
+    await page.locator("#story-apply-action").click();
+    const pasteResponse = await pasteResponsePromise;
+    const pasteSubmitted = pasteResponse.request().postDataJSON();
+    const pasteReceipt = await pasteResponse.json().catch(() => null);
+    if (pasteResponse.status() !== 200 ||
+        pasteSubmitted?.base_revision_id !== receipt.revision_id ||
+        pasteSubmitted?.command?.kind !== "replace_story_range" ||
+        pasteSubmitted.command.story_id !== selected.storyId ||
+        pasteSubmitted.command.start_scalar !== 1 ||
+        pasteSubmitted.command.end_scalar !== 2 ||
+        pasteSubmitted.command.replacement_text !== pasteReplacement ||
+        pasteReceipt?.protocol_version !== "chaptera.commit-accepted.v1" ||
+        pasteReceipt.base_revision_id !== receipt.revision_id ||
+        pasteReceipt.revision_id === receipt.revision_id ||
+        pasteReceipt.canonical_operation?.replacement_text !== pasteReplacement ||
+        pasteReceipt.replayed !== false || calls.length !== 2) {
+      throw new Error("physical paste did not produce one exact authorized Story commit");
+    }
+    await page.waitForFunction(() =>
+      document.querySelector("#story-status")?.textContent?.includes(
+        "Exact server revision and reopened Story text confirmed"),
+    null, { timeout: 120000 });
+    const pastedCurrent = await readProduct();
+    if (pastedCurrent.revision_id !== pasteReceipt.revision_id ||
+        pastedCurrent.authoring_graph?.stories?.[selected.storyId]?.text !== pastedCanonical) {
+      throw new Error("fresh canonical current did not preserve physical paste");
+    }
+    const pastedScene = await readScene(pasteReceipt.revision_id);
+    if (!pastedScene.stories?.some(story =>
+      story.story_id === selected.storyId && story.text === pastedCanonical)) {
+      throw new Error("Reader Scene did not project physical pasted Story text");
+    }
+    finalRevisionId = pasteReceipt.revision_id;
+    finalCanonical = pastedCanonical;
+    pasteRevisionId = pasteReceipt.revision_id;
+  }
+
+  const exportResult = await page.evaluate(async ({id, revisionId}) => {
+    const sessionResponse = await fetch("/v1/session", {
+      credentials: "same-origin", cache: "no-store",
+    });
+    const session = await sessionResponse.json();
+    if (!sessionResponse.ok || typeof session.csrf_token !== "string") {
+      throw new Error("authenticated browser has no current CSRF session");
+    }
+    const layoutEnvironmentId = "sha256:" + "b".repeat(64);
+    const request = {
+      protocol_version: "chaptera.export-create.v1",
+      document_id: id,
+      revision_id: revisionId,
+      target_profile: "idml:bounded-editable",
+      layout_environment_id: layoutEnvironmentId,
+      client_request_id: "story-export-" + crypto.randomUUID(),
+    };
+    const missingCsrf = await fetch("/v1/exports", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({...request, client_request_id: request.client_request_id + "-denied"}),
+    });
+    if (missingCsrf.status !== 403) {
+      throw new Error("ExportJob create without CSRF was not denied");
+    }
+    const create = await fetch("/v1/exports", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": session.csrf_token,
+      },
+      body: JSON.stringify(request),
+    });
+    let job = await create.json().catch(() => null);
+    if (!create.ok || job?.protocol_version !== "chaptera.export-job-http.v1" ||
+        job.document_id !== id || job.revision_id !== revisionId ||
+        job.target_profile !== request.target_profile ||
+        job.layout_environment_id !== layoutEnvironmentId || !job.job_id) {
+      throw new Error("browser ExportJob did not bind the accepted Story revision");
+    }
+    const deadline = Date.now() + 120000;
+    while (job.status !== "ready" && Date.now() < deadline) {
+      if (["failed", "cancelled", "expired"].includes(job.status)) {
+        throw new Error("browser ExportJob reached terminal state " + job.status);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const status = await fetch("/v1/exports/" + encodeURIComponent(job.job_id), {
+        credentials: "same-origin", cache: "no-store",
+      });
+      job = await status.json().catch(() => null);
+      if (!status.ok || job?.revision_id !== revisionId) {
+        throw new Error("browser ExportJob status lost exact revision identity");
+      }
+    }
+    if (job.status !== "ready" || !job.artifact_id || !job.loss_report_id) {
+      throw new Error("browser ExportJob did not publish artifact and LossReport");
+    }
+
+    const forged = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/artifacts/" + encodeURIComponent(job.artifact_id + "-forged"),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    if (forged.status !== 409) {
+      throw new Error("forged export artifact identity was not rejected");
+    }
+    const artifact = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/artifacts/" + encodeURIComponent(job.artifact_id),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    const artifactBytes = new Uint8Array(await artifact.arrayBuffer());
+    if (!artifact.ok || artifact.headers.get("content-type") !==
+        "application/vnd.adobe.indesign-idml-package" ||
+        !artifact.headers.get("content-disposition")?.includes(".idml") ||
+        artifact.headers.get("cache-control") !== "private, no-store" ||
+        artifact.headers.get("x-content-type-options") !== "nosniff" ||
+        artifactBytes.length < 2 || artifactBytes[0] !== 0x50 || artifactBytes[1] !== 0x4b) {
+      throw new Error("authorized exact-revision IDML stream is invalid");
+    }
+    const loss = await fetch(
+      "/v1/exports/" + encodeURIComponent(job.job_id) +
+        "/loss-reports/" + encodeURIComponent(job.loss_report_id),
+      {credentials: "same-origin", cache: "no-store"},
+    );
+    const lossBytes = new Uint8Array(await loss.arrayBuffer());
+    let lossJson = null;
+    try { lossJson = JSON.parse(new TextDecoder().decode(lossBytes)); } catch {}
+    if (!loss.ok || loss.headers.get("content-type") !== "application/json" ||
+        !loss.headers.get("content-disposition")?.includes("-loss-report.json") ||
+        loss.headers.get("cache-control") !== "private, no-store" ||
+        loss.headers.get("x-content-type-options") !== "nosniff" ||
+        !lossJson || typeof lossJson !== "object" || Array.isArray(lossJson)) {
+      throw new Error("authorized exact-revision LossReport stream is invalid");
+    }
+    const digest = async bytes => {
+      const raw = await crypto.subtle.digest("SHA-256", bytes);
+      return [...new Uint8Array(raw)].map(value => value.toString(16).padStart(2, "0")).join("");
+    };
+    return {
+      job_id: job.job_id,
+      target_profile: job.target_profile,
+      layout_environment_id: job.layout_environment_id,
+      artifact_sha256: await digest(artifactBytes),
+      artifact_byte_len: artifactBytes.length,
+      loss_report_sha256: await digest(lossBytes),
+      loss_report_byte_len: lossBytes.length,
+      csrf_negative_confirmed: true,
+      forged_artifact_negative_confirmed: true,
+    };
+  }, {id: documentId, revisionId: finalRevisionId});
   if (errors.length) throw new Error("real Story browser reported JavaScript errors");
 
   // Use the actual Chromium network stack: its test-only DNS mapping for
@@ -314,6 +520,15 @@ try {
     });
   if (!denied || (denied.status() !== 401 && denied.status() !== 403)) {
     throw new Error("anonymous browser unexpectedly read durable Story");
+  }
+  const anonymousArtifact = await anonPage.goto(
+    origin + "/v1/exports/" + encodeURIComponent(exportResult.job_id) +
+      "/artifacts/forged",
+    { waitUntil: "domcontentloaded", timeout: 30000 },
+  );
+  if (!anonymousArtifact ||
+      (anonymousArtifact.status() !== 401 && anonymousArtifact.status() !== 403)) {
+    throw new Error("anonymous browser unexpectedly reached an export artifact");
   }
   await anonymous.close();
 
@@ -328,7 +543,9 @@ try {
     document_id: documentId,
     story_id: selected.storyId,
     original_revision_id: baseline.revision_id,
-    committed_revision_id: receipt.revision_id,
+    committed_revision_id: finalRevisionId,
+    initial_text_revision_id: receipt.revision_id,
+    paste_revision_id: pasteRevisionId,
     real_dom_textarea_input: true,
     input_path: browserEngine === "chromium"
       ? "chromium_ime_composition"
@@ -337,6 +554,8 @@ try {
     composition_events_confirmed: compositionEventsConfirmed,
     composition_apply_fenced: compositionApplyFenced,
     caret_range_input_confirmed: caretRangeInputConfirmed,
+    physical_clipboard_paste_confirmed: pasteInputConfirmed,
+    authorized_story_commit_count: calls.length,
     one_authorized_story_commit: true,
     canonical_current_text_confirmed: true,
     source_neutral_reader_scene_text_refreshed: true,
@@ -346,13 +565,25 @@ try {
     source_bytes_in_receipt: false,
     browser_layout_is_canonical: false,
     story_undo_redo_claim: false,
-    export_job_claim: false,
+    export_job_claim: true,
+    export_job_id: exportResult.job_id,
+    export_target_profile: exportResult.target_profile,
+    export_layout_environment_id: exportResult.layout_environment_id,
+    export_artifact_sha256: exportResult.artifact_sha256,
+    export_artifact_byte_len: exportResult.artifact_byte_len,
+    export_loss_report_sha256: exportResult.loss_report_sha256,
+    export_loss_report_byte_len: exportResult.loss_report_byte_len,
+    export_csrf_negative_confirmed: exportResult.csrf_negative_confirmed,
+    export_forged_artifact_negative_confirmed:
+      exportResult.forged_artifact_negative_confirmed,
+    export_anonymous_denied: true,
     two_engine_claim: false,
   };
   const persisted = JSON.stringify(result);
   if (persisted.includes("Sample3.pub") ||
       (priorText.length >= 16 && persisted.includes(priorText)) ||
-      (desired.length >= 16 && persisted.includes(desired))) {
+      (desired.length >= 16 && persisted.includes(desired)) ||
+      (finalCanonical.length >= 16 && persisted.includes(finalCanonical))) {
     throw new Error("private fixture label or Story contents leaked into acceptance receipt");
   }
   await writeFile(receiptPath, JSON.stringify(result, null, 2) + "\n");

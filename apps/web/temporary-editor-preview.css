@@ -26,6 +26,11 @@ button:disabled { opacity: .65; cursor: wait; }
 .temporary-move-preview { fill: none; stroke: #1d4c7d; stroke-width: 12700; stroke-dasharray: 63500 31750; }
 @media (max-width: 580px) { .page-shell { width: calc(100% - 1rem); margin: .75rem auto; } .panel { padding: .85rem; } }
 
+#temporary-story-panel label { display: block; font-weight: 600; margin: .7rem 0 .3rem; }
+#temporary-story-select, #temporary-story-text { display: block; width: min(100%, 750px); padding: .55rem; font: inherit; border: 1px solid #94a3b8; border-radius: .3rem; background: #fff; color: inherit; }
+#temporary-story-text { resize: vertical; min-height: 7rem; }
+#temporary-story-select:focus-visible, #temporary-story-text:focus-visible { outline: 3px solid #d79b18; outline-offset: 3px; }
+
 /* The sheet uses the exact verified PDF bytes offered for download. */
 .sheet-preview { margin-top: 1.25rem; }
 .sheet-preview h3 { font-size: 1rem; margin-bottom: .35rem; }
