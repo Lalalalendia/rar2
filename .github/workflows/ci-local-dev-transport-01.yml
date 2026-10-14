@@ -35,7 +35,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64, chaptera-dev-unprivileged]
     timeout-minutes: 22
     env:
-      CHAPTERA_LOCAL_DEV_STATE: ${{ runner.temp }}\chaptera-dev-state
+      CHAPTERA_LOCAL_DEV_STATE: ${{ runner.tool_cache }}\chaptera-dev-state
       CHAPTERA_LOCAL_DEV_RECEIPT: ${{ runner.temp }}\chaptera-dev-receipt.json
     steps:
       - uses: actions/checkout@v5
