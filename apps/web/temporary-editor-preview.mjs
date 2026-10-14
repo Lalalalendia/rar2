@@ -67,6 +67,51 @@ function newCsrfToken(cryptoObject) {
 const SVG_NS = "http://www.w3.org/2000/svg";
 const TEMPORARY_NUDGE_STEP_EMU = 12_700; // One point, not screen pixels.
 
+// Camera-only scaling. Page viewBox, Scene identity, NodeIds and EMU are immutable.
+export const TEMP_ZOOM_MIN = 50;
+export const TEMP_ZOOM_MAX = 200;
+export const TEMP_ZOOM_STEP = 25;
+const TEMP_EMU_PER_PX = 9525;
+export function temporaryViewportPages(stage) {
+  return Array.from(stage?.querySelectorAll?.("svg.page[data-page-id]") ?? []);
+}
+export function temporaryViewportZoom(zoom) {
+  if (zoom?.mode === "fit") return {mode:"fit",percent:100};
+  if (zoom?.mode !== "manual" || !Number.isInteger(zoom?.percent) ||
+      zoom.percent < TEMP_ZOOM_MIN || zoom.percent > TEMP_ZOOM_MAX) {
+    throw new RangeError("temporary_viewport_zoom_invalid");
+  }
+  return {mode:"manual",percent:zoom.percent};
+}
+export function applyTemporaryViewport(stage,zoom={mode:"fit"}) {
+  const view=temporaryViewportZoom(zoom);
+  const svgs=temporaryViewportPages(stage);
+  const stageWidth=Number(stage?.clientWidth);
+  const available=Number.isFinite(stageWidth) && stageWidth>0 ? Math.max(1,stageWidth-64) : 920;
+  const fitWidth=Math.min(920,available);
+  let applied=0;
+  for (const svg of svgs) {
+    const box=svg.getAttribute?.("viewBox")?.trim().split(/[\s,]+/).map(Number);
+    if (!box || box.length!==4 || !box.every(Number.isSafeInteger) ||
+        box[0]!==0 || box[1]!==0 || box[2]<=0 || box[3]<=0) continue;
+    const naturalWidth=box[2]/TEMP_EMU_PER_PX;
+    const width=view.mode==="fit" ? Math.min(naturalWidth,fitWidth) : naturalWidth*view.percent/100;
+    const height=width*box[3]/box[2];
+    if (!(width>0) || !(height>0) || !Number.isFinite(width) ||
+        !Number.isFinite(height) || width>1e6 || height>1e6) continue;
+    svg.setAttribute("width",String(width));
+    svg.setAttribute("height",String(height));
+    if (svg.style) {
+      svg.style.width=String(width)+"px";
+      svg.style.height=String(height)+"px";
+      svg.style.maxWidth="none";
+    }
+    applied++;
+  }
+  return {total:svgs.length,applied,view};
+}
+
+
 
 export function temporaryEditorPagePoint(pageSvg, clientX, clientY) {
   if (typeof pageSvg?.createSVGPoint !== "function" ||
@@ -145,6 +190,16 @@ export async function bootTemporaryEditorPreview({
   const sheetPreviewEnabled = !!(sheetPreviewButton && sheetPreview && sheetFrame);
   const editorEnabled = !!(actions && idmlButton && odgButton);
   const drawEnabled = editorEnabled && !!drawButton;
+  const viewButtons = {
+    prev: documentObject?.getElementById("temporary-page-prev"),
+    next: documentObject?.getElementById("temporary-page-next"),
+    position: documentObject?.getElementById("temporary-page-position"),
+    out: documentObject?.getElementById("temporary-zoom-out"),
+    fit: documentObject?.getElementById("temporary-zoom-fit"),
+    actual: documentObject?.getElementById("temporary-zoom-actual"),
+    in: documentObject?.getElementById("temporary-zoom-in"),
+    percent: documentObject?.getElementById("temporary-zoom-percent"),
+  };
   const storyPanel = documentObject?.getElementById("temporary-story-panel");
   const storySelect = documentObject?.getElementById("temporary-story-select");
   const storyText = documentObject?.getElementById("temporary-story-text");
@@ -172,7 +227,63 @@ export async function bootTemporaryEditorPreview({
   let selectedResizePageId = null;
   let resizeHandleElements = [];
   let sheetPreviewUrl = null;
-  const buttons = [startButton, resumeButton, forgetButton, deleteButton].filter(Boolean);
+  let viewportZoom = {mode:"fit",percent:100};
+  let activeViewportPageIndex = 0;
+  const buttons = [startButton,resumeButton,forgetButton,deleteButton].filter(Boolean);
+
+  function refreshViewportControls() {
+    const count=temporaryViewportPages(pages).length;
+    activeViewportPageIndex=Math.min(activeViewportPageIndex,Math.max(0,count-1));
+    const available=count>0 && !busy && !editBusy;
+    if (viewButtons.prev) viewButtons.prev.disabled=!available || activeViewportPageIndex===0;
+    if (viewButtons.next) viewButtons.next.disabled=!available || activeViewportPageIndex+1>=count;
+    if (viewButtons.position) viewButtons.position.textContent=
+      count ? (activeViewportPageIndex+1)+" / "+count : "0 / 0";
+    if (viewButtons.fit) {
+      viewButtons.fit.disabled=!available;
+      viewButtons.fit.setAttribute?.("aria-pressed",String(viewportZoom.mode==="fit"));
+    }
+    if (viewButtons.actual) viewButtons.actual.disabled=!available;
+    if (viewButtons.out) viewButtons.out.disabled=!available ||
+      (viewportZoom.mode==="manual" && viewportZoom.percent<=TEMP_ZOOM_MIN);
+    if (viewButtons.in) viewButtons.in.disabled=!available ||
+      (viewportZoom.mode==="manual" && viewportZoom.percent>=TEMP_ZOOM_MAX);
+    if (viewButtons.percent) viewButtons.percent.textContent=
+      viewportZoom.mode==="fit" ? "По ширине" : viewportZoom.percent+"%";
+  }
+  function resetViewport() {
+    viewportZoom={mode:"fit",percent:100};
+    activeViewportPageIndex=0;
+    pages.scrollTop=0;
+    pages.scrollLeft=0;
+    refreshViewportControls();
+  }
+  async function renderCanvas(scene) {
+    const top=pages.scrollTop, left=pages.scrollLeft;
+    await renderer(pages,scene,{
+      maxPageWidth:Math.max(320,Math.min(920,pages.clientWidth||920)),
+    });
+    applyTemporaryViewport(pages,viewportZoom);
+    if (Number.isFinite(top)) pages.scrollTop=top;
+    if (Number.isFinite(left)) pages.scrollLeft=left;
+    refreshViewportControls();
+  }
+  function changeViewportZoom(zoom) {
+    if (busy || editBusy || !temporaryViewportPages(pages).length) return;
+    viewportZoom=temporaryViewportZoom(zoom);
+    applyTemporaryViewport(pages,viewportZoom);
+    redrawResizeHandles();
+    refreshViewportControls();
+  }
+  function navigateViewport(delta) {
+    if (busy || editBusy) return;
+    const svgs=temporaryViewportPages(pages);
+    if (!svgs.length) return;
+    activeViewportPageIndex=Math.max(0,Math.min(activeViewportPageIndex+delta,svgs.length-1));
+    svgs[activeViewportPageIndex].scrollIntoView?.({block:"start",inline:"nearest",behavior:"auto"});
+    refreshViewportControls();
+  }
+
 
   function controls() {
     for (const button of buttons) button.disabled = busy || editBusy;
@@ -218,6 +329,7 @@ export async function bootTemporaryEditorPreview({
       storyText.disabled = locked;
       storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
     }
+    refreshViewportControls();
   }
 
   function clearSheetPreview() {
@@ -386,9 +498,7 @@ export async function bootTemporaryEditorPreview({
     }
     if (description.renderable) {
       try {
-        await renderer(pages, effectiveScene, {
-          maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
-        });
+        await renderCanvas(effectiveScene);
       } catch {
         pages.replaceChildren();
         clearEditor();
@@ -438,6 +548,7 @@ export async function bootTemporaryEditorPreview({
       status.textContent = "Выберите непустой файл с расширением .pub.";
       return;
     }
+    resetViewport();
     await guarded(() => client.start(file));
   }
 
@@ -474,6 +585,7 @@ export async function bootTemporaryEditorPreview({
       await client.deleteSession();
       clearEditor();
       pages.replaceChildren();
+      resetViewport();
       expiry.textContent = "";
       input.value = "";
       status.textContent = "Сессия удалена с сервера. Для дальнейшей работы загрузите новый PUB.";
@@ -494,6 +606,7 @@ export async function bootTemporaryEditorPreview({
     client.clear();
     clearEditor();
     pages.replaceChildren();
+    resetViewport();
     expiry.textContent = "";
     input.value = "";
     status.textContent = "Ключ удалён из этой вкладки. Это не досрочное удаление файла с сервера.";
@@ -613,9 +726,7 @@ export async function bootTemporaryEditorPreview({
         }
         interaction = projectReaderSceneToEditorInteractionScene(scene);
         partialFidelity ||= scene.fidelity?.state === "partial";
-        await renderer(pages, scene, {
-          maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
-        });
+        await renderCanvas(scene);
         refreshStoryEditor();
         clearResizeHandles({forget: true});
         expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
@@ -665,9 +776,7 @@ export async function bootTemporaryEditorPreview({
         throw new Error("temporary_scene_geometry_mismatch");
       }
       interaction = projectReaderSceneToEditorInteractionScene(exactScene);
-      await renderer(pages, exactScene, {
-        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
-      });
+      await renderCanvas(exactScene);
       refreshStoryEditor();
       redrawResizeHandles();
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
@@ -740,9 +849,7 @@ export async function bootTemporaryEditorPreview({
         throw new Error("temporary_nudge_scene_geometry_mismatch");
       }
       interaction = projectReaderSceneToEditorInteractionScene(scene);
-      await renderer(pages, scene, {
-        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
-      });
+      await renderCanvas(scene);
       refreshStoryEditor();
       redrawResizeHandles();
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
@@ -782,9 +889,7 @@ export async function bootTemporaryEditorPreview({
       canonicalCurrent = result.current;
       const scene = await moveClient.readerScene();
       interaction = projectReaderSceneToEditorInteractionScene(scene);
-      await renderer(pages, scene, {
-        maxPageWidth: Math.max(320, Math.min(920, pages.clientWidth || 920)),
-      });
+      await renderCanvas(scene);
       refreshStoryEditor(storyId);
       expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
       status.textContent = "Текст подтверждён сервером в изменённой ревизии. Доступен экспорт IDML, ODG или PDF." +
@@ -921,6 +1026,14 @@ export async function bootTemporaryEditorPreview({
     pdf9upButton?.addEventListener("click", () => download("pdf9up"));
     if (sheetPreviewEnabled) sheetPreviewButton.addEventListener("click", () => previewNineUp());
   }
+  viewButtons.fit?.addEventListener("click",()=>changeViewportZoom({mode:"fit"}));
+  viewButtons.actual?.addEventListener("click",()=>changeViewportZoom({mode:"manual",percent:100}));
+  viewButtons.out?.addEventListener("click",()=>changeViewportZoom({mode:"manual",
+    percent:Math.max(TEMP_ZOOM_MIN,(viewportZoom.mode==="fit"?100:viewportZoom.percent)-TEMP_ZOOM_STEP)}));
+  viewButtons.in?.addEventListener("click",()=>changeViewportZoom({mode:"manual",
+    percent:Math.min(TEMP_ZOOM_MAX,(viewportZoom.mode==="fit"?100:viewportZoom.percent)+TEMP_ZOOM_STEP)}));
+  viewButtons.prev?.addEventListener("click",()=>navigateViewport(-1));
+  viewButtons.next?.addEventListener("click",()=>navigateViewport(1));
   controls();
   return { start, resume, forget, deleteServer };
 }
