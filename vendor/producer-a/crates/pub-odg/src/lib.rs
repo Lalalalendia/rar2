@@ -28,7 +28,10 @@ pub use paragraph_alignment::{
     add_paragraph_scoped_alignment_to_odg,
 };
 
-pub use semantic::{OdgSemanticError, project_resolved_graph_to_odg};
+pub use semantic::{
+    OdgAuthoredShapeError, OdgSemanticError, add_authored_rectangles_to_odg,
+    project_resolved_graph_to_odg,
+};
 pub use typography::{
     OdgFullStoryTypographyPlacement, OdgTypographyError, add_full_story_typography_to_odg,
 };

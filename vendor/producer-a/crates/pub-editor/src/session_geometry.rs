@@ -4796,3 +4796,103 @@ impl EditorSession {
         )
     }
 }
+
+impl EditorSession {
+    pub fn create_shape(
+        &mut self,
+        node_id: NodeId,
+        page_id: PageId,
+        bounds: RectEmu,
+        paint: AuthoredShapePaintV1,
+    ) -> Result<EditOperation, EditorError> {
+        let operation = EditOperation::CreateShape {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            shape_kind: AuthoredShapeKindV1::Rectangle,
+            bounds,
+            transform: AuthoredShapeTransformV1::Identity,
+            paint,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        self.consume_canonical_create_shape(operation)
+    }
+
+    pub(super) fn consume_canonical_create_shape(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let shape = authored_shape_from_operation(&operation)
+            .expect("consume_canonical_create_shape receives CreateShape");
+        self.validate_create_shape_candidate(&shape)?;
+
+        let before_stack = self.current_authored_stack_v1(shape.page_id);
+        let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
+            EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            }
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            })?;
+
+        self.authored_shapes.insert(shape.node_id, shape);
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub(super) fn validate_create_shape_candidate(
+        &self,
+        shape: &AuthoredShapeRuntimeV1,
+    ) -> Result<(), EditorError> {
+        if !self.graph.pages.contains_key(&shape.page_id) {
+            return Err(EditorError::CreateShapePageMissing {
+                page_id: shape.page_id,
+            });
+        }
+        if self.graph.nodes.contains_key(&shape.node_id)
+            || self.authored_shapes.contains_key(&shape.node_id)
+            || self.authored_lines.contains_key(&shape.node_id)
+        {
+            return Err(EditorError::CreateShapeIdCollision {
+                node_id: shape.node_id,
+            });
+        }
+        match validate_authored_shape_runtime_v1(shape) {
+            Ok(()) => Ok(()),
+            Err(CreateShapeRuntimeValidationError::NodeIdNotUuidV7) => {
+                Err(EditorError::CreateShapeInvalidNodeId {
+                    node_id: shape.node_id,
+                })
+            }
+            Err(CreateShapeRuntimeValidationError::InvalidBounds) => {
+                Err(EditorError::CreateShapeInvalidBounds {
+                    node_id: shape.node_id,
+                })
+            }
+            Err(CreateShapeRuntimeValidationError::InvalidPaint) => {
+                Err(EditorError::CreateShapeInvalidPaint {
+                    node_id: shape.node_id,
+                })
+            }
+            Err(
+                CreateShapeRuntimeValidationError::NonAuthorCreatedProvenance
+                | CreateShapeRuntimeValidationError::NonAuthorCreatedPaintProvenance,
+            ) => Err(EditorError::CreateShapeInvalidProvenance {
+                node_id: shape.node_id,
+            }),
+            Err(
+                CreateShapeRuntimeValidationError::ParentPageMismatch
+                | CreateShapeRuntimeValidationError::UnsupportedShapeKind
+                | CreateShapeRuntimeValidationError::UnsupportedTransform,
+            ) => Err(EditorError::CreateShapeMalformed {
+                node_id: shape.node_id,
+            }),
+        }
+    }
+}
