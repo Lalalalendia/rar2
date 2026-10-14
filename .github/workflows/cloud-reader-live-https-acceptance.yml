@@ -29,6 +29,9 @@ on:
       - "tools/run_temporary_editor_real_pub_browser_acceptance.py"
       - "tools/run_temporary_editor_real_pub_browser.mjs"
       - "tools/run_temporary_editor_real_pub_story_browser.mjs"
+      - "tools/run_temporary_editor_real_pub_create_browser.mjs"
+      - "tools/verify_temporary_guest_created_shape_export.py"
+      - "tools/ci/verify_authored_rectangle_export.py"
       - "tools/verify_temporary_guest_story_export.py"
       - "tools/verify_temporary_guest_pdf_geometry.py"
       - "tools/verify_temporary_guest_resize_export.py"
@@ -71,6 +74,8 @@ jobs:
           python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_resize_export.py
           node --check tools/run_temporary_editor_real_pub_browser.mjs
           node --check tools/run_temporary_editor_real_pub_story_browser.mjs
+          node --check tools/run_temporary_editor_real_pub_create_browser.mjs
+          python -m py_compile tools/verify_temporary_guest_created_shape_export.py
           python - <<'PY'
           import ctypes.util
           assert ctypes.util.find_library("seccomp"), "libseccomp is required"
@@ -217,6 +222,21 @@ jobs:
               --out "$GITHUB_WORKSPACE/target/temporary-editor-resize-$target"
           done
 
+
+      # Real Chromium/Caddy/Rust isolation, not the synthetic browser seam.
+      - name: Prove real PUB Chromium CreateShape and IDML/ODG physical consumers
+        run: |
+          set -euo pipefail
+          for target in idml odg; do
+            python tools/run_temporary_editor_real_pub_browser_acceptance.py \
+              --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+              --caddy "$RUNNER_TEMP/live-reader/caddy" \
+              --fixture "$RUNNER_TEMP/live-reader/temp-current.pub" \
+              --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
+              --target "create-$target" \
+              --out "$GITHUB_WORKSPACE/target/temporary-editor-create-$target"
+          done
+
       - name: Prove real Guest Story edit through isolated worker and physical IDML/ODG consumer
         run: |
           set -euo pipefail
@@ -252,5 +272,7 @@ jobs:
             target/temporary-editor-keyboard-idml/receipt.json
             target/temporary-editor-resize-idml/receipt.json
             target/temporary-editor-resize-odg/receipt.json
+            target/temporary-editor-create-idml/receipt.json
+            target/temporary-editor-create-odg/receipt.json
           if-no-files-found: warn
           retention-days: 30

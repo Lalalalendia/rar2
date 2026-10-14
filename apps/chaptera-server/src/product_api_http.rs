@@ -21,7 +21,9 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapeRuntimeV1,
+    AuthoredShapeTransformV1, EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest,
+    StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -38,7 +40,10 @@ use crate::{
         IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
         IsolatedStoryRangeIntentV1, ProductReplayWorkerError,
     },
-    reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
+    reader_scene_v1::{
+        MAX_SCENE_BYTES, ReaderLineV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1, ReaderSceneV1,
+        ReaderTransformV1, from_viewer_geometry,
+    },
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
         EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
@@ -495,6 +500,7 @@ fn project_reader_scene_with_worker_samples(
             )
         })?;
 
+    let mut authored_rectangles = Vec::<AuthoredShapeRuntimeV1>::new();
     if revision_id != baseline_revision_id {
         let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
             ProductApiError::internal(
@@ -525,10 +531,19 @@ fn project_reader_scene_with_worker_samples(
                 EditOperation::ReplaceStoryRange { story_id, .. } => {
                     edited_story_ids.push(*story_id);
                 }
+                EditOperation::CreateShape { node_id, .. } => {
+                    let shape = session.authored_shape(*node_id).ok_or_else(|| {
+                        ProductApiError::conflict(
+                            "reader_scene_created_rectangle_missing",
+                            "canonical replay lost the created authored rectangle",
+                        )
+                    })?;
+                    authored_rectangles.push(shape.clone());
+                }
                 _ => {
                     return Err(ProductApiError::conflict(
                         "reader_scene_revision_operation_unsupported",
-                        "rich Reader scene replay admits only canonical MoveNode, ResizeNode and plain StoryRange revisions",
+                        "rich Reader scene replay admits only canonical MoveNode, ResizeNode, CreateShape and plain StoryRange revisions",
                     ));
                 }
             }
@@ -642,7 +657,7 @@ fn project_reader_scene_with_worker_samples(
         }
     }
 
-    let scene = from_viewer_geometry(
+    let mut scene = from_viewer_geometry(
         document_id,
         source_sha256,
         revision_id,
@@ -655,6 +670,7 @@ fn project_reader_scene_with_worker_samples(
             format!("source-neutral Reader scene projection failed: {error}"),
         )
     })?;
+    append_authored_rectangles_to_reader_scene(&mut scene, &authored_rectangles)?;
 
     // Only the syscall-confined worker may decode immutable PUB image bytes.
     // The server receives decoded samples, not original PNG/JPEG containers.
@@ -681,6 +697,129 @@ fn project_reader_scene_with_worker_samples(
     }
 
     Ok(scene)
+}
+
+const MAX_AUTHORED_RECTANGLES_PER_READER_SCENE: usize = 128;
+
+/// Convert only canonical, EditorSession-replayed authored Rectangles into
+/// the source-neutral rich Reader scene. Imported Viewer geometry is unchanged.
+/// Mixed imported/authored draw order is explicitly Partial and never guessed.
+fn append_authored_rectangles_to_reader_scene(
+    scene: &mut ReaderSceneV1,
+    authored: &[AuthoredShapeRuntimeV1],
+) -> Result<(), ProductApiError> {
+    if authored.len() > MAX_AUTHORED_RECTANGLES_PER_READER_SCENE {
+        return Err(ProductApiError::conflict(
+            "reader_scene_authored_rectangles_limit",
+            "too many authored rectangles for one bounded Viewer scene",
+        ));
+    }
+    for shape in authored {
+        let node_id = shape.node_id.as_canonical().to_string();
+        let page_id = shape.page_id.as_canonical().to_string();
+        let page = scene
+            .pages
+            .iter()
+            .find(|page| page.page_id == page_id)
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "reader_scene_authored_page_missing",
+                    "the authored rectangle belongs to no admitted Reader page",
+                )
+            })?;
+        let bounds = shape.bounds;
+        if shape.parent_id != shape.page_id
+            || shape.shape_kind != AuthoredShapeKindV1::Rectangle
+            || shape.transform != AuthoredShapeTransformV1::Identity
+            || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || bounds.x.get() < 0
+            || bounds.y.get() < 0
+            || bounds.width.get() <= 0
+            || bounds.height.get() <= 0
+            || bounds.right().is_none_or(|x| x.get() > page.width_emu)
+            || bounds.bottom().is_none_or(|y| y.get() > page.height_emu)
+            || scene.nodes.iter().any(|node| node.node_id == node_id)
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_rectangle_invalid",
+                "canonical authored Rectangle cannot be represented on its exact source page",
+            ));
+        }
+        let fill = &shape.paint.fill;
+        let stroke = &shape.paint.stroke;
+        scene.nodes.push(ReaderNodeV1 {
+            node_id,
+            origin_node_id: None,
+            page_id,
+            parent_node_id: None,
+            kind: "shape",
+            bounds: ReaderRectV1 {
+                x: bounds.x.get(),
+                y: bounds.y.get(),
+                width: bounds.width.get(),
+                height: bounds.height.get(),
+            },
+            text_bounds: None,
+            transform: ReaderTransformV1 {
+                a: "1".to_owned(),
+                b: "0".to_owned(),
+                c: "0".to_owned(),
+                d: "1".to_owned(),
+                tx: 0,
+                ty: 0,
+            },
+            paint: Some(ReaderPaintV1 {
+                preset_shape: None,
+                fill_rgb: fill
+                    .visible
+                    .then_some([fill.color.r, fill.color.g, fill.color.b]),
+                line: stroke.visible.then_some(ReaderLineV1 {
+                    rgb: [stroke.color.r, stroke.color.g, stroke.color.b],
+                    width_emu: stroke.width_emu,
+                }),
+            }),
+            decorative_border: None,
+            resource_id: None,
+            image_source_window: None,
+            image_content_rotation_degrees: None,
+            image_recolor: None,
+            table: None,
+            text: None,
+            text_layout: None,
+            preview_text_style: None,
+        });
+    }
+    if !authored.is_empty() {
+        scene.stacking_fidelity = "unknown";
+        scene.fidelity.state = "partial";
+        if !scene
+            .fidelity
+            .reasons
+            .contains(&"authored_rectangle_mixed_order_unsupported")
+        {
+            scene
+                .fidelity
+                .reasons
+                .push("authored_rectangle_mixed_order_unsupported");
+        }
+        if serde_json::to_vec(scene)
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "reader_scene_projection_failed",
+                    "authored Reader scene could not be serialized",
+                )
+            })?
+            .len()
+            > MAX_SCENE_BYTES
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_size_limit",
+                "authored Reader scene exceeds its public byte cap",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Called only inside the already confined product worker after post-read
@@ -1868,6 +2007,124 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn authored_reader_rectangles_preserve_identity_and_paint_but_not_fabricated_z_order() {
+        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
+        use pub_editor::{
+            AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, PageId, RectEmu,
+            Srgb8V1,
+        };
+        let page_id = "019a2d80-1112-7001-8001-aabbccddee02";
+        let node_id = "019a2d80-1112-7001-8001-aabbccddee01";
+        let page: PageId = serde_json::from_value(json!(page_id)).unwrap();
+        let node: NodeId = serde_json::from_value(json!(node_id)).unwrap();
+        let mut scene = ReaderSceneV1 {
+            protocol_version: READER_SCENE_V1,
+            document_id: "tempedit:0123456789abcdef0123456789abcdef".into(),
+            source_hash: "a".repeat(64),
+            revision_id: format!("sha256:{}", "b".repeat(64)),
+            scene_authority: "server_viewer_projection",
+            stacking_fidelity: "source_back_to_front",
+            fidelity: ReaderFidelityV1 {
+                state: "supported",
+                reasons: Vec::new(),
+            },
+            pages: vec![ReaderPageV1 {
+                page_id: page_id.into(),
+                order: 0,
+                width_emu: 2_000_000,
+                height_emu: 2_000_000,
+            }],
+            nodes: Vec::new(),
+            stories: Vec::new(),
+            resources: Vec::new(),
+            fonts: Vec::new(),
+            text_layout_fallback_counts: std::collections::BTreeMap::new(),
+            diagnostics: Vec::new(),
+        };
+        let shape = AuthoredShapeRuntimeV1 {
+            node_id: node,
+            page_id: page,
+            parent_id: page,
+            shape_kind: AuthoredShapeKindV1::Rectangle,
+            bounds: RectEmu::new(
+                LengthEmu::new(100_000),
+                LengthEmu::new(200_000),
+                LengthEmu::new(300_000),
+                LengthEmu::new(400_000),
+            ),
+            transform: AuthoredShapeTransformV1::Identity,
+            paint: AuthoredShapePaintV1 {
+                fill: AuthoredSolidFillV1 {
+                    visible: true,
+                    color: Srgb8V1 {
+                        r: 18,
+                        g: 52,
+                        b: 86,
+                    },
+                },
+                stroke: AuthoredSolidStrokeV1 {
+                    visible: true,
+                    color: Srgb8V1 {
+                        r: 170,
+                        g: 187,
+                        b: 204,
+                    },
+                    width_emu: 12_700,
+                },
+                provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        assert!(
+            append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape))
+                .is_ok()
+        );
+        assert_eq!(scene.nodes.len(), 1);
+        assert_eq!(scene.nodes[0].node_id, node_id);
+        assert_eq!(scene.nodes[0].page_id, page_id);
+        assert_eq!(scene.nodes[0].kind, "shape");
+        assert_eq!(scene.nodes[0].bounds.x, 100_000);
+        assert_eq!(scene.nodes[0].bounds.height, 400_000);
+        assert_eq!(
+            scene.nodes[0].paint.as_ref().unwrap().fill_rgb,
+            Some([18, 52, 86])
+        );
+        assert_eq!(
+            scene.nodes[0]
+                .paint
+                .as_ref()
+                .unwrap()
+                .line
+                .as_ref()
+                .unwrap()
+                .width_emu,
+            12_700
+        );
+        assert_eq!(scene.stacking_fidelity, "unknown");
+        assert_eq!(scene.fidelity.state, "partial");
+        assert!(
+            scene
+                .fidelity
+                .reasons
+                .contains(&"authored_rectangle_mixed_order_unsupported")
+        );
+        // Duplicate ID or a non-existent PageId is never represented.
+        assert!(
+            append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape))
+                .is_err()
+        );
+        scene.nodes.clear();
+        let mut malformed = shape;
+        malformed.bounds = RectEmu::new(
+            LengthEmu::new(1_900_000),
+            LengthEmu::new(100),
+            LengthEmu::new(300_000),
+            LengthEmu::new(400_000),
+        );
+        assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[malformed]).is_err());
+    }
 
     #[derive(Clone)]
     struct FixtureSourceLoader {

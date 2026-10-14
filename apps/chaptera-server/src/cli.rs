@@ -20,6 +20,12 @@ pub struct Cli {
     pub command: Command,
 }
 
+// This startup-only Clap command preserves strongly typed, exclusive worker
+// options rather than exposing a free-form public command envelope.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one-time private worker CLI parsing keeps isolated command flags explicit"
+)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Install this exact executable as an immutable Linux release.
@@ -100,6 +106,13 @@ pub enum Command {
             conflicts_with_all = ["move_node_id", "story_intent_json", "scene_revision_id", "editable_export_target"]
         )]
         resize_intent_json: Option<PathBuf>,
+        /// Server-authorized, private Rectangle intent; never trust browser node authority.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "scene_revision_id", "editable_export_target"]
+        )]
+        create_shape_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,
@@ -183,6 +196,41 @@ mod tests {
             "rev",
         ]);
         assert!(Cli::try_parse_from(admitted).is_err());
+    }
+
+    #[test]
+    fn create_shape_mode_requires_project_and_exclusive_private_file() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "document-test",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut missing_project = base.to_vec();
+        missing_project.extend(["--create-shape-intent-json", "/tmp/create.json"]);
+        assert!(Cli::try_parse_from(missing_project).is_err());
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/project.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--create-shape-intent-json",
+            "/tmp/create.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                create_shape_intent_json: Some(_),
+                ..
+            }
+        ));
+        valid.extend(["--resize-intent-json", "/tmp/resize.json"]);
+        assert!(Cli::try_parse_from(valid).is_err());
     }
 
     #[test]
