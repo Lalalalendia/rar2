@@ -17,7 +17,8 @@ use pub_output::{
 };
 use pub_pdf::{
     FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfTargetProfile, render_bounded_pdf,
+    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError, PdfTargetProfile,
+    render_bounded_pdf, render_bounded_pdf_a4_card_9up,
 };
 use serde_json::{Value, json};
 
@@ -35,6 +36,25 @@ pub(crate) fn render_current_fixed_pdf(
     original: &[u8],
     expected_source_hash: &str,
     session: &EditorSession,
+) -> Result<CurrentFixedPdf, &'static str> {
+    render_current_fixed_pdf_with_sheet(original, expected_source_hash, session, false)
+}
+
+/// The one existing guest EditorSession current-revision PDF pipeline, with
+/// nine vector copies on a physical A4 sheet. No new authoring or PUB parsing.
+pub(crate) fn render_current_fixed_pdf_a4_card_9up(
+    original: &[u8],
+    expected_source_hash: &str,
+    session: &EditorSession,
+) -> Result<CurrentFixedPdf, &'static str> {
+    render_current_fixed_pdf_with_sheet(original, expected_source_hash, session, true)
+}
+
+fn render_current_fixed_pdf_with_sheet(
+    original: &[u8],
+    expected_source_hash: &str,
+    session: &EditorSession,
+    nine_up: bool,
 ) -> Result<CurrentFixedPdf, &'static str> {
     let source_hash =
         Sha256Digest::from_str(expected_source_hash).map_err(|_| "invalid_source_hash")?;
@@ -289,12 +309,23 @@ pub(crate) fn render_current_fixed_pdf(
         fonts,
         text_runs,
     };
-    let rendered = render_bounded_pdf(
-        &bundle.geometry.scene,
-        &resources,
-        &PdfTargetProfile::basic_geometry_v0_1(),
-    )
-    .map_err(|_| "edited_pdf_render_failed")?;
+    let rendered = if nine_up {
+        render_bounded_pdf_a4_card_9up(
+            &bundle.geometry.scene,
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+    } else {
+        render_bounded_pdf(
+            &bundle.geometry.scene,
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+    }
+    .map_err(|error| match error {
+        PdfRenderError::NineUpCardGeometryUnsupported => "edited_pdf_nine_up_geometry_unsupported",
+        _ => "edited_pdf_render_failed",
+    })?;
     if rendered.bytes.len() <= 5
         || rendered.bytes.len() > MAX_PRIVATE_PDF_BYTES
         || !rendered.bytes.starts_with(b"%PDF-")
@@ -322,10 +353,23 @@ pub(crate) fn render_current_fixed_pdf(
         .count();
     let layout_warnings = flow.diagnostics.len();
     let pdf_warnings = rendered.report.diagnostics.len();
+    // Repeating a partial render nine times is not valid physical print
+    // acceptance. Ordinary single-page PDF retains its existing explicit
+    // LossReport, while 9-up refuses lossy or unsupported content.
+    if nine_up
+        && (rendered.report.pages.len() != 1
+            || partial != 0
+            || unsupported != 0
+            || unavailable_glyph_lines != 0
+            || layout_warnings != 0
+            || pdf_warnings != 0)
+    {
+        return Err("edited_pdf_nine_up_visual_loss_unresolved");
+    }
     // No original Story text or private font/PUB bytes appear in this report.
     let loss_report = json!({
         "schema_version": LOSS_REPORT_SCHEMA,
-        "target": "pdf",
+        "target": if nine_up { "pdf9up" } else { "pdf" },
         "renderer": "pub-pdf-v0.1",
         "current_editor_state": true,
         "can_serialize": true,
