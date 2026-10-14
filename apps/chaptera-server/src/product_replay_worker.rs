@@ -14,8 +14,10 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, RectEmu, Sha256Digest,
-    StoryId, open_mature_0x2c_editor,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
+    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, EditOperation,
+    EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest,
+    Srgb8V1, StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -68,6 +70,113 @@ pub struct IsolatedResizeNodeReceiptV1 {
     pub operation: EditOperation,
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedCreateShapeIntentV1 {
+    // Both IDs are server-authorized. The browser must never mint NodeId
+    // authority or be able to select another document's PageId.
+    pub node_id: String,
+    pub page_id: String,
+    pub x_emu: i64,
+    pub y_emu: i64,
+    pub width_emu: i64,
+    pub height_emu: i64,
+    pub fill_rgb: [u8; 3],
+    pub stroke_rgb: [u8; 3],
+    pub stroke_width_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedCreateShapeReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
+
+fn validate_create_shape_intent(
+    intent: &IsolatedCreateShapeIntentV1,
+) -> Result<(), ProductReplayWorkerError> {
+    if intent.node_id.len() > 128
+        || intent.page_id.len() > 128
+        || serde_json::from_value::<NodeId>(Value::String(intent.node_id.clone())).is_err()
+        || serde_json::from_value::<PageId>(Value::String(intent.page_id.clone())).is_err()
+        || intent.x_emu < 0
+        || intent.y_emu < 0
+        || intent.width_emu <= 0
+        || intent.height_emu <= 0
+        || intent.stroke_width_emu <= 0
+        || intent.stroke_width_emu > 1_000_000
+        || intent.x_emu.checked_add(intent.width_emu).is_none()
+        || intent.y_emu.checked_add(intent.height_emu).is_none()
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_create_shape_invalid",
+            "CreateShape intent has invalid IDs, bounds or paint",
+        ));
+    }
+    Ok(())
+}
+
+fn create_shape_paint(intent: &IsolatedCreateShapeIntentV1) -> AuthoredShapePaintV1 {
+    AuthoredShapePaintV1 {
+        fill: AuthoredSolidFillV1 {
+            visible: true,
+            color: Srgb8V1 {
+                r: intent.fill_rgb[0],
+                g: intent.fill_rgb[1],
+                b: intent.fill_rgb[2],
+            },
+        },
+        stroke: AuthoredSolidStrokeV1 {
+            visible: true,
+            color: Srgb8V1 {
+                r: intent.stroke_rgb[0],
+                g: intent.stroke_rgb[1],
+                b: intent.stroke_rgb[2],
+            },
+            width_emu: intent.stroke_width_emu,
+        },
+        provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+    }
+}
+
+fn exact_create_shape_operation(
+    intent: &IsolatedCreateShapeIntentV1,
+) -> Result<EditOperation, ProductReplayWorkerError> {
+    validate_create_shape_intent(intent)?;
+    let node_id: NodeId =
+        serde_json::from_value(Value::String(intent.node_id.clone())).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "CreateShape NodeId is not canonical",
+            )
+        })?;
+    let page_id: PageId =
+        serde_json::from_value(Value::String(intent.page_id.clone())).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "CreateShape PageId is not canonical",
+            )
+        })?;
+    Ok(EditOperation::CreateShape {
+        node_id,
+        page_id,
+        parent_id: page_id,
+        shape_kind: AuthoredShapeKindV1::Rectangle,
+        bounds: RectEmu::new(
+            LengthEmu::new(intent.x_emu),
+            LengthEmu::new(intent.y_emu),
+            LengthEmu::new(intent.width_emu),
+            LengthEmu::new(intent.height_emu),
+        ),
+        transform: AuthoredShapeTransformV1::Identity,
+        paint: create_shape_paint(intent),
+        provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +236,7 @@ const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_RESIZE_INTENT_BYTES: u64 = 1024;
+const MAX_CREATE_SHAPE_INTENT_BYTES: u64 = 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EDITED_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EDITED_LOSS_REPORT_BYTES: usize = 64 * 1024;
@@ -401,6 +511,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resize_node: Option<IsolatedResizeNodeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_shape: Option<IsolatedCreateShapeReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub story_range: Option<IsolatedStoryRangeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
@@ -470,6 +582,7 @@ fn take_exclusive_story_range_receipt(
     if receipt.baseline_project.is_some()
         || receipt.move_node.is_some()
         || receipt.resize_node.is_some()
+        || receipt.create_shape.is_some()
         || receipt.reader_scene.is_some()
         || receipt.editable_export.is_some()
     {
@@ -552,6 +665,28 @@ pub fn validate_product_replay_receipt(
             "product_replay_receipt_invalid",
             "isolated MoveNode receipt violates source and project identity",
         ));
+    }
+    if let Some(created) = &receipt.create_shape {
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.resize_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.editable_export.is_some()
+            || !matches!(created.operation, EditOperation::CreateShape { .. })
+            || created.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&created.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated CreateShape project cannot be canonically hashed",
+                )
+            })? != created.resulting_project_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated CreateShape violates exclusive source/project authority",
+            ));
+        }
     }
     if let Some(resize) = &receipt.resize_node
         && (receipt.baseline_project.is_some()
@@ -935,6 +1070,7 @@ pub fn run_product_replay_worker(
     story_intent_path: Option<&Path>,
     editable_export_target: Option<&str>,
     resize_intent_path: Option<&Path>,
+    create_shape_intent_path: Option<&Path>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -952,11 +1088,18 @@ pub fn run_product_replay_worker(
         + usize::from(story_intent_path.is_some())
         + usize::from(editable_export_target.is_some())
         + usize::from(resize_intent_path.is_some())
+        + usize::from(create_shape_intent_path.is_some())
         > 1
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_identity_invalid",
             "isolated Product worker admits only one mutation or Scene command",
+        ));
+    }
+    if create_shape_intent_path.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_create_shape_invalid",
+            "CreateShape requires an authorized exact base project",
         ));
     }
     if resize_intent_path.is_some() && project_path.is_none() {
@@ -1160,6 +1303,21 @@ pub fn run_product_replay_worker(
         None
     };
 
+
+    let create_shape_intent = if let Some(path) = create_shape_intent_path {
+        let bytes = read_bounded(path, MAX_CREATE_SHAPE_INTENT_BYTES)?;
+        let intent: IsolatedCreateShapeIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "CreateShape must be a typed private JSON envelope",
+            )
+        })?;
+        validate_create_shape_intent(&intent)?;
+        Some(intent)
+    } else {
+        None
+    };
+
     // No further filesystem operations are permitted after this point.
     // The outer harness also installs syscall network deny and hard limits.
     install_post_read_filesystem_default_deny().map_err(|_| {
@@ -1341,6 +1499,68 @@ pub fn run_product_replay_worker(
             )
         })?;
         Some(IsolatedResizeNodeReceiptV1 {
+            operation,
+            resulting_project,
+            resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
+
+    let create_shape = if let Some(intent) = create_shape_intent {
+        let expected_operation = exact_create_shape_operation(&intent)?;
+        let EditOperation::CreateShape {
+            node_id,
+            page_id,
+            bounds,
+            paint,
+            ..
+        } = &expected_operation
+        else {
+            unreachable!("canonical CreateShape intent creates one CreateShape operation")
+        };
+        let operation = session
+            .create_shape(*node_id, *page_id, *bounds, paint.clone())
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_shape_rejected",
+                    "isolated EditorSession rejected the authored rectangle",
+                )
+            })?;
+        if operation != expected_operation
+            || !matches!(
+                session.authored_shape(*node_id),
+                Some(shape) if shape.page_id == *page_id
+                    && shape.bounds == *bounds && shape.paint == *paint
+            )
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "isolated authored overlay differs from canonical CreateShape",
+            ));
+        }
+        let resulting_project = cloud_revision_project(&session.project());
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_shape_invalid",
+                    "authored rectangle cannot be appended to canonical project",
+                )
+            })?;
+        if expected_project != resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "authored rectangle differs from exact event replay",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "CreateShape resulting project is not canonically hashable",
+            )
+        })?;
+        Some(IsolatedCreateShapeReceiptV1 {
             operation,
             resulting_project,
             resulting_project_sha256,
@@ -1615,6 +1835,7 @@ pub fn run_product_replay_worker(
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
         resize_node,
+        create_shape,
         story_range,
         reader_scene,
         editable_export,
@@ -1718,6 +1939,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1753,6 +1975,7 @@ impl IsolatedProductReplayProducer {
                 document_id,
                 source_sha256,
                 source_bytes,
+                None,
                 None,
                 None,
                 None,
@@ -1849,6 +2072,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1929,6 +2153,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
                 None,
                 None,
                 None,
@@ -2058,6 +2283,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2138,6 +2364,102 @@ impl IsolatedProductReplayProducer {
         Ok((mutation.operation, mutation.resulting_project))
     }
 
+
+    /// Isolated, source-bound authored Rectangle mutation. The host must mint a
+    /// collision-resistant UUIDv7 NodeId and authorize the exact PageId before
+    /// invoking this method. No mutable PUB bytes or source parsing on the host.
+    #[expect(clippy::too_many_arguments, reason = "exact authorized source and project identity")]
+    pub async fn create_shape(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        base_project: &EditorProject,
+        expected_base_sha256: &str,
+        intent: &IsolatedCreateShapeIntentV1,
+    ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
+        let expected = exact_create_shape_operation(intent)?;
+        let project_bytes = serde_json::to_vec(base_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical CreateShape base project could not be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(base_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "CreateShape base identity cannot be derived",
+                )
+            })? != expected_base_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "CreateShape must target the exact current source-bound project",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_base_sha256)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_base_sha256,
+        )?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.resize_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.editable_export.is_some()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateShape worker returned unrelated authority",
+            ));
+        }
+        let created = receipt.create_shape.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateShape worker did not produce a mutation",
+            )
+        })?;
+        if created.operation != expected {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateShape operation differs from authorized intent",
+            ));
+        }
+        let expected_project =
+            append_event_operation(base_project.clone(), created.operation.clone()).map_err(
+                |_| ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "CreateShape cannot form an exact event append",
+                ),
+            )?;
+        if expected_project != created.resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateShape project differs from canonical replay",
+            ));
+        }
+        let _ = require_typed_graph(receipt.authoring_graph)?;
+        Ok((created.operation, created.resulting_project))
+    }
+
     /// Source-backed, bounded plain Story text. The isolated EditorSession
     /// derives expected_before and owns eligibility; the host verifies the
     /// complete canonical event before any authorized RevisionStream commit.
@@ -2187,6 +2509,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                None,
                 None,
                 None,
             )
@@ -2299,6 +2622,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 Some(target),
                 None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2354,6 +2678,7 @@ impl IsolatedProductReplayProducer {
         story_range: Option<&IsolatedStoryRangeIntentV1>,
         editable_export_target: Option<&str>,
         resize_node: Option<&IsolatedResizeNodeIntentV1>,
+        create_shape: Option<&IsolatedCreateShapeIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -2371,6 +2696,7 @@ impl IsolatedProductReplayProducer {
             + usize::from(story_range.is_some())
             + usize::from(editable_export_target.is_some())
             + usize::from(resize_node.is_some())
+            + usize::from(create_shape.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -2396,6 +2722,12 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
                 "unknown edited target",
+            ));
+        }
+        if create_shape.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_shape_invalid",
+                "CreateShape requires an authorized source-bound project",
             ));
         }
         if resize_node.is_some() && project.is_none() {
@@ -2431,10 +2763,27 @@ impl IsolatedProductReplayProducer {
         let project_path = temp.path.join("project.json");
         let story_intent_path = temp.path.join("story-intent.json");
         let resize_intent_path = temp.path.join("resize-intent.json");
+        let create_shape_intent_path = temp.path.join("create-shape-intent.json");
         let result_dir = temp.path.join("worker-result");
         write_private_replay_input(&source_path, source_bytes).await?;
         if let Some((project_bytes, _)) = project {
             write_private_replay_input(&project_path, project_bytes).await?;
+        }
+        if let Some(intent) = create_shape {
+            validate_create_shape_intent(intent)?;
+            let bytes = serde_json::to_vec(intent).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_shape_invalid",
+                    "private CreateShape intent cannot be serialized",
+                )
+            })?;
+            if bytes.len() as u64 > MAX_CREATE_SHAPE_INTENT_BYTES {
+                return Err(ProductReplayWorkerError::new(
+                    "product_create_shape_invalid",
+                    "private CreateShape intent exceeds bounded envelope",
+                ));
+            }
+            write_private_replay_input(&create_shape_intent_path, &bytes).await?;
         }
         if let Some(intent) = resize_node {
             let bytes = serde_json::to_vec(intent).map_err(|_| {
@@ -2516,6 +2865,9 @@ impl IsolatedProductReplayProducer {
         }
         if resize_node.is_some() {
             command.arg("--resize-intent-json").arg(&resize_intent_path);
+        }
+        if create_shape.is_some() {
+            command.arg("--create-shape-intent-json").arg(&create_shape_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);
@@ -2696,11 +3048,48 @@ mod tests {
             baseline_project: None,
             move_node: None,
             resize_node: None,
+            create_shape: None,
             story_range: None,
             reader_scene: None,
             editable_export: None,
             filesystem_confinement: true,
         }
+    }
+
+
+    #[test]
+    fn create_shape_private_intent_denies_nonpositive_geometry_and_unknown_fields() {
+        let base = IsolatedCreateShapeIntentV1 {
+            node_id: "019a2d80-1112-7001-8001-aabbccddee01".to_owned(),
+            page_id: "019a2d80-1112-7001-8001-aabbccddee02".to_owned(),
+            x_emu: 914_400,
+            y_emu: 914_400,
+            width_emu: 1_828_800,
+            height_emu: 914_400,
+            fill_rgb: [18, 52, 86],
+            stroke_rgb: [170, 187, 204],
+            stroke_width_emu: 12_700,
+        };
+        validate_create_shape_intent(&base).unwrap();
+        assert!(matches!(
+            exact_create_shape_operation(&base).unwrap(),
+            EditOperation::CreateShape { .. }
+        ));
+        let mut invalid = base.clone();
+        invalid.width_emu = 0;
+        assert_eq!(
+            validate_create_shape_intent(&invalid).unwrap_err().code,
+            "product_create_shape_invalid"
+        );
+        invalid = base.clone();
+        invalid.x_emu = i64::MAX;
+        assert!(validate_create_shape_intent(&invalid).is_err());
+        invalid = base.clone();
+        invalid.stroke_width_emu = 0;
+        assert!(validate_create_shape_intent(&invalid).is_err());
+        let mut object = serde_json::to_value(base).unwrap();
+        object["unexpected"] = Value::Bool(true);
+        assert!(serde_json::from_value::<IsolatedCreateShapeIntentV1>(object).is_err());
     }
 
     #[test]
