@@ -17,6 +17,18 @@ const ACCEPTED_PROTOCOL = "chaptera.temporary-editor-move-node.v1";
 const REQUEST_PROTOCOL = "chaptera.commit-request.v1";
 const LOCAL_SCHEMA = "chaptera.temporary-edit.browser.v0";
 
+// Only a server-confirmed 429 on an idempotent, private GET may be retried.
+// A server-supplied Retry-After must be a small, positive delta-seconds value;
+// never parse an arbitrary date or wait indefinitely on untrusted headers.
+const READ_RETRY_MAX_SECONDS = 10;
+function boundedReadRetryAfterMs(response) {
+  const value = response?.headers?.get?.("retry-after");
+  if (typeof value !== "string" || !/^[1-9][0-9]?$/.test(value)) return null;
+  const seconds = Number(value);
+  return seconds <= READ_RETRY_MAX_SECONDS ? seconds * 1000 : null;
+}
+const defaultSleep = durationMs => new Promise(done => setTimeout(done, durationMs));
+
 function failure(code, status) {
   const error = new Error(code);
   error.code = code;
@@ -146,6 +158,7 @@ export class TemporaryGuestMoveClientV1 {
   #csrf;
   #fetch;
   #operationIdFactory;
+  #sleep;
   #current = null;
   #pending = null;
   #busy = false;
@@ -164,10 +177,12 @@ export class TemporaryGuestMoveClientV1 {
 
   constructor({ sessionId, accessToken, sourceHash, csrfToken,
     fetchImpl = globalThis.fetch, cryptoObject = globalThis.crypto,
-    operationIdFactory = () => newOperationId(cryptoObject) } = {}) {
+    operationIdFactory = () => newOperationId(cryptoObject),
+    sleepImpl = defaultSleep } = {}) {
     if (!SESSION.test(sessionId ?? "") || !SECRET.test(accessToken ?? "") ||
         !SOURCE.test(sourceHash ?? "") || !/^[0-9a-f]{32}$/.test(csrfToken ?? "") ||
-        typeof fetchImpl !== "function" || typeof operationIdFactory !== "function") {
+        typeof fetchImpl !== "function" || typeof operationIdFactory !== "function"
+        || typeof sleepImpl !== "function") {
       throw failure("temporary_move_client_config_invalid");
     }
     this.#sessionId = sessionId;
@@ -176,6 +191,7 @@ export class TemporaryGuestMoveClientV1 {
     this.#csrf = csrfToken;
     this.#fetch = fetchImpl;
     this.#operationIdFactory = operationIdFactory;
+    this.#sleep = sleepImpl;
   }
 
   // No bearer or raw PUB contents are ever exposed by status introspection.
@@ -196,7 +212,7 @@ export class TemporaryGuestMoveClientV1 {
   }
 
   async #request(action, method = "GET", body = null) {
-    const response = await this.#fetch.call(globalThis, this.#path(action), {
+    const options = {
       method,
       headers: {
         "accept": "application/json",
@@ -207,7 +223,19 @@ export class TemporaryGuestMoveClientV1 {
       ...(body ? { body: JSON.stringify(body) } : {}),
       credentials: "omit", mode: "same-origin", cache: "no-store",
       redirect: "error", referrerPolicy: "no-referrer",
-    });
+    };
+    const path = this.#path(action);
+    let response = await this.#fetch.call(globalThis, path, options);
+    if (response?.status === 429 && method === "GET" &&
+        (action === "current" || action === "scene")) {
+      const delayMs = boundedReadRetryAfterMs(response);
+      if (delayMs !== null) {
+        // The retry is one-shot. Never replay mutation, export, or DELETE.
+        // The same bearer/source/revision checks still run on the fresh reply.
+        await this.#sleep(delayMs);
+        response = await this.#fetch.call(globalThis, path, options);
+      }
+    }
     if (!response?.ok) {
       const status = Number.isSafeInteger(response?.status) ? response.status : undefined;
       throw failure("temporary_move_request_rejected", status);
