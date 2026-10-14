@@ -9,11 +9,22 @@
 </head>
 <body>
 <main id="temporary-preview-root" class="page-shell">
-  <header>
-    <strong>Chaptera</strong>
-    <h1>Временный редактор PUB</h1>
-    <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
-    <p class="notice"><strong>Просмотр и PDF без правки.</strong> Откройте поддерживаемый PUB и скачайте PDF с отчётом об ограничениях точности. Также можно перемещать поддерживаемые фигуры (после выбора — стрелками клавиатуры по 1 пункту), изменять их размер и редактировать простой текст рамок, затем скачивать изменённые PDF, IDML или ODG. Сохранение изменённого .pub не обещается. Исходный PUB неизменен.</p>
+  <header class="workspace-topbar">
+    <a class="workspace-brand" href="/" target="_blank" rel="noopener noreferrer" aria-label="Открыть облачную читалку в новой вкладке">
+      <span class="workspace-mark" aria-hidden="true">C</span>
+      <strong>Chaptera</strong>
+    </a>
+    <div class="workspace-document">
+      <h1>Временный редактор PUB</h1>
+      <span class="workspace-subtitle">Работа с документом · временная сессия</span>
+    </div>
+    <details class="workspace-about">
+      <summary>Возможности и ограничения</summary>
+      <div class="workspace-about-content">
+        <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
+        <p class="notice"><strong>Просмотр и PDF без правки.</strong> Откройте поддерживаемый PUB и скачайте PDF с отчётом об ограничениях точности. Также можно перемещать поддерживаемые фигуры (после выбора — стрелками клавиатуры по 1 пункту), изменять их размер и редактировать простой текст рамок, затем скачивать изменённые PDF, IDML или ODG. Сохранение изменённого .pub не обещается. Исходный PUB неизменен.</p>
+      </div>
+    </details>
   </header>
   <section aria-labelledby="open-heading" class="panel">
     <h2 id="open-heading">Открыть файл</h2>
@@ -22,6 +33,7 @@
       <input id="temporary-file" name="pub" type="file" accept=".pub,application/vnd.ms-publisher" required>
       <button id="temporary-start" type="submit">Открыть временно</button>
     </form>
+    <p class="editor-safety-note">Исходный PUB не изменяется. Сохранение обратно в .pub пока недоступно.</p>
     <div class="actions">
       <button id="temporary-resume" type="button" hidden>Восстановить в этой вкладке</button>
       <button id="temporary-forget" type="button" hidden>Забыть в этой вкладке</button>
@@ -29,11 +41,17 @@
     </div>
     <p id="temporary-status" role="status" aria-live="polite">Выберите PUB. Данные временной сессии не добавляются в постоянные проекты.</p>
     <p id="temporary-expiry" class="secondary"></p>
-    <p class="secondary">Вкладка хранит приватный ключ временной сессии. «Забыть» удаляет только локальный ключ. «Удалить временную сессию с сервера» немедленно отзывает доступ и очищает временные файлы после подтверждения. Иначе сервер удаляет данные через час после последней принятой правки.</p>
+    <details class="privacy-help">
+      <summary>Хранение и удаление данных</summary>
+      <p class="secondary">Вкладка хранит приватный ключ временной сессии. «Забыть» удаляет только локальный ключ. «Удалить временную сессию с сервера» немедленно отзывает доступ и очищает временные файлы после подтверждения. Иначе сервер удаляет данные через час после последней принятой правки.</p>
+    </details>
   </section>
   <section id="temporary-story-panel" class="panel" aria-labelledby="story-heading" hidden>
     <h2 id="story-heading">Изменить текст</h2>
-    <p class="secondary">Поддерживается простой текст одной несвязанной рамки. Существующие окончания строк сохраняются; новые абзацы и сложное оформление не поддерживаются. Все изменения подтверждает сервер.</p>
+    <details class="story-help">
+      <summary>Ограничения редактирования текста</summary>
+      <p class="secondary">Поддерживается простой текст одной несвязанной рамки. Существующие окончания строк сохраняются; новые абзацы и сложное оформление не поддерживаются. Все изменения подтверждает сервер.</p>
+    </details>
     <label for="temporary-story-select">Текстовая рамка</label>
     <select id="temporary-story-select"></select>
     <label for="temporary-story-text">Текст</label>
@@ -41,7 +59,7 @@
     <div class="actions"><button id="temporary-story-apply" type="button" disabled>Сохранить текст</button></div>
   </section>
   <section class="panel" aria-labelledby="pages-heading">
-    <h2 id="pages-heading">Страницы</h2>
+    <h2 id="pages-heading">Страницы <span class="canvas-hint">Выберите объект, затем переместите или измените его размер</span></h2>
     <div id="temporary-pages" class="pages" role="region" aria-label="Страницы временного PUB" tabindex="0"></div>
     <div id="temporary-export-actions" class="actions" hidden>
       <button id="temporary-download-idml" type="button" disabled>Скачать изменённый IDML</button>
