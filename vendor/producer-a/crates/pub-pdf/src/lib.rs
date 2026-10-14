@@ -1523,7 +1523,11 @@ mod tests {
             .nodes
             .retain(|node| node.parent_origin == page.into_canonical());
         assert_eq!(
-            visual.nodes.iter().map(|node| node.origin).collect::<Vec<_>>(),
+            visual
+                .nodes
+                .iter()
+                .map(|node| node.origin)
+                .collect::<Vec<_>>(),
             vec![node_id(11), node_id(10)]
         );
         visual.nodes[0].bounds = visual.nodes[1].bounds;
@@ -1565,10 +1569,14 @@ mod tests {
         };
 
         let first = render(&visual);
-        assert_eq!(first, render(&visual), "identical order remains byte deterministic");
+        assert_eq!(
+            first,
+            render(&visual),
+            "identical order remains byte deterministic"
+        );
         let pdf = String::from_utf8_lossy(&first.bytes);
-        let back_op = format!("/{} Do\\n", image_name(back_image)).replace("\\n", "\n");
-        let front_op = format!("/{} Do\\n", image_name(front_image)).replace("\\n", "\n");
+        let back_op = format!("/{} Do\n", image_name(back_image));
+        let front_op = format!("/{} Do\n", image_name(front_image));
         assert!(
             pdf.find(&back_op).expect("back image operator")
                 < pdf.find(&front_op).expect("front image operator"),
