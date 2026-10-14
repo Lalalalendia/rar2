@@ -24,6 +24,20 @@ For each painted node, `source_nodes` reports only `SourceRef` values that satis
 
 If a file is private, its geometry, carrier/keys/offsets and IDs are also private: do not collect it in public CI or telemetry. The CLI uses the existing `AdmittedSource::commit_derived_output` output boundary. Normal PDF bytes and standard loss report remain unchanged.
 
+## Stage 1b — Viewer image placements versus fixed-PDF handoff
+
+When source provenance is enabled, the private diagnostic now includes `image_inputs` for **each actually painted** image atom. Each entry joins by the *same* `NodeId + ResourceId` as the paint trace. It records source-exact status, MIME, Viewer source-window edges in Q16 (if explicitly present), Viewer recolor/rotation evidence and the corresponding placement flags **actually transferred** to `FixedPdfResources`.
+
+The `transfer_status` is an explicit handoff result, not a visual correctness claim. Of special interest:
+
+- `viewer_crop_not_forwarded`: Viewer recovered an explicit source crop, but the PDF adapter did not pass it on. The current bounded adapter can discard a standalone PNG/JPEG crop while still painting the image using its node rectangle. This is a **diagnosable fidelity loss**, not permission to label the output uncropped in Publisher.
+- `viewer_recolor_not_forwarded` or `viewer_rotation_not_forwarded`: recovered source-image presentation was not forwarded.
+- `placement_fields_forwarded`: tracked fields were retained. This **does not prove** image source crop/clip, scaling or pixel appearance matches Publisher.
+- `no_explicit_viewer_placement`: no explicit placement was present in the Viewer projection; the original PUB may still have presentation semantics that the parser did not recover.
+- Ambiguous or unmatched image use identities remain explicit failures of attribution; no nearest-object match.
+
+The ROI join validates that every painted image has **exactly one** matching input entry, checks Viewer crop coordinates and evidence types, then attaches `image_placement_evidence` to changed-pixel **candidate** events. Older pre-extension trace sidecars remain usable and mark image evidence unavailable.
+
 ## Stage 2 — join with visual differences
 
 Use the existing `tools/pdf_reference_diff_v1.py` comparator on **the same exact candidate PDF** and an external Publisher PDF to produce `chaptera.fidelity-reference-pdf.v1`. It yields page boxes, raster metadata and a compact significant-difference tile RLE mask.
@@ -49,5 +63,7 @@ These candidate tile counts **cannot be summed** into a pixel contribution score
 ## Validation
 
 `Free PUB PDF CLI V1` runs the source-neutral Rust tests for exact overlapping images, page-local ordinal ordering and byte-offset correspondence while retaining PDF/loss hashes. `FIDELITY-REFERENCE-PDF-01` runs `tools/test_pdf_paint_trace_roi_join_v1.py` against synthetic 100pt pages with deliberately overlapping objects, reverse source order, unrelated objects, stale PDF SHA, malformed RLE and rotated/cropped inputs.
+
+Image placement handoff diagnostics do not include exact ink/crop/clip raster or a source extraction from Publisher. They only distinguish what Viewer reported from what the bounded PDF adapter forwarded.
 
 Next integration work, **not yet implemented**: resolve inherited/derived or indirect shape mappings not represented by a direct `NodeId`, exact image crop/clip and glyph ink bounds, isolated per-object raster, and parity against Editor SVG of the same exact revision. Exact-authority direct `NodeId → SourceRef` is implemented when available, but many nodes will correctly remain unresolved: the trace is **not** blanket pixel-to-PUB attribution.

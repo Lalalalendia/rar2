@@ -154,6 +154,79 @@ class PaintTraceRoiJoinTests(unittest.TestCase):
         with self.assertRaisesRegex(TraceJoinError, "unknown or duplicate"):
             join_paint_trace(bad, oracle)
 
+
+    def test_viewer_crop_omission_is_named_and_linked_to_image_candidate(self):
+        trace, oracle = fixture()
+        trace["image_inputs"] = [
+            {
+                "node_origin": "background-node-higher-identity",
+                "resource_origin": "library-resource",
+                "transfer_status": "viewer_crop_not_forwarded",
+                "source_exact": True,
+                "mime": "image/png",
+                "viewer_placement_present": True,
+                "viewer_source_window_q16": [8192, -4096, 57344, 65536],
+                "viewer_recolor_present": False,
+                "viewer_rotation_degrees": None,
+                "pdf_placement_present": False,
+                "pdf_source_window_present": False,
+                "pdf_recolor_present": False,
+                "pdf_rotation_degrees": None,
+            },
+            {
+                "node_origin": "foreground-node-lower-identity",
+                "resource_origin": "team-resource",
+                "transfer_status": "no_explicit_viewer_placement",
+                "source_exact": True,
+                "mime": "image/jpeg",
+                "viewer_placement_present": False,
+                "viewer_source_window_q16": None,
+                "viewer_recolor_present": False,
+                "viewer_rotation_degrees": None,
+                "pdf_placement_present": False,
+                "pdf_source_window_present": False,
+                "pdf_recolor_present": False,
+                "pdf_rotation_degrees": None,
+            },
+        ]
+        result = join_paint_trace(trace, oracle)["pages"][0]
+        self.assertEqual(result["ambiguous_significant_tile_count"], 1)
+        background, front = result["candidate_paint_events"]
+        self.assertEqual(
+            background["image_placement_evidence"]["transfer_status"],
+            "viewer_crop_not_forwarded",
+        )
+        self.assertEqual(
+            background["image_placement_evidence"]["viewer_source_window_q16"],
+            [8192, -4096, 57344, 65536],
+        )
+        self.assertEqual(
+            front["image_placement_evidence"]["transfer_status"],
+            "no_explicit_viewer_placement",
+        )
+        self.assertEqual(result["unmatched_significant_tile_count"], 2)
+
+        bad = copy.deepcopy(trace)
+        bad["image_inputs"][0]["resource_origin"] = "wrong-resource"
+        with self.assertRaisesRegex(TraceJoinError, "unknown or duplicate"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["image_inputs"][0]["viewer_source_window_q16"] = [0, 0, 2**65, 65536]
+        with self.assertRaisesRegex(TraceJoinError, "crop window coordinates"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["image_inputs"][0]["viewer_source_window_q16"] = None
+        with self.assertRaisesRegex(TraceJoinError, "claimed viewer crop"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["image_inputs"][0]["source_exact"] = "true"
+        with self.assertRaisesRegex(TraceJoinError, "nonboolean"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["image_inputs"].pop()
+        with self.assertRaisesRegex(TraceJoinError, "input count differs"):
+            join_paint_trace(bad, oracle)
+
     def test_rejects_rotated_mismatched_or_overlapping_receipts(self):
         tr, ref = fixture()
         bad = copy.deepcopy(ref)

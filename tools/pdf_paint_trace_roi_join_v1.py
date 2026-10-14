@@ -146,6 +146,71 @@ def _verified_source_links(trace_receipt, painted_nodes):
     return linked
 
 
+
+def _verified_image_inputs(trace_receipt, events):
+    """One bounded Viewer↔fixed-PDF handoff per painted image operation."""
+    supplied = trace_receipt.get("image_inputs")
+    if supplied is None:
+        return {}  # older v1 diagnostics legitimately have no image-input data
+    if not isinstance(supplied, list):
+        raise TraceJoinError("invalid image input trace")
+    expected = {
+        (str(event["node_origin"]), str(event["resource_origin"]))
+        for event in events if event["kind"] == "image"
+    }
+    if len(supplied) != len(expected):
+        raise TraceJoinError("image input count differs from emitted image uses")
+    accepted_status = {
+        "unmatched_or_ambiguous_image_identity",
+        "ambiguous_placement_records",
+        "pdf_has_unmatched_placement",
+        "no_explicit_viewer_placement",
+        "viewer_crop_not_forwarded",
+        "pdf_crop_not_in_viewer",
+        "viewer_recolor_not_forwarded",
+        "pdf_recolor_not_in_viewer",
+        "viewer_rotation_not_forwarded",
+        "placement_fields_forwarded",
+    }
+    result = {}
+    for item in supplied:
+        if not isinstance(item, dict):
+            raise TraceJoinError("malformed image input")
+        key = (str(item.get("node_origin")), str(item.get("resource_origin")))
+        if key not in expected or key in result:
+            raise TraceJoinError("unknown or duplicate painted image input")
+        status = item.get("transfer_status")
+        if status not in accepted_status:
+            raise TraceJoinError("invalid image input transfer status")
+        if status not in (
+            "unmatched_or_ambiguous_image_identity",
+            "ambiguous_placement_records",
+        ):
+            for name in (
+                "source_exact", "viewer_placement_present", "viewer_recolor_present",
+                "pdf_placement_present", "pdf_source_window_present", "pdf_recolor_present",
+            ):
+                if type(item.get(name)) is not bool:
+                    raise TraceJoinError("missing or nonboolean image input evidence")
+            window = item.get("viewer_source_window_q16")
+            if window is not None:
+                if (not isinstance(window, list) or len(window) != 4
+                    or any(type(v) is not int or not -(2**63) <= v < 2**63 for v in window)):
+                    raise TraceJoinError("invalid viewer crop window coordinates")
+            if window is None and status == "viewer_crop_not_forwarded":
+                raise TraceJoinError("claimed viewer crop missing from evidence")
+            if window is not None and not item["viewer_placement_present"]:
+                raise TraceJoinError("crop cannot exist without Viewer placement")
+            if type(item.get("mime")) is not str or not item["mime"].startswith("image/"):
+                raise TraceJoinError("invalid image MIME evidence")
+            for name in ("viewer_rotation_degrees", "pdf_rotation_degrees"):
+                val = item.get(name)
+                if val is not None and (type(val) is not int or not -360 <= val <= 360):
+                    raise TraceJoinError("invalid image rotation evidence")
+        result[key] = item
+    return result
+
+
 def join_paint_trace(trace_receipt, reference_receipt):
     """Return ordered candidate matches, not uniquely attributed pixel causes.
 
@@ -194,6 +259,7 @@ def join_paint_trace(trace_receipt, reference_receipt):
         events_by_page[key].append(event)
     painted_nodes = {str(event["node_origin"]) for event in all_events}
     source_links = _verified_source_links(trace_receipt, painted_nodes)
+    image_inputs = _verified_image_inputs(trace_receipt, all_events)
     rows = []
     for page_index, (page, oracle) in enumerate(zip(pages, oracle_pages)):
         _page_geometry(page, oracle, dpi)
@@ -226,6 +292,9 @@ def join_paint_trace(trace_receipt, reference_receipt):
                 "source_refs": source_links.get(
                     str(event["node_origin"]), {}
                 ).get("source_refs", []),
+                "image_placement_evidence": image_inputs.get((
+                    str(event["node_origin"]), str(event.get("resource_origin"))
+                )) if event["kind"] == "image" else None,
                 "candidate_significant_tile_count": len(matching),
                 "overlapped_candidate_tile_count": sum(
                     len(matches_by_tile[i]) > 1 for i in matching
@@ -251,6 +320,7 @@ def join_paint_trace(trace_receipt, reference_receipt):
             "A changed tile can intersect multiple objects; candidate tile counts are non-additive.",
             "Last painted envelope candidate is not proof of the visible or causal source.",
             "SourceRef links are admitted only when exact and authoritative for the primary PUB.",
+            "Viewer image crop/rotation evidence describes adapter handoff, not exact PDF image ink.",
             "Publisher native PDF has no Chaptera NodeId; external source matching remains unproven.",
             "Only unrotated, uncropped one-copy pages are supported in this first join.",
         ],
