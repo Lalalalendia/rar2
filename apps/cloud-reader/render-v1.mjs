@@ -27,15 +27,44 @@ function previewForeignObject(bounds, attrs) {
   });
 }
 
-function previewTextStyle(div, plan = null) {
+export function previewTextPaintPlan(node, resolvedPlan = null) {
+  const preview = node?.preview_text_style ?? null;
+  const previewFontSize = preview?.font_size_emu == null
+    ? null
+    : safeInteger(preview.font_size_emu, "preview.font_size_emu");
+  const fontSizeEmu = resolvedPlan?.font_size_emu
+    ?? previewFontSize
+    ?? PREVIEW_FONT_SIZE_EMU;
+  const lineHeightEmu = resolvedPlan?.line_height_emu
+    ?? (previewFontSize == null
+      ? PREVIEW_LINE_HEIGHT_EMU
+      : Math.round(fontSizeEmu * PREVIEW_LINE_HEIGHT_EMU / PREVIEW_FONT_SIZE_EMU));
+  const color = resolvedPlan?.color
+    ?? rgb(preview?.color_rgb)
+    ?? "#000";
+  return Object.freeze({
+    font_size_emu: fontSizeEmu,
+    line_height_emu: lineHeightEmu,
+    color
+  });
+}
+
+export function previewTextSizeSource(node, plan = null) {
+  if (plan) return "shared_resolved_plan";
+  if (node?.preview_text_style?.font_size_emu != null) return "source_uniform_preview";
+  return "generic_9pt";
+}
+
+function previewTextStyle(div, node, plan = null) {
+  const preview = previewTextPaintPlan(node, plan);
   div.style.width = "100%";
   div.style.height = "100%";
   div.style.overflow = "hidden";
   div.style.whiteSpace = "pre-wrap";
   div.style.fontFamily = "system-ui, sans-serif";
-  div.style.fontSize = ((plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.lineHeight = ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.color = "#000";
+  div.style.fontSize = (preview.font_size_emu / EMU_PER_CSS_PX) + "px";
+  div.style.lineHeight = (preview.line_height_emu / EMU_PER_CSS_PX) + "px";
+  div.style.color = preview.color;
 }
 
 function safeInteger(value, label) {
@@ -113,6 +142,59 @@ function imageDataUrl(resource) {
   if (typeof value !== "string") return null;
   if (!/^data:image\/(?:png|jpeg|jpg|gif);base64,[A-Za-z0-9+/=]+$/.test(value)) return null;
   return value;
+}
+
+const DECORATIVE_BORDER_SLOTS = new Set([
+  "top_left", "top", "top_right", "right",
+  "bottom_right", "bottom", "bottom_left", "left"
+]);
+
+export function decorativeBorderPlacementPaintPlan(placement, resource) {
+  const slot = placement?.slot;
+  if (typeof slot !== "string" || !DECORATIVE_BORDER_SLOTS.has(slot)) return null;
+  if (typeof placement?.resource_id !== "string"
+      || placement.resource_id !== resource?.resource_id) return null;
+  const href = imageDataUrl(resource);
+  if (!href) return null;
+  const bounds = placement?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "decorative_border.bounds.x");
+  const y = safeInteger(bounds.y, "decorative_border.bounds.y");
+  const width = safeInteger(bounds.width, "decorative_border.bounds.width");
+  const height = safeInteger(bounds.height, "decorative_border.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({
+    slot,
+    resource_id: placement.resource_id,
+    href,
+    geometry: Object.freeze({ x, y, width, height })
+  });
+}
+
+function appendDecorativeBorder(group, node, resources) {
+  const border = node?.decorative_border;
+  if (!border) return 0;
+  let painted = 0;
+  for (const placement of border.placements ?? []) {
+    const resource = resources.get(placement.resource_id) ?? null;
+    const plan = decorativeBorderPlacementPaintPlan(placement, resource);
+    if (!plan) continue;
+    const image = svgNode("image", {
+      x: plan.geometry.x,
+      y: plan.geometry.y,
+      width: plan.geometry.width,
+      height: plan.geometry.height,
+      preserveAspectRatio: "none",
+      "data-resource-id": plan.resource_id,
+      "data-resource-availability": resource.availability,
+      "data-decorative-border-slot": plan.slot,
+      "data-decorative-border-authority": "source-borderart"
+    });
+    image.setAttribute("href", plan.href);
+    group.appendChild(image);
+    painted += 1;
+  }
+  return painted;
 }
 
 export function imageContentRotationGeometry(bounds, degrees = null) {
@@ -246,6 +328,8 @@ export function resolvedTextLinePaintPlan(node) {
       }));
     }
 
+    const lineTop = cursorY - y;
+    if (lineTop < 0 || lineTop >= height) return null;
     lines.push(Object.freeze({
       line_index: lineIndex,
       x: x + lineOffset,
@@ -256,7 +340,6 @@ export function resolvedTextLinePaintPlan(node) {
       spans: Object.freeze(spans)
     }));
     cursorY += currentLineHeight;
-    if (cursorY - y > height) return null;
   }
 
   return Object.freeze({
@@ -269,14 +352,32 @@ export function resolvedTextLinePaintPlan(node) {
   });
 }
 
-function appendPreviewText(group, node, plan = null) {
+export function resolvedTextViewportGeometry(bounds) {
+  const x = safeInteger(bounds?.x, "text.viewport.bounds.x");
+  const y = safeInteger(bounds?.y, "text.viewport.bounds.y");
+  const width = safeInteger(bounds?.width, "text.viewport.bounds.width");
+  const height = safeInteger(bounds?.height, "text.viewport.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({
+    x,
+    y,
+    width,
+    height,
+    view_box: "0 0 " + (width / EMU_PER_CSS_PX) + " " + (height / EMU_PER_CSS_PX)
+  });
+}
+
+function appendPreviewText(group, node, plan, reason) {
   if (!node.text) return;
   const bounds = node.text_bounds ?? node.bounds;
   const foreign = previewForeignObject(bounds, {
-    "data-text-authority": "browser-preview-only"
+    "data-text-authority": "browser-preview-only",
+    "data-preview-kind": node.kind === "text_frame" ? "text_frame" : "other_node_text",
+    "data-preview-reason": reason,
+    "data-preview-size-source": previewTextSizeSource(node, plan)
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  previewTextStyle(div, plan);
+  previewTextStyle(div, node, plan);
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
@@ -285,9 +386,16 @@ function appendPreviewText(group, node, plan = null) {
 function appendText(group, defs, node, fonts, index) {
   if (!node.text) return;
   const plan = resolvedTextLinePaintPlan(node);
-  const installed = plan ? fonts.get(plan.font_resource_id) ?? null : null;
-  if (!plan || !installed) {
-    appendPreviewText(group, node, plan);
+  if (!plan) {
+    const reason = node.text_layout == null ? "scene_layout_missing"
+      : node.text_layout.disposition === "shared_resolved" ? "shared_plan_invalid"
+      : "server_layout_unavailable";
+    appendPreviewText(group, node, null, reason);
+    return;
+  }
+  const installed = fonts.get(plan.font_resource_id) ?? null;
+  if (!installed) {
+    appendPreviewText(group, node, plan, "base_font_unavailable");
     return;
   }
 
@@ -296,33 +404,38 @@ function appendText(group, defs, node, fonts, index) {
     for (const span of line.spans) {
       if (!span.font_resource_id) continue;
       const spanInstalled = fonts.get(span.font_resource_id) ?? null;
-      if (!spanInstalled
-          || spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
-        appendPreviewText(group, node, plan);
+      if (!spanInstalled) {
+        appendPreviewText(group, node, plan, "span_font_unavailable");
+        return;
+      }
+      if (spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
+        appendPreviewText(group, node, plan, "span_font_fingerprint_mismatch");
         return;
       }
       spanFonts.set(span.font_resource_id, spanInstalled);
     }
   }
 
-  const clipId = "chaptera-reader-text-clip-" + index;
-  const clipPath = svgNode("clipPath", { id: clipId });
-  clipPath.appendChild(svgNode("rect", {
-    x: plan.bounds.x,
-    y: plan.bounds.y,
-    width: plan.bounds.width,
-    height: plan.bounds.height
-  }));
-  defs.appendChild(clipPath);
+  const viewportGeometry = resolvedTextViewportGeometry(plan.bounds);
+  if (!viewportGeometry) {
+    appendPreviewText(group, node, plan, "invalid_text_viewport");
+    return;
+  }
 
-  // Clip in canonical node space before changing the text's local units.
-  // The enclosing node transform still applies to both clip and line paint.
-  const clipped = svgNode("g", { "clip-path": "url(#" + clipId + ")" });
-  const local = svgNode("g", {
-    transform: "translate(" + plan.bounds.x + " " + plan.bounds.y + ") scale(" + EMU_PER_CSS_PX + ")"
+  // Keep the fixed text-frame clip and the pixel-sized glyph coordinate system
+  // in the same nested SVG viewport. This avoids mixing page-EMU clip geometry
+  // with the local CSS-pixel text coordinates. The enclosing node transform
+  // still applies to the viewport as one unit.
+  const local = svgNode("svg", {
+    x: viewportGeometry.x,
+    y: viewportGeometry.y,
+    width: viewportGeometry.width,
+    height: viewportGeometry.height,
+    viewBox: viewportGeometry.view_box,
+    overflow: "hidden",
+    "data-text-viewport": "fixed-frame"
   });
-  clipped.appendChild(local);
-  group.appendChild(clipped);
+  group.appendChild(local);
 
   for (const line of plan.lines) {
     const text = svgNode("text", {
@@ -433,10 +546,13 @@ function appendTableText(group, node) {
       "data-table-row": cell.row,
       "data-table-column": cell.column,
       "data-table-paint-authority": fillPlan ? "source-t595" : "none",
-      "data-text-authority": "browser-preview-only"
+      "data-text-authority": "browser-preview-only",
+      "data-preview-kind": "table_cell",
+      "data-preview-reason": "table_cell_preview",
+      "data-preview-size-source": previewTextSizeSource(node)
     });
     const div = document.createElementNS(XHTML_NS, "div");
-    previewTextStyle(div);
+    previewTextStyle(div, node);
     div.style.padding = "2px";
     div.style.boxSizing = "border-box";
     div.textContent = cell.text.replace(/\r/g, "\n");
@@ -569,15 +685,46 @@ export function presetShapePaintGeometry(node) {
   const height = safeInteger(bounds.height, "node.bounds.height");
   if (width <= 0 || height <= 0) return null;
 
-  if (node.paint?.preset_shape !== "round_rect") {
-    return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
+  // A source-authorized horizontal OfficeArt stroke is represented by a
+  // positive-height stroke envelope; the physical axis remains at its center.
+  // It is not a filled rectangle or a diagonal from corner to corner.
+  if (node.paint?.preset_shape === "horizontal_line") {
+    return Object.freeze({
+      tag: "line",
+      attrs: Object.freeze({
+        x1: x, y1: y + height / 2, x2: x + width, y2: y + height / 2
+      })
+    });
   }
 
-  const radius = Math.round(Math.min(width, height) * 16667 / 100000);
-  return Object.freeze({
-    tag: "rect",
-    attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
-  });
+  if (node.paint?.preset_shape === "line" || node.paint?.preset_shape === "line_dash_gel") {
+    return Object.freeze({
+      tag: "line",
+      attrs: Object.freeze({ x1: x, y1: y, x2: x + width, y2: y + height })
+    });
+  }
+
+  if (node.paint?.preset_shape === "round_rect") {
+    const radius = Math.round(Math.min(width, height) * 16667 / 100000);
+    return Object.freeze({
+      tag: "rect",
+      attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
+    });
+  }
+
+  if (node.paint?.preset_shape === "ellipse") {
+    return Object.freeze({
+      tag: "ellipse",
+      attrs: Object.freeze({
+        cx: x + width / 2,
+        cy: y + height / 2,
+        rx: width / 2,
+        ry: height / 2
+      })
+    });
+  }
+
+  return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
 }
 
 function renderNode(svg, defs, node, resources, fonts, index) {
@@ -627,14 +774,22 @@ function renderNode(svg, defs, node, resources, fonts, index) {
     }
   }
 
+  const hasDecorativeBorder = node.decorative_border !== null
+    && node.decorative_border !== undefined;
+  if (hasDecorativeBorder) appendDecorativeBorder(group, node, resources);
+
   const line = node.paint?.line;
   const stroke = rgb(line?.rgb);
-  if (stroke && Number(line.width_emu) > 0 && shapeGeometry) {
+  if (!hasDecorativeBorder && stroke && Number(line.width_emu) > 0 && shapeGeometry) {
+    const widthEmu = safeInteger(line.width_emu, "line.width_emu");
     group.appendChild(svgNode(shapeGeometry.tag, {
       ...shapeGeometry.attrs,
       fill: "none",
       stroke,
-      "stroke-width": safeInteger(line.width_emu, "line.width_emu")
+      "stroke-width": widthEmu,
+      "stroke-dasharray": node.paint?.preset_shape === "line_dash_gel"
+        ? (widthEmu * 4) + " " + (widthEmu * 3)
+        : null
     }));
   }
 

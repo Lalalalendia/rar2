@@ -4,7 +4,28 @@ on:
   pull_request:
     paths:
       - "apps/web/local-editor.html"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "apps/web/story-line-endings-range-v1.test.mjs"
+      - "apps/web/editor-service-client-v1.mjs"
+      - "apps/web/editor-service-client-font.test.mjs"
+      - "apps/web/font-environment-v1.mjs"
       - "services/editor-api/web_real_acceptance_service.py"
+      - "services/editor-api/revision_store.py"
+      - "services/editor-api/security/authorized_revision_gateway.py"
+      - "tools/verify_authenticated_font_http.py"
+      - "tools/verify_font_http_chromium.mjs"
+      - "services/editor-api/font_authoring_admission_v1.py"
+      - "services/editor-api/test_font_authoring_admission_v1.py"
+      - "services/editor-api/pinned_opentype_resource_v1.py"
+      - "services/editor-api/test_pinned_opentype_resource_v1.py"
+      - "services/editor-api/live_font_delivery_v1.py"
+      - "services/editor-api/test_live_font_delivery_v1.py"
+      - "tools/verify_live_font_ui_browser.mjs"
+      - "tools/native-pub-candidate-cli/tests/real_pinned_font_resource_v1.rs"
+      - "tools/native-pub-candidate-cli/src/bin/pinned_font_authoring_v1.rs"
+      - "tools/run_pinned_font_authoring_real.py"
+      - "tools/native-pub-candidate-cli/Cargo.toml"
+      - "assets/fonts/ofl/abel/**"
       - "tools/run_local_real_editor.py"
       - "tools/run_local_full_stack.py"
       - "apps/chaptera-server/assets/local-dashboard.html"
@@ -27,11 +48,74 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - uses: dtolnay/rust-toolchain@1.94.1
       - name: Check Python syntax
         run: |
           python -m py_compile tools/run_local_real_editor.py
+          python -m py_compile tools/run_pinned_font_authoring_real.py
+          python -m py_compile tools/verify_authenticated_font_http.py
+          python -m py_compile services/editor-api/revision_store.py
+          python -m py_compile services/editor-api/security/authorized_revision_gateway.py
           python -m py_compile tools/run_local_full_stack.py
           python -m py_compile services/editor-api/web_real_acceptance_service.py
-      - name: Prove arbitrary interactive MoveNode + Scene + Undo
-        run: python tools/run_local_real_editor.py --smoke
+          python -m py_compile services/editor-api/font_authoring_admission_v1.py
+          python -m py_compile services/editor-api/test_font_authoring_admission_v1.py
+          python -m py_compile services/editor-api/pinned_opentype_resource_v1.py
+          python -m py_compile services/editor-api/test_pinned_opentype_resource_v1.py
+          python -m py_compile services/editor-api/live_font_delivery_v1.py
+          python -m py_compile services/editor-api/test_live_font_delivery_v1.py
+      - name: Install pinned HTTP schema validation dependency
+        run: python -m pip install "jsonschema==4.23.0"
+      - name: Validate trusted font authoring catalog and HTTP authority
+        working-directory: services/editor-api
+        run: python -m unittest -v test_font_authoring_admission_v1.py test_pinned_opentype_resource_v1.py test_live_font_delivery_v1.py
+      - name: Prove physical byte client and existing picker negatives
+        run: |
+          node --check tools/verify_font_http_chromium.mjs
+          node --test apps/web/editor-service-client-font.test.mjs apps/web/font-environment-v1.test.mjs apps/web/story-line-endings-range-v1.test.mjs
+      - name: Install real Chromium for local Editor reachability
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Prove real PUB font delivery, stale denial, MoveNode and Chromium UI
+        run: python tools/run_local_real_editor.py --smoke --pinned-abel-demo --browser-smoke
+      - name: Prove actual Publisher Story uses canonical Rust full-font mutation and fresh re-admission
+        env:
+          CHAPTERA_REAL_PUB_FONT_FIXTURE: ${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub
+        run: |
+          set -o pipefail
+          cargo test --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --test real_pinned_font_resource_v1 -- --nocapture \
+            | tee /tmp/chaptera-real-pub-font-history.log
+          grep -q 'REAL_PUB_FONT_HISTORY_OK' /tmp/chaptera-real-pub-font-history.log
+      - name: Prove real selected Story font intent through pinned Rust worker and fresh project
+        run: |
+          python tools/run_pinned_font_authoring_real.py \
+            --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
+            --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json"
+      - name: Prove capability-authorized real PUB font commit, native Rust history, live Chromium Apply and output block
+        run: |
+          python tools/verify_authenticated_font_http.py \
+            --fixture "${{ github.workspace }}/.chaptera-local/editor/SampleNewsletter.pub" \
+            --resolved-graph "${{ github.workspace }}/.chaptera-local/editor/resolved-graph.json" \
+            --viewer "${{ github.workspace }}/.chaptera-local/editor/viewer-geometry.json" \
+            --browser
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-editor-pinned-font-chromium
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            target/local-font-ui/chromium.json
+            target/local-font-ui/chromium.png
+            target/local-font-ui/pinned-font-apply-receipt.json
+            target/local-font-ui/pinned-font-edited.project.json
+            target/local-font-ui/pinned-font-physical-glyph-spans.json
+            target/local-font-ui/pinned-font-line-fit-receipt.json
+            target/local-font-ui/pinned-font-full-Story.project.json
+            target/font-http-acceptance/receipt.json
+            target/font-http-acceptance/browser.json
+            target/font-http-acceptance/browser.png

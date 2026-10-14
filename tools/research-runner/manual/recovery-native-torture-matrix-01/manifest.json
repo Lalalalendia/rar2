@@ -1,0 +1,55 @@
+{
+  "schema": "chaptera.recovery-native-torture-manifest.v1",
+  "experiment_id": "RECOVERY-NATIVE-TORTURE-MATRIX-01",
+  "publisher_pin": {
+    "version": "16.0",
+    "build": 12527
+  },
+  "witnesses": [
+    {
+      "phase": "1A",
+      "source_label": "OPNHOUS.PUB",
+      "sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "authority": "PUB-T-650",
+      "chaptera_canonical_outcome": "salvage_open",
+      "damage_class": "malformed-or-stale-publisher97-media-variant",
+      "provenance": "pub-40-cd / PageWiz/OPNHOUS.PUB"
+    },
+    {
+      "phase": "1A",
+      "source_label": "trophy_traditional.pub",
+      "sha256": "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
+      "authority": "READER1050-TROPHY-QUILL-CENSUS-01",
+      "chaptera_canonical_outcome": "salvage_open",
+      "damage_class": "quill_descriptor_tail_overwritten_or_malformed",
+      "provenance": "helenhudspith.com natural corpus"
+    },
+    {
+      "phase": "1B",
+      "source_label": "natural-quill-descriptor-corruption",
+      "sha256": "c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b",
+      "authority": "READER-CORPUS-FAILURE-DISCRIMINATOR-01",
+      "chaptera_canonical_outcome": "salvage_open",
+      "damage_class": "quill_descriptor_node_truncated",
+      "provenance": "helenhudspith.com / Common Crawl natural corpus lineage"
+    },
+    {
+      "phase": "1B",
+      "source_label": "natural-quill-strs-corruption",
+      "sha256": "b29ed1e9227e67256a58d23cbea58b9bcfb38943dd9ed07a4110f4cf8959dbe4",
+      "authority": "READER-CORPUS-FAILURE-DISCRIMINATOR-01",
+      "chaptera_canonical_outcome": "salvage_open",
+      "damage_class": "quill_strs_service_span_out_of_bounds",
+      "provenance": "helenhudspith.com / Common Crawl natural corpus lineage"
+    },
+    {
+      "phase": "1B",
+      "source_label": "OPCLS.PUB",
+      "sha256": "6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170",
+      "authority": "PUB-T-674",
+      "chaptera_canonical_outcome": "salvage_open",
+      "damage_class": "malformed-cfb-contents-allocation-duplicate-directory-sector",
+      "provenance": "pub-40-cd / PageWiz/OPCLS.PUB"
+    }
+  ]
+}

@@ -39,6 +39,12 @@ jobs:
       - name: Check affected crates
         run: |
           cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-layout -p pub-editor
-      - name: Test affected crates
+      - name: Test affected model/layout crates
         run: |
-          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-layout -p pub-editor
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-layout
+
+      - name: Test bounded pub-editor table-grid targets
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor \
+            --test effective_table_grid_v1 \
+            --test resize_node_v1

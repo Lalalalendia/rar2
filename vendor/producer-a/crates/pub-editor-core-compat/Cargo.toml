@@ -1,0 +1,15 @@
+[package]
+name = "pub-editor-core-compat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pub-editor-geometry-core = { path = "../pub-editor-geometry-core" }
+pub-editor-image-core = { path = "../pub-editor-image-core" }
+pub-editor-table-core = { path = "../pub-editor-table-core" }
+pub-editor-text-core = { path = "../pub-editor-text-core" }
+pub-model = { path = "../pub-model" }
+serde.workspace = true

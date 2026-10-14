@@ -3,16 +3,58 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  decorativeBorderPlacementPaintPlan,
   imageContentRotationGeometry,
   imagePaintGeometry,
   imageRecolorPaintPlan,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
+  previewTextPaintPlan,
+  previewTextSizeSource,
   resolvedTextLinePaintPlan,
+  resolvedTextViewportGeometry,
   tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
+
+test("decorative BorderArt placement uses exact server geometry and bounded image resources", () => {
+  const resource = {
+    resource_id: "resource:border-top",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const placement = {
+    slot: "top",
+    resource_id: resource.resource_id,
+    bounds: { x: 100, y: 200, width: 300, height: 40 }
+  };
+
+  assert.deepEqual(
+    decorativeBorderPlacementPaintPlan(placement, resource),
+    {
+      slot: "top",
+      resource_id: resource.resource_id,
+      href: resource.inline_data_url,
+      geometry: { x: 100, y: 200, width: 300, height: 40 }
+    }
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      { ...placement, slot: "publisher_private_slot" },
+      resource
+    ),
+    null
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      placement,
+      { ...resource, availability: "descriptor_only", inline_data_url: undefined }
+    ),
+    null
+  );
+});
 
 test("Viewer-materialized OLE preview PNG uses the generic image resource paint path", () => {
   const resource = {
@@ -306,6 +348,50 @@ test("shared resolved text paint plan rejects negative line x offsets", () => {
   }), null);
 });
 
+test("shared resolved text paint plan does not treat baseline advance as first-line height", () => {
+  const oneLine = resolvedTextLinePaintPlan({
+    bounds: { x: 0, y: 0, width: 1000, height: 130 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 100,
+      line_height_emu: 150,
+      lines: [{
+        line_index: 0,
+        text: "fits",
+        measured_width_emu: 300,
+        line_height_emu: 150
+      }]
+    }
+  });
+  assert.ok(oneLine);
+  assert.equal(oneLine.lines[0].y, 0);
+
+  assert.equal(resolvedTextLinePaintPlan({
+    bounds: { x: 0, y: 0, width: 1000, height: 130 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 100,
+      line_height_emu: 150,
+      lines: [
+        {
+          line_index: 0,
+          text: "first",
+          measured_width_emu: 300,
+          line_height_emu: 150
+        },
+        {
+          line_index: 1,
+          text: "second",
+          measured_width_emu: 300,
+          line_height_emu: 150
+        }
+      ]
+    }
+  }), null);
+});
+
 test("shared resolved text paint plan preserves server line breaks", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
@@ -338,6 +424,56 @@ test("shared resolved text paint plan preserves server line breaks", () => {
     plan.lines.map((line) => [line.line_index, line.x, line.y, line.text]),
     [[0, 300, 200, "first"], [1, 100, 350, "second"]]
   );
+});
+
+test("shared resolved text viewport keeps clipping in text-local coordinates", () => {
+  assert.deepEqual(
+    resolvedTextViewportGeometry({ x: 95250, y: 190500, width: 952500, height: 476250 }),
+    {
+      x: 95250,
+      y: 190500,
+      width: 952500,
+      height: 476250,
+      view_box: "0 0 100 50"
+    }
+  );
+  assert.equal(
+    resolvedTextViewportGeometry({ x: 0, y: 0, width: 0, height: 1 }),
+    null
+  );
+});
+
+test("browser preview preserves bounded server-known text size and color", () => {
+  const plan = previewTextPaintPlan({
+    preview_text_style: {
+      font_size_emu: 457_200,
+      color_rgb: [112, 48, 160]
+    }
+  });
+
+  assert.deepEqual(plan, {
+    font_size_emu: 457_200,
+    line_height_emu: 571_500,
+    color: "rgb(112 48 160)"
+  });
+});
+
+test("browser preview remains conservative when bounded style is unavailable", () => {
+  assert.deepEqual(previewTextPaintPlan({}), {
+    font_size_emu: 114_300,
+    line_height_emu: 142_875,
+    color: "#000"
+  });
+});
+
+test("browser preview font-size provenance is distinct from source font identity", () => {
+  assert.equal(previewTextSizeSource({}), "generic_9pt");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: null } }), "generic_9pt");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } }),
+    "source_uniform_preview");
+  assert.equal(previewTextSizeSource({}, { font_size_emu: 152_400 }), "shared_resolved_plan");
+  assert.equal(previewTextSizeSource({ preview_text_style: { font_size_emu: 457_200 } },
+    { font_size_emu: 152_400 }), "shared_resolved_plan");
 });
 
 test("shared resolved text paint plan carries server text color", () => {
@@ -576,4 +712,41 @@ test("default RoundRectangle preset uses bounded short-side radius", () => {
     }),
     { tag: "rect", attrs: { x: 1, y: 2, width: 30, height: 40 } }
   );
+});
+
+test("source-backed horizontal OfficeArt stroke uses its central axis, never a rectangle", () => {
+  const shape = {
+    bounds: { x: 1058750, y: 705474, width: 6729849, height: 101600 },
+    paint: {
+      preset_shape: "horizontal_line",
+      line: { rgb: [255, 0, 255], width_emu: 101600 }
+    }
+  };
+  assert.deepEqual(presetShapePaintGeometry(shape), {
+    tag: "line",
+    attrs: { x1: 1058750, y1: 756274, x2: 7788599, y2: 756274 }
+  });
+  assert.deepEqual(presetShapePaintGeometry({
+    ...shape,
+    bounds: { ...shape.bounds, height: 101601 }
+  }), {
+    tag: "line",
+    attrs: { x1: 1058750, y1: 756274.5, x2: 7788599, y2: 756274.5 }
+  });
+  assert.equal(presetShapePaintGeometry({
+    ...shape,
+    bounds: { ...shape.bounds, height: 0 }
+  }), null);
+});
+
+test("existing OfficeArt line and dash-gel diagonals are not flattened", () => {
+  for (const preset_shape of ["line", "line_dash_gel"]) {
+    assert.deepEqual(presetShapePaintGeometry({
+      bounds: { x: 100, y: 200, width: 300, height: 400 },
+      paint: { preset_shape }
+    }), {
+      tag: "line",
+      attrs: { x1: 100, y1: 200, x2: 400, y2: 600 }
+    });
+  }
 });

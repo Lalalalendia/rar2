@@ -35,7 +35,14 @@ fn run() -> Result<(), Box<dyn Error>> {
             if args.next().is_some() {
                 return Err("unexpected arguments after --output-dir".into());
             }
-            generate(&output_dir)
+            generate(&output_dir, false)
+        }
+        Some("generate-one-unit") => {
+            let output_dir = parse_flag_path(&mut args, "--output-dir")?;
+            if args.next().is_some() {
+                return Err("unexpected arguments after --output-dir".into());
+            }
+            generate(&output_dir, true)
         }
         Some("verify") => {
             let pub_path = parse_flag_path(&mut args, "--pub")?;
@@ -46,7 +53,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             verify(&pub_path, &manifest_path)
         }
         _ => Err(
-            "usage: pub-story-native-handoff generate --output-dir DIR | verify --pub FILE.pub --manifest handoff.json"
+            "usage: pub-story-native-handoff generate|generate-one-unit --output-dir DIR | verify --pub FILE.pub --manifest handoff.json"
                 .into(),
         ),
     }
@@ -66,7 +73,7 @@ fn parse_flag_path(
     Ok(PathBuf::from(value))
 }
 
-fn generate(output_dir: &Path) -> Result<(), Box<dyn Error>> {
+fn generate(output_dir: &Path, delete_one_unit: bool) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output_dir)?;
 
     let source = sample3_pub()?;
@@ -84,7 +91,8 @@ fn generate(output_dir: &Path) -> Result<(), Box<dyn Error>> {
     if before.match_indices(CONTROLLED_MARKER).count() != 1 {
         return Err("controlled Story must contain marker 345678 exactly once".into());
     }
-    let after = before.replacen(CONTROLLED_MARKER, "", 1);
+    let replacement = if delete_one_unit { "34567" } else { "" };
+    let after = before.replacen(CONTROLLED_MARKER, replacement, 1);
 
     let request = StoryTextWriteProbeRequest {
         source_hash,
@@ -100,7 +108,7 @@ fn generate(output_dir: &Path) -> Result<(), Box<dyn Error>> {
     fs::write(&source_path, &source)?;
     fs::write(&candidate_path, &candidate.bytes)?;
 
-    let manifest = json!({
+    let mut manifest = json!({
         "schema": MANIFEST_SCHEMA,
         "writer_probe_version": PUB_WRITER_PROBE_VERSION_V0_1,
         "fixture": "pub-quill/tests/fixtures/Sample3.pub.b64",
@@ -114,6 +122,7 @@ fn generate(output_dir: &Path) -> Result<(), Box<dyn Error>> {
         "mutation": {
             "kind": "bounded_story_text_delete",
             "removed_utf16_units": CONTROLLED_MARKER.encode_utf16().count()
+                - replacement.encode_utf16().count()
         },
         "native_target": {
             "publisher_family": "Publisher 2019",
@@ -121,6 +130,9 @@ fn generate(output_dir: &Path) -> Result<(), Box<dyn Error>> {
             "build_prefix": "12527"
         }
     });
+    if delete_one_unit {
+        manifest["research_variant"] = json!("one_utf16_unit_delete");
+    }
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
 
     let verified = verify_pub_bytes(&candidate.bytes, &manifest)?;

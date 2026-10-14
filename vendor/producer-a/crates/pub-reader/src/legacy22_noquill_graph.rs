@@ -409,6 +409,8 @@ pub fn build_legacy_0x22_noquill_from_contents(
         typography_runs: Vec::new(),
         typography_size_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
+        paragraph_flow_runs: Vec::new(),
         script_font_maps: Vec::new(),
     })
 }
@@ -911,6 +913,8 @@ fn build_legacy_table_projection(
         tcd_story_ordinal: None,
         cells,
         simple_table,
+        layout_relation: None,
+        uniform_cell_text_inset: None,
         layout_metrics: None,
         border_segments: Vec::new(),
         source_refs: vec![

@@ -8,7 +8,7 @@ import {
   makePublicToken,
   writeCheck,
 } from '../../../lib/checks';
-import { dispatchCheck } from '../../../lib/dispatch';
+import { dispatchCheck, dispatchFailureResult } from '../../../lib/dispatch';
 import { normalizeCountry, normalizeLocale } from '../../../lib/i18n';
 
 const MAX_BYTES = 64 * 1024 * 1024;
@@ -98,6 +98,14 @@ export async function POST(request: Request) {
 
   const origin = new URL(request.url).origin;
   record.dispatchStatus = await dispatchCheck(id, origin);
+  // No worker was started: never leave the user's token polling forever.
+  // This is a transport failure, not a document compatibility verdict.
+  const failure = dispatchFailureResult(record.dispatchStatus);
+  if (failure) {
+    record.status = 'failed';
+    record.emailStatus = 'not_configured';
+    record.result = failure;
+  }
   record.updatedAt = new Date().toISOString();
   await writeCheck(record);
 

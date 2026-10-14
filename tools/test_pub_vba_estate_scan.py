@@ -270,6 +270,33 @@ doc.WebPagePreview
     assert taxonomy_symbols["ExportEmailHTML"] == 1
     assert taxonomy_symbols["WebPagePreview"] == 1
 
+    real_world_reference_calls = """
+Set h = ActiveDocument.Selection.TextRange.Hyperlinks(1)
+For Each p In ActiveDocument.MasterPages
+    Debug.Print p.PageID
+    Debug.Print p.PageNumber
+Next p
+For Each s In ActiveDocument.ScratchArea.Shapes
+    If s.HasTextFrame Then Debug.Print s.TextFrame.TextRange.Text
+Next s
+If h.TargetType = pbHlinkTargetTypePageID Then h.TextToDisplay = "page 1"
+"""
+    real_world_families, real_world_symbols = module.classify_calls(real_world_reference_calls)
+    assert real_world_families["pages"] == 1
+    assert real_world_families["page_identity"] == 2
+    assert real_world_families["scratch_area"] == 1
+    assert real_world_families["selection"] == 1
+    assert real_world_families["shapes"] == 1
+    assert real_world_families["text"] >= 3
+    assert real_world_families["hyperlinks"] == 3
+    assert real_world_symbols["MasterPages"] == 1
+    assert real_world_symbols["PageID"] == 1
+    assert real_world_symbols["PageNumber"] == 1
+    assert real_world_symbols["ScratchArea"] == 1
+    assert real_world_symbols["Selection"] == 1
+    assert real_world_symbols["HasTextFrame"] == 1
+    assert real_world_symbols["TargetType"] == 1
+    assert real_world_symbols["TextToDisplay"] == 1
 
     table_calls = """
 Dim pubTable As Table
@@ -347,7 +374,7 @@ doc.LayoutGuides.Columns = 4
 
     empty_receipt = module.build_receipt([], include_paths=False)
     assert empty_receipt["claims"]["source_text_emitted"] is False
-    assert empty_receipt["call_classifier_version"] == "v2.1"
+    assert empty_receipt["call_classifier_version"] == "v2.2"
 
     print({"tests": "ok", "macro_state": macro["vba_state"], "plain_state": plain["vba_state"]})
     return 0

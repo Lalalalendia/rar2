@@ -22,6 +22,18 @@ VENDOR_CRATES = (
 )
 UPSTREAM = {"pub-core", "pub-cfb", "pub-contents", "pub-escher", "pub-model", "pub-quill"}
 
+# The active repository also has a root pub-model@0.1.0. The vendored
+# producer workspace intentionally keeps its donor model at 0.1.0-donor,
+# so plain `-p pub-model` is ambiguous whenever Cargo resolves both graphs.
+VENDOR_PACKAGE_SPECS = {
+    "pub-model": "pub-model@0.1.0-donor",
+}
+
+PUB_VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
+PUB_QUILL_PARAGRAPH = "vendor/producer-a/crates/pub-quill/src/typography/paragraph.rs"
+PUB_QUILL_COLOR = "vendor/producer-a/crates/pub-quill/src/typography/color.rs"
+PUB_QUILL_FONT = "vendor/producer-a/crates/pub-quill/src/typography/font.rs"
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     return sorted(
@@ -39,7 +51,14 @@ def edition_for(path: str) -> str:
     p = Path(path)
     manifests: list[tuple[Path, Path]] = []
     if path.startswith("vendor/producer-a/crates/"):
-        manifests.append((p.parents[1] / "Cargo.toml", Path("vendor/producer-a/Cargo.toml")))
+        vendor_root = Path("vendor/producer-a/crates")
+        relative = p.relative_to(vendor_root)
+        manifests.append(
+            (
+                vendor_root / relative.parts[0] / "Cargo.toml",
+                Path("vendor/producer-a/Cargo.toml"),
+            )
+        )
     elif path.startswith("crates/chaptera-viewer-render-plan/"):
         manifests.append((Path("crates/chaptera-viewer-render-plan/Cargo.toml"), Path("Cargo.toml")))
     elif path.startswith("apps/chaptera-desktop/"):
@@ -139,7 +158,84 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
 
     packages = sorted(affected)
     if packages:
-        flags = [item for package in packages for item in ("-p", package)]
+        flags = [
+            item
+            for package in packages
+            for item in ("-p", VENDOR_PACKAGE_SPECS.get(package, package))
+        ]
+        pub_viewer_images_only = set(paths) == {PUB_VIEWER_IMAGES}
+        pub_quill_paragraph_only = set(paths) == {PUB_QUILL_PARAGRAPH}
+        pub_quill_color_only = set(paths) == {PUB_QUILL_COLOR}
+        pub_quill_font_only = set(paths) == {PUB_QUILL_FONT}
+        source_free_command = (
+            {
+                "id": "pub-viewer-images-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-viewer",
+                    "--test",
+                    "image_placement_v1",
+                ],
+            }
+            if pub_viewer_images_only
+            else {
+                "id": "pub-quill-paragraph-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-quill",
+                    "--lib",
+                    "paragraph",
+                ],
+            }
+            if pub_quill_paragraph_only
+            else {
+                "id": "pub-quill-color-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-quill",
+                    "--lib",
+                    "typography::color",
+                ],
+            }
+            if pub_quill_color_only
+            else {
+                "id": "pub-quill-font-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    "-p",
+                    "pub-quill",
+                    "--lib",
+                    "typography::font",
+                ],
+            }
+            if pub_quill_font_only
+            else {
+                "id": "vendor-source-free-tests",
+                "argv": [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "vendor/producer-a/Cargo.toml",
+                    *flags,
+                    "--lib",
+                ],
+            }
+        )
         commands.extend(
             [
                 {
@@ -156,20 +252,10 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "warnings",
                     ],
                 },
-                {
-                    "id": "vendor-source-free-tests",
-                    "argv": [
-                        "cargo",
-                        "test",
-                        "--manifest-path",
-                        "vendor/producer-a/Cargo.toml",
-                        *flags,
-                        "--lib",
-                    ],
-                },
+                source_free_command,
             ]
         )
-        if "pub-viewer" in affected:
+        if "pub-viewer" in affected and not pub_viewer_images_only:
             commands.append(
                 {
                     "id": "pub-viewer-cmo-slot-compose",

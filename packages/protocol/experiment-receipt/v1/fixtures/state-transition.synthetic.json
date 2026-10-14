@@ -1,0 +1,59 @@
+{
+  "receipt_version": "chaptera.state-transition-receipt.v1",
+  "contract": {
+    "id": "chaptera.synthetic.experiment-envelope",
+    "version": "v1"
+  },
+  "system": {
+    "kind": "synthetic_model",
+    "runtime": "python",
+    "build": "test"
+  },
+  "fixture": {
+    "kind": "synthetic",
+    "identity": "experiment-envelope-control",
+    "provenance": "source-free transition comparator control"
+  },
+  "comparison": {
+    "required_state_fields": [
+      "geometry"
+    ],
+    "required_invariants": [
+      "identity_preserved"
+    ]
+  },
+  "before": {
+    "fields": {
+      "geometry": {
+        "status": "known",
+        "value": {
+          "height": 200,
+          "width": 100
+        }
+      }
+    }
+  },
+  "operation": {
+    "kind": "ResizeWidth",
+    "inputs": {
+      "width": 150
+    }
+  },
+  "after": {
+    "fields": {
+      "geometry": {
+        "status": "known",
+        "value": {
+          "height": 300,
+          "width": 150
+        }
+      }
+    }
+  },
+  "invariants": {
+    "identity_preserved": {
+      "status": "known",
+      "value": true
+    }
+  }
+}

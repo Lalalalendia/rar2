@@ -1,0 +1,135 @@
+name: BorderArt physical wire80 census
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/borderart-wire80-census.yml"
+      - "vendor/producer-a/crates/pub-contents/src/block.rs"
+      - "vendor/producer-a/crates/pub-contents/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/borderart.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/borderart-wire80-census.rs"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: borderart-wire80-census-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(x + "\n" for x in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert len(set(shas)) == 1050, len(set(shas))
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          PY
+
+      - name: Build physical BorderArt wire80 census
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin borderart-wire80-census
+
+      - name: Scan bounded BorderArt resources
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/borderart-wire80-census" \
+            out/pinned1050/materialized/native \
+            out/borderart-wire80-census.json \
+            > out/borderart-wire80-census.stdout.json
+
+      - name: Gate exact physical resource law
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          d = json.loads(Path("out/borderart-wire80-census.json").read_text(encoding="utf-8"))
+          assert d["schema"] == "chaptera.borderart-wire80-census.v2"
+          assert d["corpus_file_count"] == 1050, d["corpus_file_count"]
+          assert d["mature_0x2c_file_count"] == 396, d["mature_0x2c_file_count"]
+
+          # Existing exact Fbid/IfbMax census proved 33 mature files with
+          # OplPlbFb.IfbMax and 151 total catalog entries. The physical scan
+          # now additionally proves that eight semantic slots may reuse a
+          # smaller 1..8 member WMF pool rather than storing eight distinct
+          # resources unconditionally.
+          assert d["files_with_usable_catalog"] == 33, d["files_with_usable_catalog"]
+          assert d["catalog_entry_count"] == 151, d["catalog_entry_count"]
+          assert d["geometry_triplet_count"] == 151, d["geometry_triplet_count"]
+          assert d["entries_with_resource_count_matching_cfbmd"] == 151, d["entries_with_resource_count_matching_cfbmd"]
+          assert d["entries_with_eight_slot_resolution"] == 151, d["entries_with_eight_slot_resolution"]
+          assert d["entries_with_exact_eight_resources"] == 66, d["entries_with_exact_eight_resources"]
+          assert d["cfbmd_value_counts"] == {"1": 80, "4": 1, "6": 2, "7": 2, "8": 66}, d["cfbmd_value_counts"]
+          assert d["binary_resource_count"] == 638, d["binary_resource_count"]
+          assert d["strict_wmf_resource_count"] == 638, d["strict_wmf_resource_count"]
+          assert d["invalid_wmf_resource_count"] == 0, d["invalid_wmf_resource_count"]
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## BorderArt physical wire80 census\n\n")
+              for key in [
+                  "mature_0x2c_file_count",
+                  "files_with_usable_catalog",
+                  "catalog_entry_count",
+                  "geometry_triplet_count",
+                  "entries_with_resource_count_matching_cfbmd",
+                  "entries_with_eight_slot_resolution",
+                  "entries_with_exact_eight_resources",
+                  "binary_resource_count",
+                  "strict_wmf_resource_count",
+                  "invalid_wmf_resource_count",
+              ]:
+                  f.write(f"- {key}: `{d[key]}`\n")
+              f.write(f"- CFbmd distribution: `{d['cfbmd_value_counts']}`\n")
+              f.write("\n151/151 entries expose eight semantic slot offsets resolving exactly into a 1..8-member strict-WMF resource pool.\n")
+          PY
+
+      - name: Upload source-free receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: borderart-wire80-census
+          path: |
+            out/borderart-wire80-census.json
+            out/borderart-wire80-census.stdout.json
+          if-no-files-found: error
+          retention-days: 90

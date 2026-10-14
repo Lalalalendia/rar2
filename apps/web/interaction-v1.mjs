@@ -67,7 +67,10 @@ export function hitTestSnapshot(snapshot, pageId, point) {
   assertSafeEmu(point.y_emu, "hit point y");
 
   const candidates = snapshot.nodes.filter(
-    (node) => node.page_id === pageId && containsPoint(node.bounds, point),
+    (node) =>
+      node.page_id === pageId &&
+      node.editable !== false &&
+      containsPoint(node.bounds, point),
   );
 
   if (candidates.length === 0) return { kind: "none" };

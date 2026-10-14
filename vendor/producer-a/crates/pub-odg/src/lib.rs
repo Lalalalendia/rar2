@@ -14,6 +14,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 mod authored_shape;
 mod image;
+mod paragraph_alignment;
 mod semantic;
 mod typography;
 
@@ -21,6 +22,12 @@ pub use authored_shape::{OdgAuthoredShapeError, add_authored_rectangles_to_odg};
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
     OdgEmbeddedImagePlacement, OdgImageError, add_embedded_images_to_odg,
+};
+
+pub use paragraph_alignment::{
+    OdgFullStoryParagraphAlignmentPlacement, OdgParagraphAlignmentError,
+    OdgParagraphScopedAlignmentPlacement, add_full_story_paragraph_alignment_to_odg,
+    add_paragraph_scoped_alignment_to_odg,
 };
 
 pub use semantic::{OdgSemanticError, project_resolved_graph_to_odg};

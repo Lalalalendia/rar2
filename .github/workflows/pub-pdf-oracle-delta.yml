@@ -1,0 +1,81 @@
+name: PUB PDF oracle delta (read-only)
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub_pdf_oracle_delta.py"
+      - "tools/test_pub_pdf_oracle_delta.py"
+      - ".github/workflows/pub-pdf-oracle-delta.yml"
+  workflow_dispatch:
+    inputs:
+      baseline_run_id:
+        description: "Existing successful Publisher oracle run ID (baseline)"
+        required: true
+        type: string
+      candidate_run_id:
+        description: "Existing successful Publisher oracle run ID (candidate)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pub-pdf-oracle-delta-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Synthetic positive and negative A/B controls
+        run: |
+          python -m py_compile tools/pub_pdf_oracle_delta.py tools/test_pub_pdf_oracle_delta.py
+          python tools/test_pub_pdf_oracle_delta.py
+
+  analyze-existing-receipts:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download existing Publisher baseline receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-pdf-cli-publisher-oracle-v1
+          repository: Lalalalendia/rar2
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ github.token }}
+          path: target/oracle-delta/baseline
+      - name: Download existing Publisher candidate receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-pdf-cli-publisher-oracle-v1
+          repository: Lalalalendia/rar2
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: target/oracle-delta/candidate
+      - name: Validate identities and calculate exact A/B page deltas
+        run: |
+          python tools/pub_pdf_oracle_delta.py \
+            --baseline target/oracle-delta/baseline/receipt.json \
+            --candidate target/oracle-delta/candidate/receipt.json \
+            --out target/oracle-delta/causal-queue.json
+      - name: Upload source-safe delta receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub-pdf-oracle-delta-v1
+          path: target/oracle-delta/causal-queue.json
+          if-no-files-found: warn
+          retention-days: 30

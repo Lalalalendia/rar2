@@ -2,8 +2,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    body::Body,
+    extract::{Path, Request, State},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -11,10 +16,13 @@ use axum_extra::extract::cookie::CookieJar;
 use chaptera_cdm_model::AUTHORING_REVISION_SCHEMA_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
     blob_store::{BlobStoreError, BlobStoreService},
+    export_executor::{IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE},
     jobs_runtime::{
         AuthorizedExportDownloadV1, CreateExportJobRequestV1, ExportJobSnapshotV1, JobsRuntime,
         JobsRuntimeError,
@@ -28,6 +36,9 @@ pub const EXPORT_JOB_HTTP_V1: &str = "chaptera.export-job-http.v1";
 pub const EXPORT_DOWNLOAD_V1: &str = "chaptera.export-download.v1";
 pub const EXPORT_LOSS_DOWNLOAD_V1: &str = "chaptera.export-loss-download.v1";
 const DOWNLOAD_GRANT_TTL_MS: u64 = 5 * 60 * 1000;
+const STREAMED_EXPORT_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_STREAMED_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
 
 #[derive(Clone)]
 pub struct ProductExportHttpState {
@@ -63,10 +74,34 @@ pub fn router(state: ProductExportHttpState) -> Router {
         .route("/v1/exports/{job_id}/cancel", post(cancel_export))
         .route("/v1/exports/{job_id}/download", post(authorize_download))
         .route(
+            "/v1/exports/{job_id}/artifacts/{artifact_id}",
+            get(stream_export_artifact),
+        )
+        .route(
             "/v1/exports/{job_id}/loss-report/download",
             post(authorize_loss_report_download),
         )
+        .route(
+            "/v1/exports/{job_id}/loss-reports/{loss_report_id}",
+            get(stream_export_loss_report),
+        )
         .with_state(state)
+        .layer(middleware::from_fn(private_export_response))
+}
+
+// Denial and success responses both can reveal exact job/revision scope.
+// Never downgrade an artifact response's existing private, no-store policy.
+async fn private_export_response(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    ensure_export_no_store(&mut response);
+    response
+}
+
+fn ensure_export_no_store(response: &mut Response) {
+    response
+        .headers_mut()
+        .entry(CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +178,20 @@ async fn create_export(
         .resolve_by_document_id(&request.document_id)
         .await
         .map_err(ProductExportHttpError::Source)?;
+    // An unauthorized principal must get the same grant denial for real and
+    // guessed revisions. Inspect exact revision identity only after AuthZ.
+    let now = now_ms()?;
+    state
+        .jobs
+        .authorize_export_before_revision(
+            &source.tenant_id,
+            &request.document_id,
+            &principal.principal_id,
+            &request.client_request_id,
+            now,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
     let binding = state
         .revisions
         .require_revision_identity(&request.document_id, &request.revision_id)
@@ -155,7 +204,6 @@ async fn create_export(
         ));
     }
 
-    let now = now_ms()?;
     let snapshot = state
         .jobs
         .create_export(CreateExportJobRequestV1 {
@@ -282,6 +330,294 @@ async fn authorize_download(
         download_handle: grant.opaque_url,
         expires_at_ms: grant.expires_at_ms,
     }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownloadRepresentation {
+    mime: &'static str,
+    extension: &'static str,
+}
+
+async fn stream_export_artifact(
+    State(state): State<ProductExportHttpState>,
+    Path((job_id, artifact_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<Response, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&artifact_id, "artifact_id")?;
+
+    let principal = state
+        .auth
+        .authenticate_read_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:http-download",
+            now_ms()?,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if artifact_id != publication.artifact_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "artifact_identity_mismatch",
+            "requested artifact differs from the current authorized export publication",
+        ));
+    }
+
+    let representation = target_download_representation(&publication.target_profile)?;
+    let bytes = read_verified_binding_bounded(
+        &state.blobs,
+        &publication.tenant_id,
+        &publication.artifact_binding_id,
+    )
+    .await?;
+    let observed_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+    if observed_hash != publication.artifact_content_hash {
+        return Err(ProductExportHttpError::internal(
+            "artifact_publication_hash_mismatch",
+            "verified blob bytes differ from the immutable export publication hash",
+        ));
+    }
+
+    let byte_len = bytes.len();
+    let (filename, filename_star) =
+        safe_export_filename(&publication.document_id, representation.extension);
+    let disposition =
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_star}");
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    let response_headers = response.headers_mut();
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(representation.mime));
+    response_headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "sanitized Content-Disposition could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&byte_len.to_string()).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "verified Content-Length could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Ok(response)
+}
+
+async fn stream_export_loss_report(
+    State(state): State<ProductExportHttpState>,
+    Path((job_id, loss_report_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<Response, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&loss_report_id, "loss_report_id")?;
+
+    let principal = state
+        .auth
+        .authenticate_read_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:loss-report-http-download",
+            now_ms()?,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if loss_report_id != publication.loss_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "loss_report_identity_mismatch",
+            "requested loss report differs from the current authorized export publication",
+        ));
+    }
+
+    let bytes = read_verified_binding_bounded(
+        &state.blobs,
+        &publication.tenant_id,
+        &publication.loss_binding_id,
+    )
+    .await?;
+    let observed_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+    if observed_hash != publication.loss_report_hash {
+        return Err(ProductExportHttpError::internal(
+            "loss_report_publication_hash_mismatch",
+            "verified blob bytes differ from the immutable loss-report publication hash",
+        ));
+    }
+    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| {
+        ProductExportHttpError::internal(
+            "loss_report_json_invalid",
+            "verified loss-report publication is not valid JSON",
+        )
+    })?;
+
+    let byte_len = bytes.len();
+    let (stem, _) = safe_export_filename(&publication.document_id, "json");
+    let filename = stem.replacen(".json", "-loss-report.json", 1);
+    let (_, filename_star) =
+        safe_export_filename(&format!("{}-loss-report", publication.document_id), "json");
+    let disposition =
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_star}");
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    let response_headers = response.headers_mut();
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response_headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "sanitized Content-Disposition could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&byte_len.to_string()).map_err(|_| {
+            ProductExportHttpError::internal(
+                "download_header_invalid",
+                "verified Content-Length could not be encoded",
+            )
+        })?,
+    );
+    response_headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Ok(response)
+}
+
+async fn read_verified_binding_bounded(
+    blobs: &BlobStoreService,
+    tenant_id: &str,
+    binding_id: &str,
+) -> Result<Vec<u8>, ProductExportHttpError> {
+    let (writer, mut reader) = tokio::io::duplex(STREAMED_EXPORT_BUFFER_BYTES);
+    let stream = async {
+        let mut writer = writer;
+        blobs
+            .stream_binding_verified(tenant_id, binding_id, &mut writer)
+            .await
+            .map_err(ProductExportHttpError::Blob)?;
+        Ok::<(), ProductExportHttpError>(())
+    };
+    let collect = async {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; STREAMED_EXPORT_BUFFER_BYTES];
+        loop {
+            let count = reader.read(&mut buffer).await.map_err(|error| {
+                ProductExportHttpError::internal(
+                    "download_stream_read_failed",
+                    format!("failed to read verified export stream: {error}"),
+                )
+            })?;
+            if count == 0 {
+                break;
+            }
+            let next_len = output.len().checked_add(count).ok_or_else(|| {
+                ProductExportHttpError::payload_too_large(
+                    "streamed_export_too_large",
+                    "server-streamed export exceeds the bounded download adapter",
+                )
+            })?;
+            if next_len > MAX_STREAMED_EXPORT_BYTES {
+                return Err(ProductExportHttpError::payload_too_large(
+                    "streamed_export_too_large",
+                    "server-streamed export exceeds the bounded download adapter",
+                ));
+            }
+            output.extend_from_slice(&buffer[..count]);
+        }
+        Ok::<Vec<u8>, ProductExportHttpError>(output)
+    };
+    let ((), bytes) = tokio::try_join!(stream, collect)?;
+    Ok(bytes)
+}
+
+fn target_download_representation(
+    target_profile: &str,
+) -> Result<DownloadRepresentation, ProductExportHttpError> {
+    match target_profile {
+        IDML_BOUNDED_EDITABLE_PROFILE => Ok(DownloadRepresentation {
+            mime: "application/vnd.adobe.indesign-idml-package",
+            extension: "idml",
+        }),
+        ODG_BOUNDED_EDITABLE_PROFILE => Ok(DownloadRepresentation {
+            mime: "application/vnd.oasis.opendocument.graphics",
+            extension: "odg",
+        }),
+        _ => Err(ProductExportHttpError::conflict(
+            "export_target_profile_unsupported",
+            "authorized export publication has no admitted browser download representation",
+        )),
+    }
+}
+
+fn safe_export_filename(stem: &str, extension: &str) -> (String, String) {
+    let mut cleaned = String::new();
+    let mut previous_dash = false;
+    for ch in stem.chars().take(80) {
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+            cleaned.push(ch);
+            previous_dash = false;
+        } else if !previous_dash && !cleaned.is_empty() {
+            cleaned.push('-');
+            previous_dash = true;
+        }
+    }
+    while cleaned.ends_with('-') || cleaned.ends_with('_') {
+        cleaned.pop();
+    }
+    if cleaned.is_empty() {
+        cleaned.push_str("export");
+    }
+
+    let unicode_name = format!("chaptera-{cleaned}.{extension}");
+    let mut ascii_name = String::with_capacity(unicode_name.len());
+    let mut last_underscore = false;
+    for ch in unicode_name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            ascii_name.push(ch);
+            last_underscore = false;
+        } else if !last_underscore {
+            ascii_name.push('_');
+            last_underscore = true;
+        }
+    }
+    (ascii_name, rfc5987_encode(&unicode_name))
+}
+
+fn rfc5987_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for &byte in value.as_bytes() {
+        let attr_char = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'|' | b'~'
+            )
+            || byte == 0x24;
+        if attr_char {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(&mut encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 async fn authorize_loss_report_download(
@@ -453,6 +789,14 @@ impl ProductExportHttpError {
         }
     }
 
+    fn payload_too_large(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code,
+            message: message.into(),
+        }
+    }
+
     fn internal(code: &'static str, message: impl Into<String>) -> Self {
         Self::Http {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -462,26 +806,53 @@ impl ProductExportHttpError {
     }
 }
 
+// Lower-layer diagnostic text can contain SQLite paths, provider locators or
+// source details. Stable machine error codes are retained; 5xx messages are not.
+fn export_error_response(status: StatusCode, code: &'static str, message: &str) -> Response {
+    let public_message = if status.is_server_error() {
+        "internal server error"
+    } else {
+        message
+    };
+    (
+        status,
+        Json(json!({"error":{"code":code,"message":public_message}})),
+    )
+        .into_response()
+}
+
 impl IntoResponse for ProductExportHttpError {
     fn into_response(self) -> Response {
-        match self {
+        let mut response = match self {
+            // AuthHttpError already exposes only a stable code, never a diagnostic message.
             Self::Auth(error) => error.into_response(),
-            Self::Source(error) => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":{"code":error.code,"message":error.message}})),
-            )
-                .into_response(),
+            Self::Source(error) => {
+                if error.code == "document_source_not_found" {
+                    // Do not disclose whether a guessed document ID has a
+                    // consumed source: existing documents without CAP_EXPORT
+                    // yield this same stable grant denial.
+                    export_error_response(
+                        StatusCode::FORBIDDEN,
+                        "grant_missing",
+                        "principal has no grant for the document",
+                    )
+                } else {
+                    // A failed database/source authority is a server error,
+                    // not a client-visible 404 carrying SQLite diagnostics.
+                    export_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        error.code,
+                        &error.message,
+                    )
+                }
+            }
             Self::Store(error) => {
                 let status = if error.code == "canonical_revision_unbound" {
                     StatusCode::CONFLICT
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR
                 };
-                (
-                    status,
-                    Json(json!({"error":{"code":error.code,"message":error.message}})),
-                )
-                    .into_response()
+                export_error_response(status, error.code, &error.message)
             }
             Self::Jobs(error) => {
                 let status = match error.code {
@@ -491,31 +862,29 @@ impl IntoResponse for ProductExportHttpError {
                     | "job_payload_scope_mismatch"
                     | "export_artifact_not_ready"
                     | "export_artifact_not_visible" => StatusCode::CONFLICT,
-                    "grant_missing" | "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "grant_missing" | "grant_expired" | "capability_denied" | "authz_denied"
+                    | "authz_expired" => StatusCode::FORBIDDEN,
                     "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
-                (
-                    status,
-                    Json(json!({"error":{"code":error.code,"message":error.message}})),
-                )
-                    .into_response()
+                export_error_response(status, error.code, &error.message)
             }
-            Self::Blob(error) => (
+            Self::Blob(error) => export_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":{"code":error.code,"message":error.message}})),
-            )
-                .into_response(),
+                error.code,
+                &error.message,
+            ),
             Self::Http {
                 status,
                 code,
                 message,
-            } => (
-                status,
-                Json(json!({"error":{"code":code,"message":message}})),
-            )
-                .into_response(),
-        }
+            } => export_error_response(status, code, &message),
+        };
+        // These identities and denial details must not be cached by intermediaries.
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
     }
 }
 
@@ -604,5 +973,460 @@ mod tests {
         assert_eq!(response.progress_percent, None);
         assert_eq!(response.artifact_id, None);
         assert_eq!(response.loss_report_id, None);
+    }
+    #[test]
+    fn browser_download_representation_is_exact_target_derived() {
+        let idml = target_download_representation(IDML_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(idml.extension, "idml");
+        assert_eq!(idml.mime, "application/vnd.adobe.indesign-idml-package");
+
+        let odg = target_download_representation(ODG_BOUNDED_EDITABLE_PROFILE).unwrap();
+        assert_eq!(odg.extension, "odg");
+        assert_eq!(odg.mime, "application/vnd.oasis.opendocument.graphics");
+        assert!(target_download_representation("html:guess").is_err());
+    }
+
+    #[test]
+    fn export_filename_is_safe_for_hostile_and_unicode_stems() {
+        let hostile = format!("..//CON\\bad\r\n{}", "Книга");
+        let (ascii, encoded) = safe_export_filename(&hostile, "idml");
+        assert!(ascii.starts_with("chaptera-"));
+        assert!(ascii.ends_with(".idml"));
+        assert!(!ascii.contains('/'));
+        assert!(!ascii.contains('\\'));
+        assert!(!ascii.contains('\r'));
+        assert!(!ascii.contains('\n'));
+        assert!(!ascii.contains('"'));
+        assert!(!encoded.contains('/'));
+        assert!(!encoded.contains('\\'));
+        assert!(encoded.contains("%D0%9A"));
+        assert!(encoded.ends_with(".idml"));
+    }
+
+    #[test]
+    fn export_router_cache_policy_preserves_private_artifacts() {
+        let mut denied = ProductExportHttpError::Jobs(JobsRuntimeError {
+            code: "grant_missing",
+            message: "denied".to_owned(),
+        })
+        .into_response();
+        ensure_export_no_store(&mut denied);
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+
+        let mut artifact = Response::new(Body::empty());
+        artifact
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+        ensure_export_no_store(&mut artifact);
+        assert_eq!(artifact.headers()[CACHE_CONTROL], "private, no-store");
+    }
+
+    #[test]
+    fn export_authz_denials_are_forbidden_not_internal_errors() {
+        for code in ["grant_missing", "grant_expired", "capability_denied"] {
+            let response = ProductExportHttpError::Jobs(JobsRuntimeError {
+                code,
+                message: "denied".to_owned(),
+            })
+            .into_response();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{code}");
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{code}");
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_export_failures_redact_source_storage_and_provider_canaries() {
+        let canary = "private-source-pub=/srv/documents/secret.pub; provider-secret=canary";
+        let failures = [
+            (
+                ProductExportHttpError::Source(SourceAuthorityError {
+                    code: "sqlite_source_error",
+                    message: canary.to_owned(),
+                }),
+                "sqlite_source_error",
+            ),
+            (
+                ProductExportHttpError::Store(SqliteStoreError::new("sqlite_query_failed", canary)),
+                "sqlite_query_failed",
+            ),
+            (
+                ProductExportHttpError::Jobs(JobsRuntimeError {
+                    code: "export_worker_unavailable",
+                    message: canary.to_owned(),
+                }),
+                "export_worker_unavailable",
+            ),
+            (
+                ProductExportHttpError::Blob(BlobStoreError::new("provider_read_failed", canary)),
+                "provider_read_failed",
+            ),
+            (
+                ProductExportHttpError::internal("clock_invalid", canary),
+                "clock_invalid",
+            ),
+        ];
+        for (failure, code) in failures {
+            let response = failure.into_response();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{code}"
+            );
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{code}");
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error"]["code"], code);
+            assert_eq!(body["error"]["message"], "internal server error");
+            assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+        }
+
+        // The stable expected denials keep their exact HTTP classification.
+        let not_found = ProductExportHttpError::Source(SourceAuthorityError {
+            code: "document_source_not_found",
+            message: canary.to_owned(),
+        })
+        .into_response();
+        assert_eq!(not_found.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(not_found.into_body(), 4096)
+            .await
+            .unwrap();
+        let missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(missing["error"]["code"], "grant_missing");
+        assert_eq!(
+            missing["error"]["message"],
+            "principal has no grant for the document"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+
+        let conflict = ProductExportHttpError::Store(SqliteStoreError::new(
+            "canonical_revision_unbound",
+            "requested revision is not bound",
+        ))
+        .into_response();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(conflict.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["message"], "requested revision is not bound");
+    }
+
+    #[tokio::test]
+    async fn axum_export_error_route_never_serializes_provider_canary() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // Exercise Axum's actual route/IntoResponse serialization, not only a
+        // helper function. The full OIDC/HTTPS B02 journey remains separate.
+        let app = Router::new().route(
+            "/v1/exports/fault-injection",
+            get(|| async {
+                Err::<Json<serde_json::Value>, ProductExportHttpError>(
+                    ProductExportHttpError::Blob(BlobStoreError::new(
+                        "provider_read_failed",
+                        "private-provider-canary=never-public",
+                    )),
+                )
+            }),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/exports/fault-injection")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "provider_read_failed");
+        assert_eq!(body["error"]["message"], "internal server error");
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-provider-canary"));
+    }
+
+    // This is the installed Product Export router with real AuthN, source
+    // authority, revision, jobs and BlobStore state. A deliberately broken
+    // SQLite source backend must not disclose its diagnostic through HTTP.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configured_product_export_router_redacts_authenticated_sqlite_failure() {
+        use std::{fs, sync::Arc, time::Duration};
+
+        use axum::http::{
+            Request,
+            header::{CONTENT_TYPE, COOKIE, HOST, ORIGIN},
+        };
+        use tower::ServiceExt;
+
+        use crate::{
+            auth_http::{CSRF_HEADER, SESSION_COOKIE},
+            authn::SqliteAuthnStore,
+            authn_session::{SessionPolicy, issue_verified_login_session},
+            authz_runtime::{DocumentRole, SqliteAuthzAuthority},
+            blob_runtime::SystemBlobIdGenerator,
+            filesystem_blob_provider::FilesystemBlobProvider,
+            oidc_authn::OidcVerifiedIdentity,
+            schema_migration::SqliteMigrationRuntime,
+            sqlite_blob_metadata::SqliteBlobBindingRepository,
+        };
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "chaptera-export-5xx-configured-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("control.sqlite");
+        let timeout = Duration::from_secs(2);
+        SqliteMigrationRuntime::new(&db, timeout)
+            .unwrap()
+            .migrate_up()
+            .await
+            .unwrap();
+
+        let authn = SqliteAuthnStore::open(&db, 4, timeout).await.unwrap();
+        let policy =
+            SessionPolicy::new(Duration::from_secs(600), Duration::from_secs(3600)).unwrap();
+        let session = issue_verified_login_session(
+            &authn,
+            OidcVerifiedIdentity {
+                issuer: "https://issuer.example.test".to_owned(),
+                subject: "subject-export-redaction".to_owned(),
+                email_snapshot: None,
+                return_path: "/editor".to_owned(),
+            },
+            now_ms().unwrap(),
+            policy,
+        )
+        .await
+        .unwrap();
+        let auth =
+            AuthHttpState::api_test(authn.clone(), policy, "https://cloud.example.test").unwrap();
+
+        let source = SqliteDocumentSourceAuthority::open(&db, 4, timeout)
+            .await
+            .unwrap();
+        let revisions = SqliteRevisionStore::open(&db, 4, timeout).await.unwrap();
+        let jobs = JobsRuntime::open(&db, 4, timeout).await.unwrap();
+        let metadata = SqliteBlobBindingRepository::open(&db, 4, timeout)
+            .await
+            .unwrap();
+        let blobs = BlobStoreService::new(
+            Arc::new(FilesystemBlobProvider::new(dir.join("blob-store")).unwrap()),
+            Arc::new(metadata.clone()),
+            Arc::new(SystemBlobIdGenerator),
+        );
+        let app = router(ProductExportHttpState::new(
+            auth,
+            source.clone(),
+            revisions.clone(),
+            jobs.clone(),
+            blobs,
+        ));
+
+        // Corrupt a required table only AFTER all real authorities have been
+        // initialized. The subsequent source SQL read is the forced backend
+        // failure, not a synthetic test handler returning a manufactured 500.
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(false),
+        )
+        .await
+        .unwrap();
+        // The existing source has a durable consumed upload. Another
+        // principal owns its grant; our real AuthN session must not learn
+        // whether this document exists from the Export API response.
+        let document_id = "document-export-canary";
+        let tenant_id = "tenant-export-canary";
+        sqlx::query(
+            r#"
+            INSERT INTO uploads (
+                upload_id, tenant_id, principal_id, purpose, expected_byte_len,
+                physical_upload_ref, state, upload_generation, object_version,
+                object_etag, observed_byte_len, canonical_sha256, durable_binding_id,
+                created_at_ms, expires_at_ms, completed_at_ms, idempotency_key,
+                request_hash
+            ) VALUES (?, ?, ?, 'pub_source', 256, 'probe/ref', 'CONSUMED', 2,
+                      'v1', 'etag', 256, ?, 'binding-export-canary', 1,
+                      9999999999999, 2, 'upload-export-idem', ?)
+            "#,
+        )
+        .bind(b"upload-export-canary".as_slice())
+        .bind(tenant_id.as_bytes())
+        .bind(b"principal-seed".as_slice())
+        .bind(b"c".repeat(64))
+        .bind(b"d".repeat(64))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO upload_consumptions (
+                upload_id, tenant_id, idempotency_key, request_hash,
+                project_id, document_id, genesis_revision_id, committed_at_ms
+            ) VALUES (?, ?, 'consume-export-idem', ?, 'project-export-canary',
+                      ?, 'revision-export-genesis', 3)
+            "#,
+        )
+        .bind(b"upload-export-canary".as_slice())
+        .bind(tenant_id.as_bytes())
+        .bind(b"e".repeat(64))
+        .bind(document_id.as_bytes())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let authz = SqliteAuthzAuthority::open(&db, 4, timeout).await.unwrap();
+        authz
+            .set_role(
+                tenant_id,
+                document_id,
+                "principal-someone-else",
+                DocumentRole::Owner,
+                None,
+                "grant-other-export-owner",
+                now_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let create = json!({
+            "protocol_version": EXPORT_CREATE_V1,
+            "document_id": document_id,
+            "revision_id": format!("sha256:{}", "a".repeat(64)),
+            "target_profile": IDML_BOUNDED_EDITABLE_PROFILE,
+            "layout_environment_id": format!("sha256:{}", "b".repeat(64)),
+            "client_request_id": "request-export-redaction"
+        });
+        let request_body = serde_json::to_vec(&create).unwrap();
+        let authenticated_request = |body: Vec<u8>| {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/exports")
+                .header(HOST, "cloud.example.test")
+                .header(ORIGIN, "https://cloud.example.test")
+                .header(
+                    COOKIE,
+                    format!("{SESSION_COOKIE}={}", session.session_token),
+                )
+                .header(CSRF_HEADER, session.csrf_token.as_str())
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let existing_denial = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
+            .unwrap();
+        let mut guessed = create.clone();
+        guessed["document_id"] = json!("document-guessed-not-present");
+        let guessed_denial = app
+            .clone()
+            .oneshot(authenticated_request(serde_json::to_vec(&guessed).unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(existing_denial.status(), StatusCode::FORBIDDEN);
+        assert_eq!(guessed_denial.status(), StatusCode::FORBIDDEN);
+        assert_eq!(existing_denial.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(guessed_denial.headers()[CACHE_CONTROL], "no-store");
+        let existing_bytes = axum::body::to_bytes(existing_denial.into_body(), 4096)
+            .await
+            .unwrap();
+        let guessed_bytes = axum::body::to_bytes(guessed_denial.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(existing_bytes, guessed_bytes);
+        let denial: serde_json::Value = serde_json::from_slice(&existing_bytes).unwrap();
+        assert_eq!(denial["error"]["code"], "grant_missing");
+        assert_eq!(
+            denial["error"]["message"],
+            "principal has no grant for the document"
+        );
+
+        // Grant the current session legitimate Export authority and verify
+        // it reaches the exact-revision check rather than a blanket denial.
+        authz
+            .set_role(
+                tenant_id,
+                document_id,
+                &session.principal_id,
+                DocumentRole::Owner,
+                None,
+                "grant-current-export-owner",
+                now_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+        let authorized = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(authorized.into_body(), 4096)
+            .await
+            .unwrap();
+        let unbound: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(unbound["error"]["code"], "canonical_revision_unbound");
+
+        // After exercising actual grant paths, poison the source backend.
+        // An authorized request must receive a redacted 500, not SQLite
+        // internals or a successful export.
+        sqlx::query("DROP TABLE upload_consumptions")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(authenticated_request(request_body.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["error"]["code"], "sqlite_document_source_error");
+        assert_eq!(error["error"]["message"], "internal server error");
+        let body = String::from_utf8_lossy(&bytes);
+        for forbidden in ["upload_consumptions", "no such table", "control.sqlite"] {
+            assert!(!body.contains(forbidden), "leaked SQLite diagnostic");
+        }
+
+        // A missing session cannot probe the failed source table: the real
+        // authentication layer must deny before the broken backend is read.
+        let unauthenticated = Request::builder()
+            .method("POST")
+            .uri("/v1/exports")
+            .header(HOST, "cloud.example.test")
+            .header(ORIGIN, "https://cloud.example.test")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(request_body))
+            .unwrap();
+        let denied = app.oneshot(unauthenticated).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(denied.headers()[CACHE_CONTROL], "no-store");
+
+        pool.close().await;
+        authz.close().await;
+        authn.close().await;
+        source.close().await;
+        revisions.close().await;
+        jobs.close().await;
+        metadata.close().await;
+        let _ = fs::remove_dir_all(&dir);
     }
 }

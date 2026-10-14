@@ -30,6 +30,7 @@ pub struct DestinationCommitReceipt {
     pub backup_path: Option<PathBuf>,
     pub byte_len: u64,
     pub sha256: String,
+    final_identity: FileIdentity,
 }
 
 #[derive(Debug)]
@@ -185,6 +186,10 @@ pub fn identify_existing_path(path: &Path) -> Result<FileIdentity, DestinationWr
     platform_file_identity(path)
 }
 
+pub(crate) fn identify_open_file(file: &File) -> Result<FileIdentity, DestinationWriteError> {
+    platform_open_file_identity(file)
+}
+
 impl AdmittedDestination {
     pub fn admit(
         requested_path: &Path,
@@ -317,7 +322,26 @@ impl AdmittedDestination {
             backup_path,
             byte_len: bytes.len() as u64,
             sha256: expected_sha256,
+            final_identity,
         })
+    }
+
+    pub(crate) fn verify_committed(
+        &self,
+        receipt: &DestinationCommitReceipt,
+    ) -> Result<(), DestinationWriteError> {
+        self.revalidate_parent()?;
+        let identity = inspect_target(&self.target_path, &self.protected)?.ok_or_else(|| {
+            DestinationWriteError::TargetChanged {
+                path: self.target_path.clone(),
+            }
+        })?;
+        if identity != receipt.final_identity {
+            return Err(DestinationWriteError::TargetChanged {
+                path: self.target_path.clone(),
+            });
+        }
+        verify_exact_file(&self.target_path, receipt.byte_len, &receipt.sha256)
     }
 
     fn revalidate_parent(&self) -> Result<(), DestinationWriteError> {
@@ -591,6 +615,43 @@ fn platform_file_identity(path: &Path) -> Result<FileIdentity, DestinationWriteE
 
 #[cfg(not(any(unix, windows)))]
 fn platform_file_identity(_path: &Path) -> Result<FileIdentity, DestinationWriteError> {
+    Err(DestinationWriteError::UnsupportedPlatform)
+}
+
+#[cfg(unix)]
+fn platform_open_file_identity(file: &File) -> Result<FileIdentity, DestinationWriteError> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file
+        .metadata()
+        .map_err(|error| io_error("identify open file", Path::new("<open-file>"), error))?;
+    Ok(FileIdentity {
+        primary: metadata.dev(),
+        secondary: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn platform_open_file_identity(file: &File) -> Result<FileIdentity, DestinationWriteError> {
+    use std::os::windows::io::AsRawHandle;
+
+    let mut information = ByHandleFileInformation::default();
+    let ok = unsafe { get_file_information_by_handle(file.as_raw_handle(), &mut information) };
+    if ok == 0 {
+        return Err(io_error(
+            "identify open file",
+            Path::new("<open-file>"),
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(FileIdentity {
+        primary: u64::from(information.volume_serial_number),
+        secondary: (u64::from(information.file_index_high) << 32)
+            | u64::from(information.file_index_low),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_open_file_identity(_file: &File) -> Result<FileIdentity, DestinationWriteError> {
     Err(DestinationWriteError::UnsupportedPlatform)
 }
 

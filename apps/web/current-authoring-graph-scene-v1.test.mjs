@@ -66,6 +66,18 @@ function currentFixture() {
             officeart_spid: null,
             image_slot: null,
             explicit_paint: {},
+            effective_paint: {
+              fill: {
+                solid: { value: true, authority: "normative_default" },
+                color_rgb: { value: [12, 34, 56], authority: "shape_local", source: { offset: 123, length: 4 } },
+                visible: { value: true, authority: "shape_local" },
+              },
+              line: {
+                color_rgb: { value: [90, 80, 70], authority: "shape_local" },
+                width_emu: { value: 9525, authority: "shape_local" },
+                visible: { value: true, authority: "shape_local" },
+              },
+            },
             story_frame: null,
             table: null,
           },
@@ -123,7 +135,7 @@ test("projects authoritative graph geometry into a renderer-safe partial SceneV1
   assert.deepEqual(scene.fidelity, {
     state: "partial",
     reasons: [
-      "paint_projection_deferred",
+      "paint_projection_partial",
       "resource_projection_deferred",
       "stacking_order_unavailable",
       "text_style_projection_deferred",
@@ -155,8 +167,23 @@ test("projects authoritative graph geometry into a renderer-safe partial SceneV1
   assert.deepEqual(scene.story_frames, [
     { story_id: STORY, frame_ordinal: 0, node_id: FRAME },
   ]);
-  assert.deepEqual(scene.paints, []);
+  assert.deepEqual(scene.paints, [
+    {
+      paint_id: "paint." + GROUP,
+      fill: { r: 12, g: 34, b: 56, a: 255 },
+      stroke: {
+        color: { r: 90, g: 80, b: 70, a: 255 },
+        width_emu: 9525,
+      },
+    },
+  ]);
+  assert.equal(group.paint_id, "paint." + GROUP);
+  assert.equal(frame.paint_id, null);
   assert.deepEqual(scene.resources, []);
+  assert.equal(
+    scene.capabilities.find((item) => item.key === "render.paint")?.state,
+    "partial",
+  );
 
   const plan = buildRenderPlan(scene, {
     emu_per_css_px: 9525,
@@ -169,6 +196,21 @@ test("projects authoritative graph geometry into a renderer-safe partial SceneV1
   assert.deepEqual(
     new Set(plan.pages[0].nodes.map((node) => node.node_id)),
     new Set([GROUP, FRAME]),
+  );
+});
+
+test("effective paint projection strips source provenance and refuses invalid RGB", async () => {
+  const scene = await projectCurrentAuthoringGraphToScene(currentFixture());
+  const serialized = JSON.stringify(scene);
+  assert.ok(!serialized.includes('"offset"'));
+  assert.ok(!serialized.includes('"length"'));
+  assert.ok(!serialized.includes('"source"'));
+
+  const invalid = currentFixture();
+  invalid.authoring_graph.nodes[GROUP].payload.effective_paint.fill.color_rgb.value = [0, 256, 0];
+  await assert.rejects(
+    projectCurrentAuthoringGraphToScene(invalid),
+    /must be 0\.\.255/,
   );
 });
 

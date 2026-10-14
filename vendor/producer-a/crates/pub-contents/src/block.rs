@@ -16,6 +16,13 @@ pub const BLOCK_TYPE_FIXED_16: u8 = 0x38;
 pub const BLOCK_TYPE_REFERENCE_U32: u8 = 0x68;
 pub const BLOCK_TYPE_HANDLE_U32: u8 = 0x70;
 pub const BLOCK_TYPE_DUMMY: u8 = 0x78;
+/// Conventional OPL type16: length-delimited binary payload.
+///
+/// Publisher 98/2000 conventional-OPL fixtures and Publisher-generated hidden
+/// XML independently identify descriptor/type 0x10 as a binary/blob class.
+/// The declared length follows the same confirmed convention as variable
+/// containers: it includes its own four-byte length word, not the two-byte tag.
+pub const BLOCK_TYPE_BINARY: u8 = 0x80;
 pub const BLOCK_TYPE_CONTAINER_88: u8 = 0x88;
 pub const BLOCK_TYPE_CONTAINER_90: u8 = 0x90;
 pub const BLOCK_TYPE_CONTAINER_A0: u8 = 0xA0;
@@ -102,6 +109,11 @@ pub enum RawContentsBlockBody {
     },
     Fixed16 {
         bytes: [u8; 16],
+        value_source: RawSpan,
+    },
+    Binary {
+        declared_length: u32,
+        length_source: RawSpan,
         value_source: RawSpan,
     },
     Container {
@@ -226,6 +238,30 @@ fn parse_confirmed_block_inner(
             }
         }
         BLOCK_TYPE_DUMMY => RawContentsBlockBody::Empty,
+        BLOCK_TYPE_BINARY => {
+            let (declared_length, length_source) = cursor.read_u32_le()?;
+            if declared_length < 4 {
+                return Err(BlockReadError::InvalidDeclaredLength {
+                    block_type,
+                    offset: start,
+                    declared_length,
+                });
+            }
+
+            let value_len_u32 = declared_length - 4;
+            let value_len =
+                usize::try_from(value_len_u32).map_err(|_| BlockReadError::LengthTooLarge {
+                    block_type,
+                    declared_length,
+                })?;
+            let (_, value_source) = cursor.take(value_len)?;
+
+            RawContentsBlockBody::Binary {
+                declared_length,
+                length_source,
+                value_source,
+            }
+        }
         BLOCK_TYPE_CONTAINER_88 | BLOCK_TYPE_CONTAINER_90 | BLOCK_TYPE_CONTAINER_A0 => {
             let (declared_length, length_source) = cursor.read_u32_le()?;
             if declared_length < 4 {
@@ -442,6 +478,48 @@ mod tests {
         assert_eq!(block.body, RawContentsBlockBody::Empty);
         assert_eq!(block.source.len, 2);
         assert_eq!(cursor.position(), 2);
+    }
+
+    #[test]
+    fn parses_type16_binary_length_including_its_own_dword() {
+        let bytes = [
+            0x01,
+            BLOCK_TYPE_BINARY,
+            0x0A,
+            0x00,
+            0x00,
+            0x00, // declared length = 4-byte length + 6-byte payload
+            0x01,
+            0x00,
+            0x09,
+            0x00,
+            0x00,
+            0x00,
+        ];
+        let mut cursor = ContentsCursor::new(StreamPath("/Contents".into()), &bytes);
+
+        let block = parse_confirmed_block(&mut cursor).expect("type16 binary must parse");
+
+        assert_eq!(block.id, 0x01);
+        assert_eq!(block.block_type, BLOCK_TYPE_BINARY);
+        assert_eq!(block.source.len, 12);
+        assert_eq!(
+            block.body,
+            RawContentsBlockBody::Binary {
+                declared_length: 10,
+                length_source: RawSpan {
+                    stream: StreamPath("/Contents".into()),
+                    offset: 2,
+                    len: 4,
+                },
+                value_source: RawSpan {
+                    stream: StreamPath("/Contents".into()),
+                    offset: 6,
+                    len: 6,
+                },
+            }
+        );
+        assert_eq!(cursor.position(), 12);
     }
 
     #[test]

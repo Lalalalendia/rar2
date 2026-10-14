@@ -163,6 +163,7 @@ mod tests {
                 utf16_end: 22,
                 text: "Hello 😀 PUB".to_owned(),
             }],
+            recovered_resources: Vec::new(),
             gaps: vec![
                 ReaderPartialSourceGap::ImageFactsUnavailable,
                 ReaderPartialSourceGap::GeometryFactsUnavailable,

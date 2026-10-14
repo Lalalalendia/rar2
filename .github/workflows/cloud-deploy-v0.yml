@@ -6,6 +6,8 @@ on:
       - "deploy/**"
       - "docs/cloud-single-host-v0.md"
       - "tools/validate_cloud_deploy_v0.py"
+      - "tools/test_reader_release_embedded_inputs.py"
+      - "tools/test_reader_nginx_temporary_edge.py"
       - ".github/workflows/cloud-deploy-v0.yml"
   workflow_dispatch:
 
@@ -26,6 +28,13 @@ jobs:
           python-version: "3.12"
       - name: Validate public-safe deployment packet
         run: python tools/validate_cloud_deploy_v0.py
+      - name: Ensure production Linux release tracks embedded Temporary Editor assets
+        run: python -m unittest discover -s tools -p 'test_reader_release_embedded_inputs.py'
+      - name: Enforce no-login Temporary Editor Nginx allowlist and real grammar
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nginx
+          python -m unittest discover -s tools -p 'test_reader_nginx_temporary_edge.py'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cloud-deploy-v0-static-receipt

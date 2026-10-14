@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env, fmt,
     fs::{self as stdfs, File, OpenOptions},
     io::{BufWriter, Write},
@@ -6,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_viewer::{
@@ -14,7 +16,7 @@ use pub_viewer::{
 };
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::{
     fs,
@@ -23,11 +25,25 @@ use tokio::{
     time::timeout,
 };
 
+#[cfg(test)]
+use crate::safe_preview_scene::collect_worker_preview_samples;
+
 use crate::{
     blob_store::BlobStoreService,
     config::CloudReaderFontResourceConfig,
     guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::{ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts},
+    product_replay_worker::{
+        IsolatedReaderPreviewSidecarV1, PREVIEW_PART_COUNT, approved_reader_scene_shape,
+        preview_part_name, read_preview_sidecar_parts, sanitize_reader_scene_browser_decoders,
+        write_isolated_preview_sidecar,
+    },
+    reader_scene_v1::{
+        MAX_SCENE_BYTES, ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts,
+    },
+    safe_preview_scene::{
+        WorkerSafePreviewAuditV1, WorkerSafePreviewSamplesV1, admit_host_reencoded_previews,
+        collect_worker_preview_samples_with_audit,
+    },
     source_ingress_security::SourceSecurityScannerConfig,
 };
 
@@ -94,6 +110,15 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub filesystem_confinement: bool,
     pub structural_scan_duration_us: u64,
     pub scene_duration_us: Option<u64>,
+    /// Worker decoded samples stay in fixed-name private sidecars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_sidecar: Option<IsolatedReaderPreviewSidecarV1>,
+    /// Host-only, never included in the wire receipt or public response.
+    #[serde(skip)]
+    pub preview_samples: Vec<WorkerSafePreviewSamplesV1>,
+    /// Private source-free rejection census, never forwarded to HTTP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) preview_audit: Option<WorkerSafePreviewAuditV1>,
 }
 
 #[derive(Clone)]
@@ -391,13 +416,81 @@ impl IsolatedGuestSceneProducer {
                 "isolated guest scene receipt could not be read",
             )
         })?;
-        let receipt: GuestSceneWorkerReceiptV1 = serde_json::from_slice(&bytes).map_err(|_| {
-            GuestSceneWorkerError::new(
-                "guest_scene_receipt_invalid",
-                "isolated guest scene receipt is malformed",
-            )
-        })?;
+        let mut receipt: GuestSceneWorkerReceiptV1 =
+            serde_json::from_slice(&bytes).map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "isolated guest scene receipt is malformed",
+                )
+            })?;
         validate_receipt(&receipt, session_id, &expected_sha256, expected_byte_len)?;
+        if let Some(manifest) = receipt.preview_sidecar.as_ref() {
+            if receipt.scene.is_none() {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_preview_sidecar_invalid",
+                    "preview manifest cannot accompany a terminal guest receipt",
+                ));
+            }
+            receipt.preview_samples = read_preview_sidecar_parts(manifest, &output_dir)
+                .await
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_preview_sidecar_invalid",
+                        "host rejected isolated preview sidecar",
+                    )
+                })?;
+        }
+        if let Some(scene) = receipt.scene.as_mut() {
+            // Strip worker-controlled image URLs and font containers first.
+            // Reconstruct only host-pinned fonts and fresh encoded previews.
+            let requested_font_ids = scene
+                .get("fonts")
+                .and_then(Value::as_array)
+                .map(|fonts| {
+                    fonts
+                        .iter()
+                        .filter_map(|font| font.get("resource_id").and_then(Value::as_str))
+                        .map(str::to_owned)
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            sanitize_reader_scene_browser_decoders(scene).map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_browser_decoder_invalid",
+                    "host could not strip unsafe worker resource URLs",
+                )
+            })?;
+            restore_host_authorized_guest_fonts(
+                scene,
+                &requested_font_ids,
+                &self.configured_fonts,
+            )?;
+            admit_host_reencoded_previews(scene, &receipt.preview_samples).map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_safe_preview_invalid",
+                    "host rejected untrusted preview pixel receipt",
+                )
+            })?;
+            if serde_json::to_vec(scene)
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_browser_decoder_invalid",
+                        "sanitized guest scene could not be serialized",
+                    )
+                })?
+                .len()
+                > MAX_SCENE_BYTES
+            {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_browser_decoder_invalid",
+                    "sanitized guest scene exceeds Reader byte cap",
+                ));
+            }
+            if scene["fidelity"]["state"] == "partial" {
+                receipt.classification = "partial".to_owned();
+            }
+        }
+        receipt.preview_samples.clear();
         Ok(receipt)
     }
 }
@@ -437,6 +530,24 @@ pub fn run_guest_scene_worker(
             )
         })?;
 
+    // File descriptors preopened before post-read seccomp. Worker never
+    // selects host paths for derivative resources.
+    let mut preview_outputs = Vec::with_capacity(PREVIEW_PART_COUNT);
+    for index in 0..PREVIEW_PART_COUNT {
+        preview_outputs.push(
+            OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(output_root.join(preview_part_name(index)))
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_preview_sidecar_invalid",
+                        "private preview sidecar could not be preopened",
+                    )
+                })?,
+        );
+    }
+
     let metadata = stdfs::metadata(&input_path).map_err(|_| {
         GuestSceneWorkerError::new(
             "guest_scene_worker_input_failed",
@@ -473,6 +584,8 @@ pub fn run_guest_scene_worker(
 
     let structural_scan_started = Instant::now();
     let normal_open = open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1());
+    let mut preview_samples = Vec::new();
+    let mut preview_audit = WorkerSafePreviewAuditV1::default();
 
     let (
         classification,
@@ -483,6 +596,27 @@ pub fn run_guest_scene_worker(
         scene_duration_us,
     ) = match normal_open {
         Ok(bundle) => {
+            // Decoding happens exclusively in the confined worker.
+            let images = bundle.geometry.images.iter().filter_map(|image| {
+                let id = serde_json::to_value(image.resource_id)
+                    .ok()?
+                    .as_str()?
+                    .to_owned();
+                Some((id, image.mime.as_str(), image.bytes.as_slice()))
+            });
+            let decorative = bundle
+                .geometry
+                .decorative_border_resources
+                .iter()
+                .filter_map(|image| {
+                    let id = serde_json::to_value(image.resource_id)
+                        .ok()?
+                        .as_str()?
+                        .to_owned();
+                    Some((id, image.mime.as_str(), image.bytes.as_slice()))
+                });
+            (preview_samples, preview_audit) =
+                collect_worker_preview_samples_with_audit(images.chain(decorative));
             let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
             let scene_started = Instant::now();
             match from_viewer_geometry_with_fonts(
@@ -560,6 +694,17 @@ pub fn run_guest_scene_worker(
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
             .map(|evidence| evidence.classification);
 
+    let preview_sidecar = if scene.is_some() {
+        write_isolated_preview_sidecar(&mut preview_outputs, &preview_samples).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_preview_sidecar_invalid",
+                "isolated preview sample sidecar could not be written",
+            )
+        })?
+    } else {
+        None
+    };
+    let preview_audit = scene.as_ref().map(|_| preview_audit);
     let receipt = GuestSceneWorkerReceiptV1 {
         protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
         session_id: session_id.to_owned(),
@@ -573,8 +718,54 @@ pub fn run_guest_scene_worker(
         filesystem_confinement: true,
         structural_scan_duration_us,
         scene_duration_us,
+        preview_sidecar,
+        preview_samples: Vec::new(),
+        preview_audit,
     };
     write_receipt(output, &receipt)
+}
+
+/// Restore configured physical font bytes from host-side verification,
+/// never from arbitrary worker JSON.
+fn restore_host_authorized_guest_fonts(
+    scene: &mut Value,
+    requested: &HashSet<String>,
+    configured: &[ReaderConfiguredFontResourceV1],
+) -> Result<(), GuestSceneWorkerError> {
+    if requested.is_empty() {
+        return Ok(());
+    }
+    let fonts = scene
+        .get_mut("fonts")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            GuestSceneWorkerError::new(
+                "guest_scene_browser_decoder_invalid",
+                "sanitized guest scene has no font registry",
+            )
+        })?;
+    for font in configured {
+        if !requested.contains(&font.resource_id) {
+            continue;
+        }
+        if format!("{:x}", Sha256::digest(&font.bytes)) != font.expected_sha256
+            || font.mime != "font/ttf"
+        {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_browser_decoder_invalid",
+                "configured guest font no longer matches its verified bytes",
+            ));
+        }
+        fonts.push(json!({
+            "resource_id": font.resource_id,
+            "family_name": font.source_family,
+            "mime": font.mime,
+            "expected_sha256": font.expected_sha256,
+            "availability": "inline_data_url",
+            "inline_data_url": format!("data:font/ttf;base64,{}", BASE64.encode(&font.bytes)),
+        }));
+    }
+    Ok(())
 }
 
 fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
@@ -781,6 +972,12 @@ fn validate_receipt(
             })?;
             if scene.get("protocol_version").and_then(Value::as_str)
                 != Some("chaptera.reader-scene.v1")
+                || scene.get("scene_authority").and_then(Value::as_str)
+                    != Some("server_viewer_projection")
+                || scene.get("document_id").and_then(Value::as_str) != Some(session_id)
+                || scene.get("source_hash").and_then(Value::as_str) != Some(expected_sha256)
+                || scene.get("revision_id").and_then(Value::as_str) != Some("guest:source")
+                || !approved_reader_scene_shape(scene)
             {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
@@ -798,7 +995,7 @@ fn validate_receipt(
             }
         }
         "salvage" => {
-            if receipt.scene.is_some() {
+            if receipt.preview_sidecar.is_some() || receipt.scene.is_some() {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
                     "salvage receipt cannot masquerade as Reader scene",
@@ -829,7 +1026,8 @@ fn validate_receipt(
             }
         }
         "unsupported" => {
-            if receipt.scene.is_some()
+            if receipt.preview_sidecar.is_some()
+                || receipt.scene.is_some()
                 || receipt.salvage.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
@@ -1012,6 +1210,139 @@ mod tests {
         ))
     }
 
+    fn safe_preview_guest_receipt() -> GuestSceneWorkerReceiptV1 {
+        GuestSceneWorkerReceiptV1 {
+            protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
+            session_id: "guest:0123456789abcdef".to_owned(),
+            source_sha256: "a".repeat(64),
+            source_byte_len: 123,
+            classification: "supported".to_owned(),
+            terminal_code: None,
+            scene: Some(json!({
+                "protocol_version": "chaptera.reader-scene.v1",
+                "document_id": "guest:0123456789abcdef",
+                "source_hash": "a".repeat(64),
+                "revision_id": "guest:source",
+                "scene_authority": "server_viewer_projection",
+                "stacking_fidelity": "source_back_to_front",
+                "fidelity": {"state": "supported", "reasons": []},
+                "pages": [{"page_id": "page-1", "order": 0, "width_emu": 952500, "height_emu": 952500}],
+                "nodes": [{
+                    "node_id": "image-node",
+                    "page_id": "page-1",
+                    "kind": "picture_frame",
+                    "bounds": {},
+                    "transform": {},
+                    "resource_id": "image-a"
+                }],
+                "stories": [],
+                "resources": [{
+                    "resource_id": "image-a",
+                    "mime": "image/png",
+                    "availability": "inline_data_url",
+                    "inline_data_url": "data:image/png;base64,UNTRUSTED_SOURCE_CONTAINER"
+                }],
+                "fonts": [{
+                    "resource_id": "configured-face",
+                    "family_name": "Untrusted worker name",
+                    "mime": "font/ttf",
+                    "expected_sha256": "f".repeat(64),
+                    "availability": "inline_data_url",
+                    "inline_data_url": "data:font/ttf;base64,UNTRUSTED_WORKER_FONT"
+                }]
+            })),
+            salvage: None,
+            failure_classification: None,
+            filesystem_confinement: true,
+            structural_scan_duration_us: 10,
+            scene_duration_us: Some(100),
+            preview_sidecar: None,
+            preview_samples: Vec::new(),
+            preview_audit: None,
+        }
+    }
+
+    #[test]
+    fn guest_safe_preview_rebuilds_only_host_owned_images_and_pinned_fonts() {
+        let mut receipt = safe_preview_guest_receipt();
+        validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 123).unwrap();
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[
+                    255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 255, 255,
+                ])
+                .unwrap();
+        }
+        let previews = collect_worker_preview_samples(std::iter::once((
+            "image-a".to_owned(),
+            "image/png",
+            png_bytes.as_slice(),
+        )));
+        assert_eq!(previews.len(), 1);
+        let configured = ReaderConfiguredFontResourceV1 {
+            source_family: "Host Pinned Family".to_owned(),
+            resource_id: "configured-face".to_owned(),
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
+            face_index: 0,
+            mime: "font/ttf".to_owned(),
+            bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
+        };
+        let scene = receipt.scene.as_mut().unwrap();
+        let requested = scene["fonts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|font| font["resource_id"].as_str())
+            .map(str::to_owned)
+            .collect();
+        sanitize_reader_scene_browser_decoders(scene).unwrap();
+        restore_host_authorized_guest_fonts(scene, &requested, &[configured]).unwrap();
+        admit_host_reencoded_previews(scene, &previews).unwrap();
+        let encoded = serde_json::to_string(&scene).unwrap();
+        assert!(!encoded.contains("UNTRUSTED_SOURCE_CONTAINER"));
+        assert!(!encoded.contains("UNTRUSTED_WORKER_FONT"));
+        assert!(
+            scene["resources"][0]["inline_data_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert!(scene["fonts"].as_array().unwrap().iter().any(|font| {
+            font["family_name"] == "Host Pinned Family"
+                && font["inline_data_url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("data:font/ttf;base64,")
+        }));
+        assert_eq!(scene["fidelity"]["state"], "partial");
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "safe_preview_color_untransformed")
+        );
+    }
+
+    #[test]
+    fn guest_worker_receipt_rejects_foreign_scene_identity_or_hidden_raw_fields() {
+        let mut receipt = safe_preview_guest_receipt();
+        receipt.scene.as_mut().unwrap()["document_id"] = json!("guest:foreign");
+        assert!(
+            validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 123).is_err()
+        );
+        receipt.scene.as_mut().unwrap()["document_id"] = json!("guest:0123456789abcdef");
+        receipt.scene.as_mut().unwrap()["resources"][0]["host_path"] = json!("/private/source.pub");
+        assert!(
+            validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 123).is_err()
+        );
+    }
+
     #[test]
     fn configured_font_loader_admits_exact_bytes_and_rejects_hash_drift() {
         let path = configured_font_test_path();
@@ -1084,6 +1415,9 @@ mod tests {
             filesystem_confinement: true,
             structural_scan_duration_us: 1,
             scene_duration_us: None,
+            preview_sidecar: None,
+            preview_samples: Vec::new(),
+            preview_audit: None,
         };
         validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
             .expect("source-neutral salvage observation should cross worker boundary");
@@ -1104,6 +1438,9 @@ mod tests {
             filesystem_confinement: true,
             structural_scan_duration_us: 1,
             scene_duration_us: None,
+            preview_sidecar: None,
+            preview_samples: Vec::new(),
+            preview_audit: None,
         };
         assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
     }

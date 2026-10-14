@@ -2,10 +2,11 @@ name: Reader PR selective CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, closed]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "apps/chaptera-pub-cli/**"
       - "apps/chaptera-desktop/**"
       - "apps/chaptera-mobile-android/**"
       - "apps/chaptera-rescue/**"
@@ -35,6 +36,11 @@ on:
       - "vendor/producer-a/crates/pub-layout/**"
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - "packages/product/reader-portable/**"
       - "packages/product/editor-live-trial/**"
       - "packages/product/desktop-suite/**"
@@ -49,6 +55,7 @@ on:
       - "tools/ci/test_reader_consumer_preflight.py"
       - "tools/ci/reader_pr_fanout.py"
       - "tools/ci/test_reader_pr_fanout.py"
+      - "tools/ci/test_local_portable_web_asset_package.py"
       - "tools/reader_active_content_guard.py"
       - "tools/reader_page_role_observation.py"
       - "tools/package_reader_portable.py"
@@ -85,10 +92,15 @@ on:
       - "tools/package_local_portable.py"
       - "tools/scene_v1.py"
       - "tools/validate_export_preview.py"
+      - ".github/workflows/free-pub-asset-cli-v1.yml"
       - ".github/workflows/reader-pr-ci.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
       - ".github/workflows/chaptera-reader-windows.yml"
       - ".github/workflows/chaptera-reader-windows-smoke.yml"
+      - ".github/workflows/chaptera-reader-windows-binary.yml"
+      - "tools/ci/validate_reader_binary_artifact.py"
+      - "tools/ci/test_validate_reader_binary_artifact.py"
+      - "tools/ci/test_reader_build_once_wiring.py"
       - ".github/workflows/chaptera-desktop-windows.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/carlton-reader-visual-oracle.yml"
@@ -117,9 +129,12 @@ permissions:
 jobs:
   classify:
     name: Classify PR CI scope
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     runs-on: ubuntu-latest
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
+      free_pub_asset_cli: ${{ steps.scope.outputs.free_pub_asset_cli }}
+      desktop_rustfmt: ${{ steps.scope.outputs.desktop_rustfmt }}
       reader_windows_smoke: ${{ steps.scope.outputs.reader_windows_smoke }}
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
@@ -131,6 +146,7 @@ jobs:
       android_core: ${{ steps.scope.outputs.android_core }}
       android: ${{ steps.scope.outputs.android }}
       web: ${{ steps.scope.outputs.web }}
+      local_portable_assets: ${{ steps.scope.outputs.local_portable_assets }}
       local_portable: ${{ steps.scope.outputs.local_portable }}
       installer: ${{ steps.scope.outputs.installer }}
       path_identity: ${{ steps.scope.outputs.path_identity }}
@@ -179,6 +195,18 @@ jobs:
           import sys
 
           workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+          required_lifecycle_markers = [
+              "types: [opened, synchronize, reopened, closed]",
+              "if: $" + "{{ github.event_name != 'pull_request' || github.event.action != 'closed' }}",
+          ]
+          missing_lifecycle = [
+              marker for marker in required_lifecycle_markers if marker not in workflow
+          ]
+          if missing_lifecycle:
+              raise SystemExit(
+                  "reader-pr-ci cancellation guard: close lifecycle wiring missing: "
+                  + ", ".join(missing_lifecycle)
+              )
           fanout_conditions = [
               line.strip()
               for line in workflow.splitlines()
@@ -193,6 +221,22 @@ jobs:
               raise SystemExit(
                   "reader-pr-ci cancellation guard: always() fanout must be cancellation-responsive:\n"
                   + "\n".join(unsafe)
+              )
+
+          required_composition_markers = [
+              "needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true'",
+              "run_windows_shared_core_smoke: $" + "{{ needs.classify.outputs.reader_windows_smoke == 'true' }}",
+              "reader-windows-binary:",
+              "artifact_name: chaptera-reader-windows-binary-$" + "{{ github.sha }}",
+              "reader_binary_artifact_name: chaptera-reader-windows-binary-$" + "{{ github.sha }}",
+          ]
+          missing_composition = [
+              marker for marker in required_composition_markers if marker not in workflow
+          ]
+          if missing_composition:
+              raise SystemExit(
+                  "reader-pr-ci composition guard: visual/shared-core smoke composition missing: "
+                  + ", ".join(missing_composition)
               )
           print(
               "reader-pr-ci cancellation guard: "
@@ -219,6 +263,25 @@ jobs:
           git show "$HEAD_SHA:tools/ci/reader_pr_fanout.py" > "$tmp/reader_pr_fanout.py"
           git show "$HEAD_SHA:tools/ci/test_reader_pr_fanout.py" > "$tmp/test_reader_pr_fanout.py"
           python "$tmp/test_reader_pr_fanout.py"
+
+      - name: Prove PR-head local portable web asset contract in isolation
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          if ! grep -Eq '^(tools/ci/reader_pr_fanout.py|tools/ci/test_reader_pr_fanout.py|tools/ci/test_local_portable_web_asset_package.py|[.]github/workflows/reader-pr-ci.yml)$' <<<"$changed"; then
+            echo "::notice::PR does not change the local portable web-asset fast path."
+            exit 0
+          fi
+          # Scope authority still comes from the trusted base classifier. This
+          # proves only the PR-head package contract and cannot suppress CI.
+          git show "$HEAD_SHA:tools/ci/test_local_portable_web_asset_package.py" \
+            > tools/ci/test_local_portable_web_asset_package.py
+          python tools/ci/test_local_portable_web_asset_package.py
 
       - id: scope
         name: Classify changed paths once
@@ -250,17 +313,51 @@ jobs:
     if: needs.classify.outputs.tier_a == 'true'
     uses: ./.github/workflows/reader-consumer-preflight.yml
 
+  free-pub-asset-cli:
+    name: Free PUB exact asset CLI
+    needs: classify
+    if: ${{ !cancelled() && always() && needs.classify.outputs.free_pub_asset_cli == 'true' }}
+    uses: ./.github/workflows/free-pub-asset-cli-v1.yml
+
+  desktop-rustfmt:
+    name: Desktop rustfmt
+    needs: classify
+    if: ${{ !cancelled() && always() && needs.classify.outputs.desktop_rustfmt == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check Chaptera Desktop formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+  reader-windows-binary:
+    name: Reader Windows exact-candidate binary
+    needs: [classify, tier-a]
+    if: ${{ !cancelled() && always() && (needs.classify.outputs.reader_windows == 'true' || needs.classify.outputs.reader_windows_smoke == 'true') && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows-binary.yml
+    with:
+      artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
+
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && needs.reader-windows-binary.result == 'success' }}
     uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
+    with:
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   reader-windows:
     name: Reader Windows product
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && needs.reader-windows-binary.result == 'success' }}
     uses: ./.github/workflows/chaptera-reader-windows.yml
+    with:
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   editor-windows:
     name: Editor Windows product
@@ -270,15 +367,19 @@ jobs:
 
   visual-oracle:
     name: Reader visual oracle
-    needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    needs: [classify, tier-a, reader-windows-binary]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') && (needs.classify.outputs.reader_windows_smoke != 'true' || needs.reader-windows-binary.result == 'success') }}
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
       run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
+      reader_binary_artifact_name: chaptera-reader-windows-binary-${{ github.sha }}
 
   cloud-reference:
     name: Cloud exact PUB-PDF reference
+    # PRs restore trusted main caches, but never write a PR-local Cargo/browser copy.
+    # Called workflow inherits this permission cap; main push seeds its own cache.
+    cache-mode: read
     needs: [classify, tier-a]
     if: ${{ !cancelled() && always() && needs.classify.outputs.cloud_reference == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/cloud-reader-reference-pairs.yml
@@ -324,6 +425,19 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ !cancelled() && always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/web-acceptance-real-chromium.yml
+
+  local-portable-assets:
+    name: Local portable web asset package contract
+    needs: [classify]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.local_portable_assets == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Prove deterministic real ZIP embeds exact web asset bytes
+        run: python tools/ci/test_local_portable_web_asset_package.py
 
   local-portable:
     name: Local portable Windows

@@ -1,9 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use chaptera_scene_instance::SceneProjectionKindV1;
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolvers_v1,
-    effective_source_font_family_v1, uniform_text_color_rgb_v1,
+    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderDecorativeBorderSlotV1,
+    RenderTableV1, RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+    build_page_render_plan_with_text_layout_resolvers_v1, effective_source_font_family_v1,
+    layout_decorative_border_v1, uniform_text_color_rgb_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -12,6 +14,9 @@ use serde_json::Value;
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
+// A source-backed JPEG can be larger than 4 MiB while still fitting inside
+// the unchanged 16 MiB serialized Reader Scene envelope. Keep PNG/GIF at 4 MiB.
+const MAX_INLINE_JPEG_RESOURCE_BYTES: usize = 5 * 1024 * 1024;
 #[cfg(test)]
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
@@ -33,6 +38,8 @@ pub struct ReaderSceneV1 {
     pub resources: Vec<ReaderImageResourceV1>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fonts: Vec<ReaderFontResourceV1>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_layout_fallback_counts: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<ReaderDiagnosticV1>,
 }
@@ -67,6 +74,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paint: Option<ReaderPaintV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub decorative_border: Option<ReaderDecorativeBorderV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_source_window: Option<ReaderImageSourceWindowV1>,
@@ -80,6 +89,16 @@ pub struct ReaderNodeV1 {
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_layout: Option<ReaderTextLayoutV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_text_style: Option<ReaderPreviewTextStyleV1>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReaderPreviewTextStyleV1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size_emu: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +133,75 @@ pub struct ReaderPaintV1 {
 pub struct ReaderLineV1 {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderDecorativeBorderV1 {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<ReaderDecorativeBorderPlacementV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderDecorativeBorderPlacementV1 {
+    pub slot: &'static str,
+    pub resource_id: String,
+    pub bounds: ReaderRectV1,
+}
+
+fn decorative_border_slot_name_v1(slot: RenderDecorativeBorderSlotV1) -> &'static str {
+    match slot {
+        RenderDecorativeBorderSlotV1::TopLeft => "top_left",
+        RenderDecorativeBorderSlotV1::Top => "top",
+        RenderDecorativeBorderSlotV1::TopRight => "top_right",
+        RenderDecorativeBorderSlotV1::Right => "right",
+        RenderDecorativeBorderSlotV1::BottomRight => "bottom_right",
+        RenderDecorativeBorderSlotV1::Bottom => "bottom",
+        RenderDecorativeBorderSlotV1::BottomLeft => "bottom_left",
+        RenderDecorativeBorderSlotV1::Left => "left",
+    }
+}
+
+fn reader_decorative_border_from_render(
+    node: &NodeRenderPlanV1,
+    resource_ids: &HashSet<String>,
+) -> Result<Option<ReaderDecorativeBorderV1>, String> {
+    let Some(border) = node.decorative_border.as_ref() else {
+        return Ok(None);
+    };
+    let Some(line) = node.solid_line.as_ref() else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+
+    let mut mapped = Vec::with_capacity(placements.len());
+    for placement in placements {
+        let resource_id =
+            serialized_string(&placement.resource_id, "decorative-border resource id")?;
+        if !resource_ids.contains(&resource_id) {
+            return Err(format!(
+                "decorative-border placement references unknown image resource {resource_id}"
+            ));
+        }
+        mapped.push(ReaderDecorativeBorderPlacementV1 {
+            slot: decorative_border_slot_name_v1(placement.slot),
+            resource_id,
+            bounds: rect_from_serialized(&placement.bounds)?,
+        });
+    }
+    Ok(Some(ReaderDecorativeBorderV1 { placements: mapped }))
 }
 
 #[derive(Debug, Serialize)]
@@ -308,11 +396,64 @@ fn is_zero_i64(value: &i64) -> bool {
     *value == 0
 }
 
+fn preview_text_style_from_render_text(
+    text: &RenderTextFragmentV1,
+) -> Option<ReaderPreviewTextStyleV1> {
+    let scalar_len = u32::try_from(text.text.chars().count()).ok()?;
+    let expected_len = text.scalar_end.checked_sub(text.scalar_start)?;
+    let paint_end = if scalar_len == expected_len && text.text.ends_with('\r') {
+        text.scalar_end.checked_sub(1)?
+    } else {
+        text.scalar_end
+    };
+    if paint_end <= text.scalar_start {
+        return None;
+    }
+
+    let mut cursor = text.scalar_start;
+    let mut first_font_size_emu = None;
+    let mut mixed_font_size = false;
+    for run in &text.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > text.scalar_end
+        {
+            return None;
+        }
+        if run.scalar_start < paint_end {
+            if run.text_size_emu == 0 {
+                return None;
+            }
+            let size = i64::from(run.text_size_emu);
+            match first_font_size_emu {
+                None => first_font_size_emu = Some(size),
+                Some(existing) if existing == size => {}
+                Some(_) => mixed_font_size = true,
+            }
+        }
+        cursor = run.scalar_end;
+    }
+    if cursor != text.scalar_end {
+        return None;
+    }
+
+    let font_size_emu = (!mixed_font_size).then_some(first_font_size_emu).flatten();
+    let color_rgb = uniform_text_color_rgb_v1(text);
+    if font_size_emu.is_none() && color_rgb.is_none() {
+        None
+    } else {
+        Some(ReaderPreviewTextStyleV1 {
+            font_size_emu,
+            color_rgb,
+        })
+    }
+}
+
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
-) -> (Option<ReaderTextLayoutV1>, bool) {
+) -> (Option<ReaderTextLayoutV1>, bool, Option<&'static str>) {
     let Some(layout) = text.layout.as_ref() else {
-        return (None, true);
+        return (None, true, Some("layout_missing"));
     };
     let RenderTextLayoutDispositionV1::SharedResolved {
         font_resource_id,
@@ -321,7 +462,10 @@ fn reader_text_layout_from_render_text(
         line_height_emu,
     } = &layout.disposition
     else {
-        return (None, true);
+        let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition else {
+            unreachable!("render text layout disposition must stay exhaustive");
+        };
+        return (None, true, Some(reason.code()));
     };
 
     let partial = layout.lines.iter().any(|line| !line.spans.is_empty());
@@ -362,12 +506,24 @@ fn reader_text_layout_from_render_text(
             })
             .collect(),
     };
-    (Some(mapped), partial)
+    (Some(mapped), partial, None)
 }
 
-fn projected_node_kind(node: &NodeRenderPlanV1) -> Result<&'static str, String> {
+fn projected_node_kind(
+    node: &NodeRenderPlanV1,
+    projection_kind: SceneProjectionKindV1,
+) -> Result<&'static str, String> {
     if node.table.is_some() {
-        return Err("projected Scene tables are not admitted by the Cmo consumer".to_owned());
+        return match projection_kind {
+            SceneProjectionKindV1::InheritedMaster => Ok("table"),
+            SceneProjectionKindV1::CmoStorySlot => {
+                Err("projected Scene tables are not admitted by the Cmo consumer".to_owned())
+            }
+            SceneProjectionKindV1::DirectPageLocal => Err(
+                "direct-page-local Scene instances must not enter the projected consumer"
+                    .to_owned(),
+            ),
+        };
     }
     match (node.text.is_some(), node.image.is_some()) {
         (true, false) => Ok("text_frame"),
@@ -378,6 +534,40 @@ fn projected_node_kind(node: &NodeRenderPlanV1) -> Result<&'static str, String> 
             node.node_id
         )),
     }
+}
+
+fn reader_table_from_render(table: &RenderTableV1) -> Result<ReaderTableV1, String> {
+    let cells = table
+        .cells
+        .iter()
+        .map(|cell| {
+            let bounds = cell.bounds.as_ref().map(rect_from_serialized).transpose()?;
+            if bounds
+                .as_ref()
+                .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
+            {
+                return Err("projected table cell has non-positive resolved bounds".to_owned());
+            }
+            Ok(ReaderTableCellV1 {
+                cell_id: serialized_string(&cell.id, "projected table cell id")?,
+                row: cell.row,
+                column: cell.column,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
+                text: cell.text.clone(),
+                bounds,
+                fill_rgb: cell.fill_rgb,
+                fill_visible: cell.fill_visible,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ReaderTableV1 {
+        story_id: serialized_string(&table.story_id, "projected table story id")?,
+        rows: table.rows,
+        columns: table.columns,
+        cells,
+        borders: Vec::new(),
+    })
 }
 
 fn insert_projected_nodes_after_targets(
@@ -400,6 +590,47 @@ fn insert_projected_nodes_after_targets(
             "projected Scene instances reference missing target frame(s): {}",
             dangling.join(",")
         ));
+    }
+    Ok(ordered)
+}
+
+fn insert_inherited_master_nodes_before_page_locals(
+    nodes: Vec<ReaderNodeV1>,
+    pages: &[ReaderPageV1],
+    mut inherited_by_page: HashMap<String, Vec<ReaderNodeV1>>,
+) -> Result<Vec<ReaderNodeV1>, String> {
+    let page_ids = pages
+        .iter()
+        .map(|page| page.page_id.clone())
+        .collect::<HashSet<_>>();
+    let inherited_count = inherited_by_page.values().map(Vec::len).sum::<usize>();
+    let mut direct_by_page = HashMap::<String, Vec<ReaderNodeV1>>::new();
+    for node in nodes {
+        if !page_ids.contains(&node.page_id) {
+            return Err(format!(
+                "render node {} targets unknown page {}",
+                node.node_id, node.page_id
+            ));
+        }
+        direct_by_page
+            .entry(node.page_id.clone())
+            .or_default()
+            .push(node);
+    }
+
+    let direct_count = direct_by_page.values().map(Vec::len).sum::<usize>();
+    let mut ordered = Vec::with_capacity(direct_count + inherited_count);
+    for page in pages {
+        if let Some(mut inherited) = inherited_by_page.remove(&page.page_id) {
+            ordered.append(&mut inherited);
+        }
+        if let Some(mut direct) = direct_by_page.remove(&page.page_id) {
+            ordered.append(&mut direct);
+        }
+    }
+
+    if !inherited_by_page.is_empty() || !direct_by_page.is_empty() {
+        return Err("page-local/master lane composition left unresolved page bindings".to_owned());
     }
     Ok(ordered)
 }
@@ -483,6 +714,11 @@ pub fn from_viewer_geometry_with_fonts(
     }
 
     let node_ids = parent_by_node.keys().cloned().collect::<HashSet<_>>();
+    let projected_origin_ids = geometry
+        .projected_instances
+        .iter()
+        .map(|projected| projected.scene_instance.origin_node_id.clone())
+        .collect::<HashSet<_>>();
     let mut page_cache = HashMap::new();
     for node_id in &node_ids {
         resolve_page(
@@ -500,17 +736,19 @@ pub fn from_viewer_geometry_with_fonts(
         .collect::<HashMap<_, _>>();
     for frame in &geometry.story_frames {
         let node_id = serialized_string(&frame.frame_id, "story frame node id")?;
-        if !node_ids.contains(&node_id) {
+        if node_ids.contains(&node_id) {
+            bind_kind(&mut kind_by_node, &node_id, "text_frame")?;
+        } else if !projected_origin_ids.contains(&node_id) {
             return Err(format!("story frame references unknown node {node_id}"));
         }
-        bind_kind(&mut kind_by_node, &node_id, "text_frame")?;
     }
 
     let mut resource_by_node = HashMap::new();
     let mut source_window_by_node = HashMap::new();
     let mut image_content_rotation_by_node = HashMap::new();
     let mut recolor_by_node = HashMap::new();
-    let mut resources = Vec::with_capacity(geometry.images.len());
+    let mut resources =
+        Vec::with_capacity(geometry.images.len() + geometry.decorative_border_resources.len());
     let mut resource_ids = HashSet::new();
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
@@ -527,6 +765,9 @@ pub fn from_viewer_geometry_with_fonts(
         for placement in &image.placements {
             let node_id = serialized_string(&placement.node_id, "image placement node id")?;
             if !node_ids.contains(&node_id) {
+                if projected_origin_ids.contains(&node_id) {
+                    continue;
+                }
                 return Err(format!("image placement references unknown node {node_id}"));
             }
             if let Some(window) = placement.source_window.as_ref() {
@@ -571,23 +812,43 @@ pub fn from_viewer_geometry_with_fonts(
 
         for node_id in &image.node_ids {
             let node_id = serialized_string(node_id, "image node id")?;
-            if !node_ids.contains(&node_id) {
+            if node_ids.contains(&node_id) {
+                bind_kind(&mut kind_by_node, &node_id, "picture_frame")?;
+                match resource_by_node.insert(node_id.clone(), resource_id.clone()) {
+                    Some(existing) if existing != resource_id => {
+                        return Err(format!("node {node_id} has multiple image resources"));
+                    }
+                    _ => {}
+                }
+            } else if !projected_origin_ids.contains(&node_id) {
                 return Err(format!("image resource references unknown node {node_id}"));
             }
-            bind_kind(&mut kind_by_node, &node_id, "picture_frame")?;
-            match resource_by_node.insert(node_id.clone(), resource_id.clone()) {
-                Some(existing) if existing != resource_id => {
-                    return Err(format!("node {node_id} has multiple image resources"));
-                }
-                _ => {}
-            }
         }
+    }
+
+    for resource in &geometry.decorative_border_resources {
+        let resource_id =
+            serialized_string(&resource.resource_id, "decorative-border image resource id")?;
+        if !resource_ids.insert(resource_id.clone()) {
+            return Err(format!(
+                "duplicate Viewer image/decorative-border resource {resource_id}"
+            ));
+        }
+        resources.push(ReaderImageResourceV1 {
+            resource_id,
+            mime: resource.mime.clone(),
+            availability: "descriptor_only",
+            inline_data_url: None,
+        });
     }
 
     let mut table_by_node = HashMap::new();
     for table in &geometry.tables {
         let node_id = serialized_string(&table.node_id, "table node id")?;
         if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
             return Err(format!("table references unknown node {node_id}"));
         }
         bind_kind(&mut kind_by_node, &node_id, "table")?;
@@ -643,9 +904,19 @@ pub fn from_viewer_geometry_with_fonts(
     let mut paint_by_node = HashMap::new();
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
+        if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
+            return Err(format!("paint references unknown node {node_id}"));
+        }
         let mapped = ReaderPaintV1 {
             preset_shape: paint.preset_shape.map(|shape| match shape {
                 pub_viewer::ViewerPresetShape::RoundRect => "round_rect",
+                pub_viewer::ViewerPresetShape::Ellipse => "ellipse",
+                pub_viewer::ViewerPresetShape::Line => "line",
+                pub_viewer::ViewerPresetShape::LineDashGel => "line_dash_gel",
+                pub_viewer::ViewerPresetShape::HorizontalLine => "horizontal_line",
             }),
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
@@ -660,6 +931,9 @@ pub fn from_viewer_geometry_with_fonts(
     for fragment in &geometry.text_fragments {
         let node_id = serialized_string(&fragment.frame_id, "text fragment frame id")?;
         if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
             return Err(format!("text fragment references unknown node {node_id}"));
         }
         fragments_by_node.entry(node_id).or_default().push((
@@ -684,17 +958,25 @@ pub fn from_viewer_geometry_with_fonts(
         .iter()
         .map(|font| (font.normalized_source_family(), font))
         .collect::<HashMap<_, _>>();
+    let configured_font_ids = configured_fonts
+        .iter()
+        .map(|font| font.resource_id.as_str())
+        .collect::<HashSet<_>>();
     let mut used_configured_font_ids = HashSet::<String>::new();
     let mut missing_configured_font_families = HashSet::<String>::new();
     let mut source_font_family_unresolved = false;
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
+    let mut preview_text_style_by_node = HashMap::new();
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
+    let mut decorative_border_by_node = HashMap::<String, ReaderDecorativeBorderV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
+    let mut inherited_master_nodes_by_page = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
     let mut projected_text_layout_count = 0_usize;
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
+    let mut text_layout_fallback_counts = BTreeMap::<String, u64>::new();
     for page_index in 0..geometry.document.pages.len() {
         let plan = match build_page_render_plan_with_text_layout_resolvers_v1(
             geometry,
@@ -742,7 +1024,9 @@ pub fn from_viewer_geometry_with_fonts(
                     }
                 }
             }
-            if let Some(resource_id) = text.backend_font_resource_id.as_ref() {
+            if let Some(resource_id) = text.backend_font_resource_id.as_ref()
+                && configured_font_ids.contains(resource_id.as_str())
+            {
                 used_configured_font_ids.insert(resource_id.clone());
             }
             if let Some(layout) = text.layout.as_ref()
@@ -750,10 +1034,14 @@ pub fn from_viewer_geometry_with_fonts(
                     font_resource_id, ..
                 } = &layout.disposition
             {
-                used_configured_font_ids.insert(font_resource_id.clone());
+                if configured_font_ids.contains(font_resource_id.as_str()) {
+                    used_configured_font_ids.insert(font_resource_id.clone());
+                }
                 for line in &layout.lines {
                     for span in &line.spans {
-                        if let Some(resource_id) = span.font_resource_id.as_ref() {
+                        if let Some(resource_id) = span.font_resource_id.as_ref()
+                            && configured_font_ids.contains(resource_id.as_str())
+                        {
                             used_configured_font_ids.insert(resource_id.clone());
                         }
                     }
@@ -762,11 +1050,16 @@ pub fn from_viewer_geometry_with_fonts(
         }
 
         for node in plan.nodes {
-            let (mapped_layout, layout_partial) = match node.text.as_ref() {
+            let (mapped_layout, layout_partial, fallback_reason) = match node.text.as_ref() {
                 Some(text) => reader_text_layout_from_render_text(text),
-                None => (None, false),
+                None => (None, false, None),
             };
             text_layout_partial |= layout_partial;
+            if let Some(reason) = fallback_reason {
+                *text_layout_fallback_counts
+                    .entry(reason.to_owned())
+                    .or_insert(0) += 1;
+            }
 
             if let Some(instance) = node.projected_scene_instance.as_ref() {
                 if !projected_instance_ids.insert(instance.instance_id.clone()) {
@@ -819,16 +1112,41 @@ pub fn from_viewer_geometry_with_fonts(
                         instance.instance_id
                     ));
                 }
-                let target_frame_node_id =
-                    serialized_string(&projected.target_frame_node_id, "projected target frame")?;
-                if !node_ids.contains(&target_frame_node_id) {
-                    return Err(format!(
-                        "projected Scene instance {} targets unknown Viewer frame {}",
-                        instance.instance_id, target_frame_node_id
-                    ));
-                }
+                let target_frame_node_id = match instance.projection_kind {
+                    SceneProjectionKindV1::CmoStorySlot => {
+                        let target = projected.target_frame_node_id.as_ref().ok_or_else(|| {
+                            format!(
+                                "Cmo projected Scene instance {} is missing its target frame",
+                                instance.instance_id
+                            )
+                        })?;
+                        let target = serialized_string(target, "projected target frame")?;
+                        if !node_ids.contains(&target) {
+                            return Err(format!(
+                                "projected Scene instance {} targets unknown Viewer frame {}",
+                                instance.instance_id, target
+                            ));
+                        }
+                        Some(target)
+                    }
+                    SceneProjectionKindV1::InheritedMaster => {
+                        if projected.target_frame_node_id.is_some() {
+                            return Err(format!(
+                                "inherited-master Scene instance {} must not fabricate a target frame",
+                                instance.instance_id
+                            ));
+                        }
+                        None
+                    }
+                    SceneProjectionKindV1::DirectPageLocal => {
+                        return Err(format!(
+                            "direct-page-local Scene instance {} entered projected Reader lane",
+                            instance.instance_id
+                        ));
+                    }
+                };
 
-                let kind = projected_node_kind(&node)?;
+                let kind = projected_node_kind(&node, instance.projection_kind)?;
                 projected_kind_partial |= kind == "unknown";
                 let bounds = rect_from_serialized(&node.bounds)?;
                 let text_bounds = node
@@ -876,6 +1194,7 @@ pub fn from_viewer_geometry_with_fonts(
                     (None, None)
                 };
 
+                let decorative_border = reader_decorative_border_from_render(&node, &resource_ids)?;
                 let paint = if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                     Some(ReaderPaintV1 {
                         preset_shape: None,
@@ -891,31 +1210,64 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
-                projected_nodes_by_target
-                    .entry(target_frame_node_id)
-                    .or_default()
-                    .push(ReaderNodeV1 {
-                        node_id: instance.instance_id.clone(),
-                        origin_node_id: Some(instance.origin_node_id.clone()),
-                        page_id: instance.target_page_id.clone(),
-                        parent_node_id: None,
-                        kind,
-                        bounds,
-                        text_bounds,
-                        transform: transform_from_serialized(&node.transform)?,
-                        paint,
-                        resource_id,
-                        image_source_window,
-                        image_content_rotation_degrees: None,
-                        image_recolor: None,
-                        table: None,
-                        text: node.text.as_ref().map(|text| text.text.clone()),
-                        text_layout: mapped_layout,
-                    });
+                let projected_preview_text_style = node
+                    .text
+                    .as_ref()
+                    .and_then(preview_text_style_from_render_text);
+                let projected_node = ReaderNodeV1 {
+                    node_id: instance.instance_id.clone(),
+                    origin_node_id: Some(instance.origin_node_id.clone()),
+                    page_id: instance.target_page_id.clone(),
+                    parent_node_id: None,
+                    kind,
+                    bounds,
+                    text_bounds,
+                    transform: transform_from_serialized(&node.transform)?,
+                    paint,
+                    decorative_border,
+                    resource_id,
+                    image_source_window,
+                    image_content_rotation_degrees: None,
+                    image_recolor: None,
+                    table: node
+                        .table
+                        .as_ref()
+                        .map(reader_table_from_render)
+                        .transpose()?,
+                    text: node.text.as_ref().map(|text| text.text.clone()),
+                    text_layout: mapped_layout,
+                    preview_text_style: projected_preview_text_style,
+                };
+                match instance.projection_kind {
+                    SceneProjectionKindV1::CmoStorySlot => {
+                        projected_nodes_by_target
+                            .entry(target_frame_node_id.expect("validated Cmo target frame"))
+                            .or_default()
+                            .push(projected_node);
+                    }
+                    SceneProjectionKindV1::InheritedMaster => {
+                        inherited_master_nodes_by_page
+                            .entry(instance.target_page_id.clone())
+                            .or_default()
+                            .push(projected_node);
+                    }
+                    SceneProjectionKindV1::DirectPageLocal => unreachable!(
+                        "direct-page-local projection was rejected before Reader node construction"
+                    ),
+                }
                 continue;
             }
 
             let node_id = serialized_string(&node.node_id, "direct render-plan node id")?;
+            if let Some(mapped_border) = reader_decorative_border_from_render(&node, &resource_ids)?
+                && decorative_border_by_node
+                    .insert(node_id.clone(), mapped_border)
+                    .is_some()
+            {
+                return Err(format!(
+                    "duplicate decorative-border binding for node {node_id}"
+                ));
+            }
             if !node_ids.contains(&node_id) {
                 return Err(format!(
                     "direct render-plan node references unknown Viewer node {node_id}"
@@ -929,6 +1281,13 @@ pub fn from_viewer_geometry_with_fonts(
                 return Err(format!(
                     "duplicate direct render-plan text binding for node {node_id}"
                 ));
+            }
+            if let Some(style) = node
+                .text
+                .as_ref()
+                .and_then(preview_text_style_from_render_text)
+            {
+                preview_text_style_by_node.insert(node_id.clone(), style);
             }
             if let Some(text_bounds) = node.text_bounds.as_ref() {
                 let mapped_bounds = rect_from_serialized(text_bounds)?;
@@ -973,6 +1332,7 @@ pub fn from_viewer_geometry_with_fonts(
                 .copied()
                 .ok_or_else(|| format!("node kind missing for {node_id}"))?,
             paint: paint_by_node.remove(&node_id),
+            decorative_border: decorative_border_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
             image_content_rotation_degrees: image_content_rotation_by_node.remove(&node_id),
@@ -980,6 +1340,7 @@ pub fn from_viewer_geometry_with_fonts(
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
+            preview_text_style: preview_text_style_by_node.remove(&node_id),
             node_id: node_id.clone(),
             page_id,
             parent_node_id,
@@ -996,6 +1357,17 @@ pub fn from_viewer_geometry_with_fonts(
         // Persisted source page-paint receipts do not claim a total order across
         // projected Cmo visuals. Preserve direct-node source order and the
         // render-plan target-frame anchor while keeping the overall claim partial.
+        stacking_known = false;
+    }
+    if !inherited_master_nodes_by_page.is_empty() {
+        nodes = insert_inherited_master_nodes_before_page_locals(
+            nodes,
+            &pages,
+            inherited_master_nodes_by_page,
+        )?;
+        // The bounded ordinary master law is master below page-local. Keep the
+        // global fidelity claim conservative because other projected lanes may
+        // still have only partial total-order authority.
         stacking_known = false;
     }
 
@@ -1107,6 +1479,13 @@ pub fn from_viewer_geometry_with_fonts(
     {
         reasons.push("image_resource_not_inline");
     }
+    if nodes.iter().any(|node| {
+        node.decorative_border
+            .as_ref()
+            .is_some_and(|border| border.placements.is_empty())
+    }) {
+        reasons.push("decorative_border_unresolved");
+    }
     if text_layout_partial {
         reasons.push("text_layout_partial");
     }
@@ -1147,6 +1526,7 @@ pub fn from_viewer_geometry_with_fonts(
         stories,
         resources,
         fonts,
+        text_layout_fallback_counts,
         diagnostics,
     };
 
@@ -1362,17 +1742,40 @@ fn promote_inline_images_within_scene_cap(
     scene: &mut ReaderSceneV1,
     geometry: &ViewerGeometryDocument,
 ) -> Result<(), String> {
-    let mut image_by_resource = HashMap::<String, (&str, &[u8])>::new();
+    let mut image_by_resource = HashMap::<String, (&str, &[u8], bool)>::new();
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
+        // Exact source bytes are not browser-delivery authority. Until an
+        // independently bounded decoder/re-encode path exists, keep them
+        // descriptor-only and let fidelity report the missing preview.
+        let browser_inline_safe = !image.source_exact;
         if image_by_resource
             .insert(
                 resource_id.clone(),
-                (image.mime.as_str(), image.bytes.as_slice()),
+                (
+                    image.mime.as_str(),
+                    image.bytes.as_slice(),
+                    browser_inline_safe,
+                ),
             )
             .is_some()
         {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
+        }
+    }
+    for resource in &geometry.decorative_border_resources {
+        let resource_id =
+            serialized_string(&resource.resource_id, "decorative-border image resource id")?;
+        if image_by_resource
+            .insert(
+                resource_id.clone(),
+                (resource.mime.as_str(), resource.bytes.as_slice(), true),
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate Viewer image/decorative-border resource {resource_id}"
+            ));
         }
     }
 
@@ -1386,7 +1789,9 @@ fn promote_inline_images_within_scene_cap(
     }
 
     for resource in &mut scene.resources {
-        let Some(&(mime, bytes)) = image_by_resource.get(resource.resource_id.as_str()) else {
+        let Some(&(mime, bytes, browser_inline_safe)) =
+            image_by_resource.get(resource.resource_id.as_str())
+        else {
             return Err(format!(
                 "Reader Scene image resource {} has no Viewer payload",
                 resource.resource_id
@@ -1404,6 +1809,7 @@ fn promote_inline_images_within_scene_cap(
             resource.resource_id.clone(),
             resource.mime.clone(),
             bytes,
+            browser_inline_safe,
             &mut unbounded_aggregate,
         );
         if candidate.inline_data_url.is_none() {
@@ -1436,9 +1842,14 @@ fn reader_image_resource(
     resource_id: String,
     mime: String,
     bytes: &[u8],
+    browser_inline_safe: bool,
     remaining_budget: &mut usize,
 ) -> ReaderImageResourceV1 {
-    let inline_data_url = inline_image_data_url(&mime, bytes, remaining_budget);
+    let inline_data_url = if browser_inline_safe {
+        inline_image_data_url(&mime, bytes, remaining_budget)
+    } else {
+        None
+    };
     let availability = if inline_data_url.is_some() {
         "inline_data_url"
     } else {
@@ -1452,12 +1863,17 @@ fn reader_image_resource(
     }
 }
 
+fn inline_image_resource_byte_limit(mime: &str) -> Option<usize> {
+    match mime {
+        "image/jpeg" | "image/jpg" => Some(MAX_INLINE_JPEG_RESOURCE_BYTES),
+        "image/png" | "image/gif" => Some(MAX_INLINE_IMAGE_RESOURCE_BYTES),
+        _ => None,
+    }
+}
+
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
-    if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
-        || bytes.is_empty()
-        || bytes.len() > MAX_INLINE_IMAGE_RESOURCE_BYTES
-        || bytes.len() > *remaining_budget
-    {
+    let resource_limit = inline_image_resource_byte_limit(mime)?;
+    if bytes.is_empty() || bytes.len() > resource_limit || bytes.len() > *remaining_budget {
         return None;
     }
     *remaining_budget -= bytes.len();
@@ -1499,26 +1915,30 @@ mod tests {
         env, fs,
     };
 
+    use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-        build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
-        uniform_text_color_rgb_v1,
+        build_page_render_plan_with_text_layout_resolvers_v1,
+        build_page_render_plan_with_text_layout_v1, classify_shared_layout_incomplete_cause_v1,
+        effective_source_font_family_v1, uniform_text_color_rgb_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
 
     use super::{
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
-        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
-        ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode, bind_visible_paint,
-        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
-        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
-        take_direct_render_text,
+        MAX_INLINE_JPEG_RESOURCE_BYTES, ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1,
+        ReaderPaintV1, ReaderRectV1, ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode,
+        bind_visible_paint, from_viewer_geometry, from_viewer_geometry_with_fonts,
+        inline_image_data_url, inline_image_resource_byte_limit,
+        insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
+        reader_image_resource, shared_text_font_resource, take_direct_render_text,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ProbeImageInlineAdmission {
         Inline,
+        SourceExactBrowserDenied,
         UnsupportedMime,
         EmptyPayload,
         PerResourceLimit,
@@ -1529,6 +1949,7 @@ mod tests {
         fn reason(self) -> Option<&'static str> {
             match self {
                 Self::Inline => None,
+                Self::SourceExactBrowserDenied => Some("source_exact_browser_denied"),
                 Self::UnsupportedMime => Some("unsupported_mime"),
                 Self::EmptyPayload => Some("empty_payload"),
                 Self::PerResourceLimit => Some("per_resource_limit"),
@@ -1540,13 +1961,18 @@ mod tests {
     fn classify_probe_image_inline_admission(
         mime: &str,
         byte_len: usize,
+        browser_inline_safe: bool,
         remaining_budget: usize,
     ) -> ProbeImageInlineAdmission {
-        if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif") {
-            ProbeImageInlineAdmission::UnsupportedMime
-        } else if byte_len == 0 {
+        if !browser_inline_safe {
+            return ProbeImageInlineAdmission::SourceExactBrowserDenied;
+        }
+        let Some(limit) = inline_image_resource_byte_limit(mime) else {
+            return ProbeImageInlineAdmission::UnsupportedMime;
+        };
+        if byte_len == 0 {
             ProbeImageInlineAdmission::EmptyPayload
-        } else if byte_len > MAX_INLINE_IMAGE_RESOURCE_BYTES {
+        } else if byte_len > limit {
             ProbeImageInlineAdmission::PerResourceLimit
         } else if byte_len > remaining_budget {
             ProbeImageInlineAdmission::AggregateBudgetExhausted
@@ -1830,6 +2256,7 @@ mod tests {
                     let admission = classify_probe_image_inline_admission(
                         &image.mime,
                         image.bytes.len(),
+                        !image.source_exact,
                         descriptor_probe_budget,
                     );
                     if admission == ProbeImageInlineAdmission::Inline {
@@ -1909,6 +2336,7 @@ mod tests {
                         resource_id,
                         image.mime.clone(),
                         &image.bytes,
+                        true,
                         &mut unlimited_budget,
                     );
                     assert_eq!(
@@ -2076,6 +2504,22 @@ mod tests {
                 render_uniform_yellow_fragments,
             );
 
+            let unconfigured_scene = from_viewer_geometry(
+                "probe:unconfigured-font".to_owned(),
+                actual_sha256.clone(),
+                "probe:source".to_owned(),
+                &bundle.geometry,
+                &bundle.source_page_paint_orders,
+            )
+            .expect("exact Carlton unconfigured-font consumer must project");
+            assert!(
+                !unconfigured_scene
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "source_font_resource_admitted"),
+                "shared fallback resource must not be reported as a configured exact font"
+            );
+
             let configured_scene = from_viewer_geometry_with_fonts(
                 "probe:configured-font".to_owned(),
                 actual_sha256.clone(),
@@ -2085,6 +2529,19 @@ mod tests {
                 &[configured],
             )
             .expect("exact Carlton configured-font consumer must project");
+
+            assert!(
+                configured_scene
+                    .diagnostics
+                    .iter()
+                    .any(
+                        |diagnostic| diagnostic.code == "source_font_resource_admitted"
+                            && diagnostic
+                                .message
+                                .starts_with("1 configured exact font resource"),
+                    ),
+                "actual configured exact font resource must retain admission telemetry"
+            );
 
             let projected_configured_layouts = configured_scene
                 .nodes
@@ -2155,14 +2612,146 @@ mod tests {
         let mut projected_text_bounds_nodes = 0_usize;
         let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
+        let mut sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_path_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_consumption_counts = BTreeMap::<&'static str, usize>::new();
+        let mut fallback_sli_probe_cause_counts = BTreeMap::<&'static str, usize>::new();
+
+        let configured_probe = (actual_sha256
+            == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
+            .then(|| ReaderConfiguredFontResourceV1 {
+                source_family: "Arial".to_owned(),
+                resource_id: format!(
+                    "chaptera.cloud.configured-font.{}.face0",
+                    chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                ),
+                expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                    .to_owned(),
+                face_index: 0,
+                mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
+            });
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
 
+            let diagnostic_plan = build_page_render_plan_with_text_layout_resolvers_v1(
+                &bundle.geometry,
+                page_index,
+                &font,
+                |fragment| {
+                    let configured = configured_probe.as_ref()?;
+                    let source_family =
+                        effective_source_font_family_v1(&bundle.geometry, fragment)?;
+                    source_family
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                },
+                |_, run| {
+                    let configured = configured_probe.as_ref()?;
+                    run.source_font_name
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                },
+            )
+            .expect("exact product-font diagnostic render plan must build");
+
+            for node in &diagnostic_plan.nodes {
+                let Some(text) = node.text.as_ref() else {
+                    continue;
+                };
+                let Some(layout) = text.layout.as_ref() else {
+                    continue;
+                };
+                let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition
+                else {
+                    continue;
+                };
+                if reason.code() != "shared_layout_incomplete" {
+                    continue;
+                }
+
+                let resolved_font = configured_probe.as_ref().and_then(|configured| {
+                    let source_family = effective_source_font_family_v1(&bundle.geometry, text)?;
+                    source_family
+                        .trim()
+                        .eq_ignore_ascii_case(configured.source_family.as_str())
+                        .then(|| configured.explicit_resource())
+                });
+                let cause = if let Some(resolved_font) = resolved_font.as_ref() {
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        resolved_font,
+                        true,
+                    )
+                } else {
+                    let fallback_font = shared_text_font_resource();
+                    classify_shared_layout_incomplete_cause_v1(
+                        &bundle.geometry,
+                        &diagnostic_plan,
+                        node,
+                        text,
+                        &fallback_font,
+                        false,
+                    )
+                };
+                *sli_probe_path_counts.entry(cause.path).or_default() += 1;
+                *sli_probe_consumption_counts
+                    .entry(cause.consumption)
+                    .or_default() += 1;
+                *sli_probe_cause_counts.entry(cause.cause).or_default() += 1;
+            }
+
+            for node in &plan.nodes {
+                let Some(text) = node.text.as_ref() else {
+                    continue;
+                };
+                let Some(layout) = text.layout.as_ref() else {
+                    continue;
+                };
+                let RenderTextLayoutDispositionV1::BackendFallback { reason } = &layout.disposition
+                else {
+                    continue;
+                };
+                if reason.code() != "shared_layout_incomplete" {
+                    continue;
+                }
+
+                let cause = classify_shared_layout_incomplete_cause_v1(
+                    &bundle.geometry,
+                    &plan,
+                    node,
+                    text,
+                    &font,
+                    false,
+                );
+                *fallback_sli_probe_path_counts
+                    .entry(cause.path)
+                    .or_default() += 1;
+                *fallback_sli_probe_consumption_counts
+                    .entry(cause.consumption)
+                    .or_default() += 1;
+                *fallback_sli_probe_cause_counts
+                    .entry(cause.cause)
+                    .or_default() += 1;
+            }
+
             for node in plan.nodes {
-                let projected = node.projected_scene_instance.is_some();
+                let projected = node
+                    .projected_scene_instance
+                    .as_ref()
+                    .is_some_and(|instance| {
+                        instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
+                    });
                 let Some(text) = node.text else {
                     continue;
                 };
@@ -2284,9 +2873,43 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+        let sli_probe_path_json =
+            serde_json::to_string(&sli_probe_path_counts).expect("serialize SLI path census");
+        let sli_probe_consumption_json = serde_json::to_string(&sli_probe_consumption_counts)
+            .expect("serialize SLI consumption census");
+        let sli_probe_cause_json =
+            serde_json::to_string(&sli_probe_cause_counts).expect("serialize SLI cause census");
+        let fallback_sli_probe_path_json = serde_json::to_string(&fallback_sli_probe_path_counts)
+            .expect("serialize fallback-only SLI path census");
+        let fallback_sli_probe_consumption_json =
+            serde_json::to_string(&fallback_sli_probe_consumption_counts)
+                .expect("serialize fallback-only SLI consumption census");
+        let fallback_sli_probe_cause_json = serde_json::to_string(&fallback_sli_probe_cause_counts)
+            .expect("serialize fallback-only SLI cause census");
+
+        assert_eq!(
+            fallback_sli_probe_cause_counts.values().sum::<usize>(),
+            backend_fallbacks
+                .get("shared_layout_incomplete")
+                .copied()
+                .unwrap_or_default(),
+            "fallback-only SLI causal partition must cover every SharedLayoutIncomplete node"
+        );
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    shared_frames, 41,
+                    "exact Carlton must recover exactly one configured-font ordinary partial Story overset"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([
+                        ("shared_layout_incomplete", 2_usize),
+                        ("story_extent_mismatch", 1_usize),
+                    ]),
+                    "exact Carlton must leave only the two zero-line first-line rejects plus true extent residual"
+                );
                 assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
@@ -2308,8 +2931,22 @@ mod tests {
                     projected_line_total, 31,
                     "exact Carlton projected source-backed line count drift"
                 );
+                assert_eq!(
+                    sli_probe_cause_counts,
+                    BTreeMap::from([("first_line_height_rejection", 2_usize)]),
+                    "exact Carlton product-font residual must be only the two zero-line first-line rejects"
+                );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
+                assert_eq!(
+                    shared_frames, 24,
+                    "Virginia Devinettes shared-layout population must remain unchanged"
+                );
+                assert_eq!(
+                    backend_fallbacks,
+                    BTreeMap::from([("shared_layout_incomplete", 1_usize)]),
+                    "Virginia mixed-size fail-closed control must remain one SharedLayoutIncomplete"
+                );
                 assert_eq!(
                     projected_text_nodes, 0,
                     "Virginia Devinettes must remain a zero-projected control"
@@ -2322,9 +2959,25 @@ mod tests {
                     projected_uniform_insets_emu.is_empty(),
                     "Virginia Devinettes must not acquire projected carrier inset authority"
                 );
+                assert_eq!(
+                    sli_probe_cause_counts.values().sum::<usize>(),
+                    1,
+                    "Virginia Devinettes SLI control population drift"
+                );
             }
             _ => {}
         }
+
+        println!(
+            "CLOUD_READER_SLI_CAUSE_CENSUS source_sha256={} configured_paths={} configured_consumption={} configured_causes={} fallback_paths={} fallback_consumption={} fallback_causes={}",
+            actual_sha256,
+            sli_probe_path_json,
+            sli_probe_consumption_json,
+            sli_probe_cause_json,
+            fallback_sli_probe_path_json,
+            fallback_sli_probe_consumption_json,
+            fallback_sli_probe_cause_json,
+        );
 
         println!(
             "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
@@ -2377,6 +3030,7 @@ mod tests {
                 ty: 0,
             },
             paint: None,
+            decorative_border: None,
             resource_id: None,
             image_source_window: None,
             image_content_rotation_degrees: None,
@@ -2384,6 +3038,7 @@ mod tests {
             table: None,
             text: None,
             text_layout: None,
+            preview_text_style: None,
         }
     }
 
@@ -2431,6 +3086,60 @@ mod tests {
         );
         assert_eq!(ordered[1].origin_node_id.as_deref(), Some("carrier-1"));
         assert_eq!(ordered[2].origin_node_id.as_deref(), Some("carrier-2"));
+    }
+
+    #[test]
+    fn inherited_master_lane_precedes_page_local_without_reordering_within_page() {
+        let pages = vec![
+            ReaderPageV1 {
+                page_id: "page-a".to_owned(),
+                order: 0,
+                width_emu: 100,
+                height_emu: 100,
+            },
+            ReaderPageV1 {
+                page_id: "page-b".to_owned(),
+                order: 1,
+                width_emu: 100,
+                height_emu: 100,
+            },
+        ];
+        let direct = vec![
+            test_reader_node("direct-a1", "page-a"),
+            test_reader_node("direct-a2", "page-a"),
+            test_reader_node("direct-b1", "page-b"),
+        ];
+        let mut master_a1 = test_reader_node("master-a1", "page-a");
+        master_a1.origin_node_id = Some("origin-master-a1".to_owned());
+        let mut master_a2 = test_reader_node("master-a2", "page-a");
+        master_a2.origin_node_id = Some("origin-master-a2".to_owned());
+        let mut master_b1 = test_reader_node("master-b1", "page-b");
+        master_b1.origin_node_id = Some("origin-master-b1".to_owned());
+
+        let ordered = insert_inherited_master_nodes_before_page_locals(
+            direct,
+            &pages,
+            HashMap::from([
+                ("page-a".to_owned(), vec![master_a1, master_a2]),
+                ("page-b".to_owned(), vec![master_b1]),
+            ]),
+        )
+        .expect("known target pages must admit inherited-master lane");
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "master-a1",
+                "master-a2",
+                "direct-a1",
+                "direct-a2",
+                "master-b1",
+                "direct-b1",
+            ]
+        );
     }
 
     #[test]
@@ -2500,12 +3209,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_source_image_bytes_are_never_inlined_into_browser_scene() {
+        let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        let resource = reader_image_resource(
+            "resource:source-exact-png".to_owned(),
+            "image/png".to_owned(),
+            b"otherwise-inlineable-source-bytes",
+            false,
+            &mut budget,
+        );
+
+        assert_eq!(resource.availability, "descriptor_only");
+        assert!(resource.inline_data_url.is_none());
+        assert_eq!(budget, MAX_INLINE_IMAGE_TOTAL_BYTES);
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/png",
+                b"otherwise-inlineable-source-bytes".len(),
+                false,
+                MAX_INLINE_IMAGE_TOTAL_BYTES,
+            ),
+            ProbeImageInlineAdmission::SourceExactBrowserDenied
+        );
+    }
+
+    #[test]
     fn viewer_materialized_ole_preview_png_uses_generic_reader_image_resource_path() {
         let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
         let resource = reader_image_resource(
             "resource:legacy-ole-preview".to_owned(),
             "image/png".to_owned(),
             b"bounded-ole-preview-png",
+            true,
             &mut budget,
         );
 
@@ -2538,29 +3273,94 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_probe_classifier_matches_inline_admission_law() {
+    fn bounded_large_jpeg_is_inline_but_png_gif_and_oversized_jpeg_are_not() {
+        // A realistic large JPEG size crosses the old raster limit but still
+        // has an explicitly bounded 5 MiB JPEG admission and a 16 MiB Scene cap.
+        let byte_len = MAX_INLINE_IMAGE_RESOURCE_BYTES + 1;
+        let raw = vec![0x7f_u8; byte_len];
+        let mut jpeg_budget = MAX_INLINE_JPEG_RESOURCE_BYTES;
+        let jpeg = reader_image_resource(
+            "resource:large-jpeg-control".to_owned(),
+            "image/jpeg".to_owned(),
+            &raw,
+            true,
+            &mut jpeg_budget,
+        );
+        assert_eq!(jpeg.availability, "inline_data_url");
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            jpeg.inline_data_url.as_ref().map(String::len),
+            Some("data:image/jpeg;base64,".len() + raw.len().div_ceil(3) * 4)
+        );
+        assert_eq!(jpeg_budget, MAX_INLINE_JPEG_RESOURCE_BYTES - byte_len);
+
+        let mut png_budget = usize::MAX;
+        assert!(inline_image_data_url("image/png", &raw, &mut png_budget).is_none());
+        assert!(inline_image_data_url("image/gif", &raw, &mut png_budget).is_none());
+        assert_eq!(png_budget, usize::MAX);
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/jpeg",
+                MAX_INLINE_JPEG_RESOURCE_BYTES + 1,
+                true,
+                usize::MAX
+            ),
+            ProbeImageInlineAdmission::PerResourceLimit
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/jpg",
+                MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                true,
+                MAX_INLINE_JPEG_RESOURCE_BYTES
+            ),
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/svg+xml", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission("image/jpeg", byte_len, true, byte_len - 1),
+            ProbeImageInlineAdmission::AggregateBudgetExhausted
+        );
+    }
+
+    #[test]
+    fn descriptor_probe_classifier_matches_inline_admission_law() {
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/png",
+                3,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
+            ProbeImageInlineAdmission::Inline
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/svg+xml",
+                3,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
             ProbeImageInlineAdmission::UnsupportedMime
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 0, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            classify_probe_image_inline_admission(
+                "image/png",
+                0,
+                true,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
             ProbeImageInlineAdmission::EmptyPayload
         );
         assert_eq!(
             classify_probe_image_inline_admission(
                 "image/png",
                 MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                true,
                 MAX_INLINE_IMAGE_TOTAL_BYTES
             ),
             ProbeImageInlineAdmission::PerResourceLimit
         );
         assert_eq!(
-            classify_probe_image_inline_admission("image/png", 3, 2),
+            classify_probe_image_inline_admission("image/png", 3, true, 2),
             ProbeImageInlineAdmission::AggregateBudgetExhausted
         );
 

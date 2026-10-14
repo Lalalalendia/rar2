@@ -70,6 +70,25 @@ def validate_semantics(receipt):
     if image["frame_before"] != image["frame_after"]:
         raise AssertionError("V2 ReplaceImage must preserve frame geometry")
 
+    move_id = move["origin_node_id"]
+    resize_id = resize["origin_node_id"]
+    image_id = image["origin_node_id"]
+    wrap_scope = receipt["invariants"].get("wrap_mutation_scope", "not_asserted")
+    if wrap_scope in {
+        "text_frame_non_intersecting",
+        "authority_blocked_not_asserted",
+    }:
+        if move_id == resize_id:
+            raise AssertionError(
+                "newsletter V2 requires MoveNode on a distinct exact source image"
+            )
+        if image_id != resize_id:
+            raise AssertionError(
+                "newsletter V2 requires ReplaceImage on the resized photo frame"
+            )
+    elif len({move_id, resize_id, image_id}) != 3:
+        raise AssertionError("V2 requires distinct move/resize/image targets")
+
     ordered_states = [
         history["after_story_state_id"],
         history["after_move_state_id"],
@@ -273,6 +292,29 @@ def self_test():
         pass
     else:
         raise AssertionError("self-test expected reopen binding rejection")
+
+    newsletter = copy.deepcopy(receipt)
+    newsletter["invariants"]["wrap_mutation_scope"] = "text_frame_non_intersecting"
+    newsletter["image_replace"]["origin_node_id"] = newsletter["object_resize"]["origin_node_id"]
+    validate_semantics(newsletter)
+
+    bad = copy.deepcopy(newsletter)
+    bad["image_replace"]["origin_node_id"] = "44444444-4444-4444-4444-444444444444"
+    try:
+        validate_semantics(bad)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("self-test expected newsletter resize/replace topology rejection")
+
+    bad = copy.deepcopy(newsletter)
+    bad["object_move"]["origin_node_id"] = bad["object_resize"]["origin_node_id"]
+    try:
+        validate_semantics(bad)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("self-test expected newsletter distinct-move rejection")
 
     return {
         "self_test": "pass",

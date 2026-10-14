@@ -3,6 +3,12 @@ name: Chaptera Local Windows Portable V0
 on:
   workflow_call:
   workflow_dispatch:
+  # Seed the default-branch Cargo cache once when this workflow lands.
+  # Existing scheduled/manual main runs maintain it; feature PRs never save.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chaptera-local-portable-windows.yml"
 
 permissions:
   contents: read
@@ -62,6 +68,22 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
+
+      - name: Restore trusted Local portable Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-local-portable-crtstatic-deps-v1
+          add-job-id-key: "false"
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock') }}
+          workspaces: |
+            . -> target
+            vendor/producer-a -> target
+          cache-bin: "false"
+          cache-targets: "true"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          # PRs read only; only a trusted main push/dispatch/schedule may save.
+          save-if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
 
       - name: Resolve Visual Studio dumpbin
         shell: pwsh

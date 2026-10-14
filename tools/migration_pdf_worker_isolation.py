@@ -9,7 +9,7 @@ Linux guarantees in this slice:
 - one fresh process group per file;
 - parent wall timeout with whole-process-group kill;
 - RLIMIT_AS / RLIMIT_CPU / RLIMIT_NOFILE / RLIMIT_FSIZE before exec;
-- no_new_privs + libseccomp network syscall deny before exec;
+- no_new_privs + libseccomp network and process-group escape denial before exec;
 - worker output is written to an unpublished staging directory;
 - only a successful worker may atomically publish regular files/directories;
 - failed/timed-out staging is removed.
@@ -60,6 +60,23 @@ NETWORK_SYSCALLS = (
     "io_uring_setup",
     "io_uring_enter",
     "io_uring_register",
+)
+
+# The wrapper owns one process group per job and kills it before publishing.
+# Deny the ordinary APIs by which a compromised descendant could detach
+# from that group. Namespace creation through clone flags still requires
+# separate OS-level containment at the deployment boundary.
+PROCESS_GROUP_ESCAPE_SYSCALLS = (
+    "setsid",
+    "setpgid",
+    "setns",
+    "unshare",
+)
+
+# The harness, not extra_env or an inherited parent environment, owns the
+# exact input, output and network-policy keys for each isolated worker.
+PROTECTED_WORKER_ENV_KEYS = frozenset(
+    {"CHAPTERA_WORKER_OUTPUT_DIR", "CHAPTERA_WORKER_INPUT", "CHAPTERA_NETWORK_POLICY"}
 )
 
 SCMP_ACT_ALLOW = 0x7FFF0000
@@ -129,7 +146,7 @@ def _install_no_new_privs() -> None:
         raise OSError(err, "prctl(PR_SET_NO_NEW_PRIVS) failed")
 
 
-def _install_network_deny_seccomp() -> None:
+def _install_worker_seccomp() -> None:
     library = ctypes.util.find_library("seccomp")
     if not library:
         raise RuntimeError("libseccomp unavailable; refusing unguarded worker execution")
@@ -160,7 +177,7 @@ def _install_network_deny_seccomp() -> None:
 
     try:
         denied_action = _scmp_act_errno(errno.EPERM)
-        for name in NETWORK_SYSCALLS:
+        for name in (*NETWORK_SYSCALLS, *PROCESS_GROUP_ESCAPE_SYSCALLS):
             syscall_number = seccomp.seccomp_syscall_resolve_name(name.encode("ascii"))
             if syscall_number < 0:
                 continue
@@ -207,7 +224,7 @@ def _guard_exec(command: Sequence[str], limits: WorkerLimits) -> "NoReturn":
         raise RuntimeError("guard requires a command")
     _apply_limits(limits)
     _install_no_new_privs()
-    _install_network_deny_seccomp()
+    _install_worker_seccomp()
     os.execvpe(command[0], list(command), os.environ.copy())
     raise AssertionError("exec returned unexpectedly")
 
@@ -234,6 +251,11 @@ def _validate_publish_tree(root: pathlib.Path) -> tuple[str, ...]:
             continue
         if not stat.S_ISREG(st.st_mode):
             raise RuntimeError(f"worker output is not a regular file: {rel}")
+        # A hard link has regular-file mode but can reference an inode from
+        # outside this staging root (including private server-side files).
+        # The worker must not promote such existing inodes into public output.
+        if st.st_nlink != 1:
+            raise RuntimeError(f"worker output hard link is not publishable: {rel}")
         outputs.append(rel.as_posix())
     if not outputs:
         raise RuntimeError("successful worker produced no output files")
@@ -264,6 +286,13 @@ def run_isolated_worker(
     _require_linux()
     limits = limits or WorkerLimits()
     limits.validate()
+    if extra_env:
+        forbidden = PROTECTED_WORKER_ENV_KEYS.intersection(str(key) for key in extra_env)
+        if forbidden:
+            raise ValueError(
+                "isolated worker extra_env cannot override harness-owned keys: "
+                + ", ".join(sorted(forbidden))
+            )
     final_output_dir = final_output_dir.resolve()
     parent = final_output_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -295,6 +324,8 @@ def run_isolated_worker(
         )
 
     env = os.environ.copy() if inherit_environment else {}
+    for key in PROTECTED_WORKER_ENV_KEYS:
+        env.pop(key, None)
     env["CHAPTERA_WORKER_OUTPUT_DIR"] = str(staging)
     env["CHAPTERA_NETWORK_POLICY"] = "seccomp_default_deny"
     if input_path is not None:
@@ -335,6 +366,16 @@ def run_isolated_worker(
                 except ProcessLookupError:
                     pass
                 exit_code = process.wait()
+
+            # A successful or failed leader can still leave children alive in
+            # its worker process group. Stop them before verifying/renaming
+            # staging: otherwise they could mutate files after publication.
+            # This is not a substitute for an OS sandbox/cgroup that also
+            # contains descendants deliberately moved into new sessions.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
         stderr_tail = _read_tail(stderr_path)
 

@@ -1,0 +1,138 @@
+name: Reader LINE405 exact real Chromium source A/B (not Publisher oracle)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/reader-newsletter-line405-browser-ab.yml"
+      - "tools/reader_newsletter_line405_browser_ab_v1.py"
+      - "tools/test_reader_newsletter_line405_browser_ab_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reader-line405-browser-ab-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  exact-chromium:
+    name: Exact ${{ matrix.arm }} Reader Chromium 144-DPI screenshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: before
+            source_ref: 47eb72faac780692335eef7f00ac0dbd9daaf206
+          - arm: after
+            source_ref: 846c735f2f7eb2ea92451236bdb146cb0eb481d8
+    env:
+      CARGO_TARGET_DIR: target/line405-rust
+      REPOSITORY_COMMIT_SHA: ${{ matrix.source_ref }}
+      READER_REAL_MANIFEST: ${{ github.workspace }}/target/line405-source-manifest.json
+      READER_REAL_OUTPUT: ${{ github.workspace }}/target/line405-reader-raster
+      READER_REFERENCE_RASTER_DPI: "144"
+      READER_WORKER_BINARY: ${{ github.workspace }}/target/line405-rust/debug/chaptera
+      READER_WORKER_TIMEOUT_SECONDS: "120"
+      READER_WORKER_CPU_SECONDS: "90"
+      READER_WORKER_ADDRESS_SPACE_MB: "768"
+    steps:
+      - name: Check out the exact pinned implementation SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.source_ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Reacquire SHA-verified public SampleNewsletter.pub outside the repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl -fsSL --retry 3 --max-time 45 \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            -o "$fixture"
+          echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  $fixture" | sha256sum -c -
+          test "$(stat -c%s "$fixture")" = "291840"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          manifest = {"schema": "chaptera.cloud-reader-real-fixtures.v1", "fixtures": [{
+              "name": "SampleNewsletter",
+              "sha256": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+              "bytes": 291840, "pages": 4, "require_render": True,
+              "require_shared_text": True, "source_path": str(root / "SampleNewsletter.pub"),
+          }]}
+          path = Path(os.environ["READER_REAL_MANIFEST"])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(manifest), encoding="utf-8")
+          PY
+      - name: Build the exact Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Install Chromium at a pinned Playwright version
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Capture four customer pages with the actual Cloud Reader
+        run: node apps/cloud-reader/real-browser.test.mjs
+      - name: Upload only derived PNGs and source-safe capture receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-line405-browser-${{ matrix.arm }}
+          path: |
+            target/line405-reader-raster/receipt.json
+            target/line405-reader-raster/SampleNewsletter-page-*.png
+          if-no-files-found: error
+          retention-days: 7
+
+  source-confined-raster-delta:
+    name: Real browser source-delta and PAGE381 identity (not Publisher parity)
+    needs: exact-chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deterministic raster comparator
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.7"
+      - name: Run fail-closed source-identity and raster-region unit controls
+        run: |
+          python tools/test_reader_logo_publisher_native_verdict_v1.py
+          python tools/test_reader_newsletter_line405_browser_ab_v1.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: reader-line405-browser-before
+          path: target/line405-browser/before
+      - uses: actions/download-artifact@v4
+        with:
+          name: reader-line405-browser-after
+          path: target/line405-browser/after
+      - name: Compare real raster deltas with native source geometry, no LO/PDF
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/reader_newsletter_line405_browser_ab_v1.py \
+            --baseline-receipt target/line405-browser/before/receipt.json \
+            --candidate-receipt target/line405-browser/after/receipt.json \
+            --output target/line405-browser/report/source-browser-delta.json
+          cat target/line405-browser/report/source-browser-delta.json >> "$GITHUB_STEP_SUMMARY"
+          echo 'Microsoft Publisher visual fidelity is UNVERIFIED; native PDFs are not present in CI.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload source-safe numeric A/B evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-line405-browser-direct-delta
+          path: target/line405-browser/report/source-browser-delta.json
+          if-no-files-found: warn
+          retention-days: 14

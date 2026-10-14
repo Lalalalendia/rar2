@@ -71,6 +71,19 @@ async function main() {
         window.runRealFontEnvironmentProbe(sceneText, environmentText),
       { sceneText, environmentText },
     );
+    const resolvedTextSvg = await page.evaluate(
+      () => window.runResolvedTextSvgContractProbe(),
+    );
+    if (
+      resolvedTextSvg.font_face_count !== 1 ||
+      resolvedTextSvg.text_authority !== "server-shared-resolved" ||
+      resolvedTextSvg.text_line_index !== 0 ||
+      resolvedTextSvg.text_content !== "Hello, Publisher" ||
+      resolvedTextSvg.fixed_frame_viewport !== "fixed-frame"
+    ) {
+      throw new Error("resolved Reader text SVG contract mismatch");
+    }
+    receipt.resolved_text_svg = resolvedTextSvg;
 
     receipt.browser = {
       engine: BROWSER_NAME,

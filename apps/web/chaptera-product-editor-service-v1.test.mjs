@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
+import { BrowserObservabilityV1 } from "./observability-v1.mjs";
 
 const DOC = "10000000-0000-4000-8000-000000000001";
 const PAGE = "20000000-0000-4000-8000-000000000001";
@@ -9,6 +10,7 @@ const NODE = "30000000-0000-4000-8000-000000000001";
 const SOURCE = "a".repeat(64);
 const BASE = "sha256:" + "b".repeat(64);
 const CHILD = "sha256:" + "c".repeat(64);
+const UNDONE = "sha256:" + "e".repeat(64);
 const LAYOUT = "sha256:" + "d".repeat(64);
 
 function json(value, status = 200) {
@@ -92,6 +94,32 @@ function current(revisionId = BASE, x = 1000) {
   };
 }
 
+
+function readerScene(revisionId = BASE, x = 1000) {
+  return {
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    revision_id: revisionId,
+    scene_authority: "viewer-geometry-current-revision",
+    stacking_fidelity: "exact",
+    fidelity: { state: "supported", reasons: [] },
+    pages: [{ page_id: PAGE, order: 0, width_emu: 10_058_400, height_emu: 7_772_400 }],
+    nodes: [{
+      node_id: NODE,
+      page_id: PAGE,
+      kind: "shape",
+      bounds: { x, y: 2000, width: 3000, height: 4000 },
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+      paint: { fill_rgb: [32, 96, 192] },
+    }],
+    stories: [],
+    resources: [],
+    fonts: [],
+    diagnostics: [],
+  };
+}
+
 function accepted() {
   return {
     protocol_version: "chaptera.commit-accepted.v1",
@@ -111,6 +139,25 @@ function accepted() {
     consequences: [],
     scene_refresh: "full_snapshot",
     replayed: false,
+  };
+}
+
+function historyAccepted() {
+  return {
+    protocol_version: "chaptera.history-transition-accepted.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: CHILD,
+    revision_id: UNDONE,
+    state_id: "sha256:" + "f".repeat(64),
+    client_operation_id: "undo-test-1",
+    transition_kind: "undo",
+    canonical_operation: accepted().canonical_operation,
+    project_schema_version: "pub-editor-v0.2",
+    canonical_revision_schema_version: "chaptera.cdm.authoring-revision.v1",
+    canonical_authoring_revision_id: "1".repeat(64),
+    replayed: false,
+    scene_refresh: "full_snapshot",
   };
 }
 
@@ -147,10 +194,10 @@ function recorder(handler) {
   return { calls, fetchImpl };
 }
 
-test("current Scene uses cookie credentials and canonical current authoring graph", async () => {
+test("current Scene uses cookie credentials and rich current-revision Reader projection", async () => {
   const { calls, fetchImpl } = recorder((url) => {
-    assert.equal(new URL(url).pathname, "/v1/documents/" + DOC + "/current");
-    return json(current());
+    assert.equal(new URL(url).pathname, "/v1/reader/documents/" + DOC + "/scene");
+    return json(readerScene());
   });
   const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
     documentId: DOC,
@@ -158,12 +205,87 @@ test("current Scene uses cookie credentials and canonical current authoring grap
   });
 
   const scene = await service.currentScene();
-  assert.equal(scene.protocol_version, "chaptera.scene.v1");
+  assert.equal(scene.protocol_version, "chaptera.editor-render-scene.v1");
   assert.equal(scene.revision_id, BASE);
   assert.equal(scene.nodes[0].bounds.x, 1000);
+  assert.deepEqual(scene.paints[0].fill, { r: 32, g: 96, b: 192, a: 255 });
   assert.equal(calls[0].options.credentials, "include");
   assert.equal(calls[0].options.cache, "no-store");
   assert.ok(!("x-chaptera-principal-id" in calls[0].options.headers));
+});
+test("current visual Scene is bound to exact canonical document/source/revision", async () => {
+  const visual = {
+    protocol_version: "chaptera.reader-scene.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    revision_id: BASE,
+    scene_authority: "viewer",
+    stacking_fidelity: "exact",
+    fidelity: { state: "partial", reasons: [] },
+    pages: [],
+    nodes: [],
+    stories: [],
+    resources: [],
+    fonts: [],
+    diagnostics: [],
+  };
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current());
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(visual);
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const result = await service.currentVisualScene();
+  assert.equal(result.current_document.revision_id, BASE);
+  assert.equal(result.visual_scene.protocol_version, "chaptera.reader-scene.v1");
+  assert.equal(result.visual_scene.revision_id, BASE);
+  assert.deepEqual(
+    new Set(calls.map((call) => call.path)),
+    new Set([
+      "/v1/documents/" + DOC + "/current",
+      "/v1/reader/documents/" + DOC + "/scene",
+    ]),
+  );
+  for (const call of calls) {
+    assert.equal(call.options.credentials, "include");
+    assert.equal(call.options.cache, "no-store");
+  }
+});
+
+test("current visual Scene fails closed on a stale rich visual revision", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current(CHILD, 9525));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") {
+      return json({
+        protocol_version: "chaptera.reader-scene.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        revision_id: BASE,
+        scene_authority: "viewer",
+        stacking_fidelity: "exact",
+        fidelity: { state: "partial", reasons: [] },
+        pages: [],
+        nodes: [],
+        stories: [],
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  await assert.rejects(
+    service.currentVisualScene(),
+    /revision differs from canonical current document/,
+  );
 });
 
 test("commit obtains server CSRF and uses document-scoped canonical route", async () => {
@@ -189,6 +311,88 @@ test("commit obtains server CSRF and uses document-scoped canonical route", asyn
   assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
   assert.equal(calls[1].options.headers["content-type"], "application/json");
   assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("Undo uses authenticated history route, CSRF, and supported commit telemetry class", async () => {
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body, {
+        protocol_version: "chaptera.history-transition-intent.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        base_revision_id: CHILD,
+        client_operation_id: "undo-test-1",
+        command: { kind: "undo" },
+      });
+      return json(historyAccepted());
+    }
+    throw new Error("unexpected path " + path);
+  });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:undo-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":undo-test-" + String(++serial).padStart(6, "0"),
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+    observability,
+  });
+
+  const result = await service.undo({
+    sourceHash: SOURCE,
+    baseRevisionId: CHILD,
+    clientOperationId: "undo-test-1",
+  });
+
+  assert.equal(result.protocol_version, "chaptera.history-transition-accepted.v1");
+  assert.equal(result.revision_id, UNDONE);
+  assert.equal(result.transition_kind, "undo");
+  assert.deepEqual(calls.map((call) => call.path), [
+    "/v1/session",
+    "/v1/documents/" + DOC + "/history",
+  ]);
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.equal(calls[1].options.headers["x-chaptera-operation-class"], "commit");
+  assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("stale Undo re-reads canonical head and returns bounded rejection", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({ error: { code: "stale_revision", message: "advanced" } }, 409);
+    }
+    if (path === "/v1/documents/" + DOC + "/current") return json(current(UNDONE));
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const result = await service.undo({
+    sourceHash: SOURCE,
+    baseRevisionId: CHILD,
+    clientOperationId: "undo-stale-1",
+  });
+  assert.deepEqual(result, {
+    protocol_version: "chaptera.history-transition-rejected.v1",
+    document_id: DOC,
+    base_revision_id: CHILD,
+    current_revision_id: UNDONE,
+    client_operation_id: "undo-stale-1",
+    transition_kind: "undo",
+    code: "stale_revision",
+    message_key: "history.stale_revision",
+    retryable: true,
+  });
 });
 
 test("stale commit re-reads canonical current head before shell rejection", async () => {
@@ -228,8 +432,8 @@ test("stale commit re-reads canonical current head before shell rejection", asyn
   assert.equal(calls.at(-1).path, "/v1/documents/" + DOC + "/current");
 });
 
-test("exact scene reconciliation refuses a silently advanced current head", async () => {
-  const { fetchImpl } = recorder(() => json(current(CHILD, 9525)));
+test("exact rich scene reconciliation refuses a silently advanced current head", async () => {
+  const { calls, fetchImpl } = recorder(() => json(readerScene(CHILD, 9525)));
   const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
     documentId: DOC,
     fetchImpl,
@@ -242,8 +446,14 @@ test("exact scene reconciliation refuses a silently advanced current head", asyn
   const scene = await service.sceneForRevision(CHILD);
   assert.equal(scene.revision_id, CHILD);
   assert.equal(scene.nodes[0].bounds.x, 9525);
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    [
+      "/v1/reader/documents/" + DOC + "/scene",
+      "/v1/reader/documents/" + DOC + "/scene",
+    ],
+  );
 });
-
 test("csrf_invalid refreshes /v1/session once and retries the same mutation", async () => {
   let sessionCount = 0;
   let commitCount = 0;
@@ -469,4 +679,400 @@ test("migration API binds capability, create, and loss download to exact source"
     assert.equal(call.options.headers["x-csrf-token"], "csrf-token-1");
     assert.equal(call.options.credentials, "include");
   }
+});
+
+test("rich editor state consumes the exact authenticated Product current visual scene", async () => {
+  const paths = [];
+  const fetchImpl = (url, options) => {
+    const path = new URL(url).pathname;
+    paths.push({ path, credentials: options.credentials });
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current()));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene()));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const state = await service.currentRichEditorState();
+  assert.equal(state.current_document.revision_id, BASE);
+  assert.equal(state.reader_scene.protocol_version, "chaptera.reader-scene.v1");
+  assert.equal(state.reader_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.protocol_version, "chaptera.editor-interaction-scene.v1");
+  assert.equal(state.interaction_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.nodes.length, 1);
+  assert.equal(state.interaction_scene.nodes[0].z_order, null);
+  assert.deepEqual(paths.map((call) => call.path).sort(), [
+    "/v1/documents/" + DOC + "/current",
+    "/v1/reader/documents/" + DOC + "/scene",
+  ].sort());
+  assert.ok(paths.every((call) => call.credentials === "include"));
+});
+
+test("rich editor state denies a mismatched document/Reader revision", async () => {
+  const fetchImpl = (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current(BASE)));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene(CHILD)));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    service.currentRichEditorState(),
+    /visual Scene revision differs from canonical current document/,
+  );
+});
+
+test("rich Reader scene re-fetch rejects unexpected advanced child revision", async () => {
+  const fetchImpl = (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return Promise.resolve(json(current(CHILD)));
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return Promise.resolve(json(readerScene(CHILD)));
+    throw new Error("unexpected path " + path);
+  };
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    service.readerSceneForRevision(BASE),
+    /canonical current revision advanced before exact rich Scene reconciliation/,
+  );
+  const reader = await service.readerSceneForRevision(CHILD);
+  assert.equal(reader.revision_id, CHILD);
+});
+
+test("rich scene read supports production browser observability", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/documents/" + DOC + "/current") return json(current());
+    if (path === "/v1/reader/documents/" + DOC + "/scene") return json(readerScene());
+    throw new Error("unexpected path " + path);
+  });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:product-editor-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":product-test-" + String(++serial).padStart(6, "0"),
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl, observability,
+  });
+  const state = await service.currentRichEditorState();
+  assert.equal(state.current_document.revision_id, BASE);
+  assert.equal(state.reader_scene.revision_id, BASE);
+  assert.equal(state.interaction_scene.revision_id, BASE);
+  assert.deepEqual(
+    new Set(calls.map((call) => call.options.headers["x-chaptera-operation-class"])),
+    new Set(["open", "scene_read"]),
+  );
+  assert.ok(calls.every((call) => call.options.credentials === "include"));
+});
+
+test("default browser fetch retains the Window-style global receiver", async () => {
+  const saved = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = function (url, options) {
+    assert.equal(this, globalThis);
+    requests.push({ url, options });
+    return Promise.resolve(json(current()));
+  };
+  try {
+    const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+      documentId: DOC,
+    });
+    const state = await service.currentDocument();
+    assert.equal(state.revision_id, BASE);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].options.credentials, "include");
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
+
+test("Redo uses authenticated source-bound history route with CSRF and accepted revision identity", async () => {
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      assert.deepEqual(JSON.parse(options.body), {
+        protocol_version: "chaptera.history-transition-intent.v1",
+        document_id: DOC,
+        source_hash: SOURCE,
+        base_revision_id: UNDONE,
+        client_operation_id: "redo-test-1",
+        command: { kind: "redo" },
+      });
+      return json({
+        ...historyAccepted(),
+        base_revision_id: UNDONE,
+        revision_id: CHILD,
+        client_operation_id: "redo-test-1",
+        transition_kind: "redo",
+      });
+    }
+    throw new Error("unexpected Redo path " + path);
+  });
+  let serial = 0;
+  const observability = new BrowserObservabilityV1({
+    sessionIncarnation: "session:redo-test",
+    browserFamily: "chromium",
+    idFactory: (prefix) => prefix + ":redo-test-" + String(++serial).padStart(6, "0"),
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+    observability,
+  });
+  const result = await service.redo({
+    sourceHash: SOURCE,
+    baseRevisionId: UNDONE,
+    clientOperationId: "redo-test-1",
+  });
+  assert.equal(result.transition_kind, "redo");
+  assert.equal(result.revision_id, CHILD);
+  assert.deepEqual(calls.map(call => call.path), [
+    "/v1/session", "/v1/documents/" + DOC + "/history",
+  ]);
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.equal(calls[1].options.headers["x-chaptera-operation-class"], "commit");
+  assert.ok(!("x-chaptera-principal-id" in calls[1].options.headers));
+});
+
+test("Rejected Redo returns a bounded redo_unavailable receipt and no new revision", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({ error: { code: "redo_unavailable" } }, 409);
+    }
+    throw new Error("unexpected request " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const result = await service.redo({
+    sourceHash: SOURCE, baseRevisionId: UNDONE,
+    clientOperationId: "redo-unavailable-1",
+  });
+  assert.deepEqual({
+    protocol_version: result.protocol_version,
+    transition_kind: result.transition_kind,
+    current_revision_id: result.current_revision_id,
+    code: result.code,
+    retryable: result.retryable,
+  }, {
+    protocol_version: "chaptera.history-transition-rejected.v1",
+    transition_kind: "redo",
+    current_revision_id: null,
+    code: "redo_unavailable",
+    retryable: false,
+  });
+  assert.equal(calls.length, 2);
+});
+
+test("Accepted Redo with mismatched kind fails closed instead of displaying another transition", async () => {
+  const { fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/history") {
+      return json({
+        ...historyAccepted(),
+        base_revision_id: UNDONE,
+        client_operation_id: "redo-identity-test-1",
+        transition_kind: "undo",
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(
+    () => service.redo({
+      sourceHash: SOURCE, baseRevisionId: UNDONE,
+      clientOperationId: "redo-identity-test-1",
+    }),
+    /history transition accepted identity mismatch/,
+  );
+});
+
+test("commit success must ACK the exact document/source/base/operation and a new revision", async (t) => {
+  const mutations = [
+    ["different document", { document_id: "other-document" }],
+    ["missing document", { document_id: undefined }],
+    ["different source", { source_hash: "f".repeat(64) }],
+    ["different base", { base_revision_id: CHILD }],
+    ["different operation", { client_operation_id: "another-move" }],
+    ["missing operation", { client_operation_id: undefined }],
+    ["untyped revision", { revision_id: "unversioned" }],
+    ["unchanged revision", { revision_id: BASE }],
+    ["missing revision", { revision_id: undefined }],
+  ];
+  for (const [label, mismatch] of mutations) {
+    await t.test(label, async () => {
+      const { calls, fetchImpl } = recorder((url) => {
+        const path = new URL(url).pathname;
+        if (path === "/v1/session") return json(session());
+        if (path === "/v1/documents/" + DOC + "/commit") {
+          return json({ ...accepted(), ...mismatch });
+        }
+        throw new Error("unexpected path " + path);
+      });
+      const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+        documentId: DOC, fetchImpl,
+      });
+      await assert.rejects(
+        () => service.commit(commitRequest()),
+        /commit accepted identity mismatch/,
+      );
+      assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+    });
+  }
+});
+
+test("replayed exact commit ACK remains accepted without another POST", async () => {
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/commit") {
+      return json({ ...accepted(), replayed: true });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const result = await service.commit(commitRequest());
+  assert.equal(result.replayed, true);
+  assert.equal(result.revision_id, CHILD);
+  assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+});
+
+test("Product StoryRange uses exact authenticated text route without browser before-state", async () => {
+  const storyId = "40000000-0000-4000-8000-000000000001";
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-001",
+    command: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      replacement_text: "Q",
+    },
+  };
+  const resultBody = {
+    ...accepted(),
+    client_operation_id: intent.client_operation_id,
+    canonical_operation: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      expected_before: "A",
+      replacement_text: "Q",
+    },
+  };
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/story-commit") {
+      assert.deepEqual(JSON.parse(options.body), intent);
+      return json(resultBody);
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  const saved = await service.commitStoryRange(intent);
+  assert.equal(saved.revision_id, CHILD);
+  assert.equal(saved.canonical_operation.replacement_text, "Q");
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["x-csrf-token"], "csrf-token-1");
+  assert.deepEqual(calls.map((c) => c.path), [
+    "/v1/session", "/v1/documents/" + DOC + "/story-commit",
+  ]);
+});
+
+test("StoryRange refuses mismatched success ACK without issuing another mutation", async () => {
+  const storyId = "40000000-0000-4000-8000-000000000001";
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-002",
+    command: {
+      kind: "replace_story_range",
+      story_id: storyId,
+      start_scalar: 0,
+      end_scalar: 1,
+      replacement_text: "Y",
+    },
+  };
+  const { calls, fetchImpl } = recorder((url) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/documents/" + DOC + "/story-commit") {
+      return json({
+        ...accepted(),
+        client_operation_id: intent.client_operation_id,
+        canonical_operation: {
+          kind: "replace_story_range",
+          story_id: storyId,
+          start_scalar: 0,
+          end_scalar: 1,
+          replacement_text: "forged",
+        },
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(() => service.commitStoryRange(intent), /Story commit accepted identity mismatch/);
+  assert.equal(calls.filter((c) => c.path.endsWith("/story-commit")).length, 1);
+});
+
+test("StoryRange rejects unsupported browser-controlled state before any network mutation", async () => {
+  const intent = {
+    protocol_version: "chaptera.story-range-intent.v1",
+    document_id: DOC,
+    source_hash: SOURCE,
+    base_revision_id: BASE,
+    client_operation_id: "story-operation-003",
+    command: {
+      kind: "replace_story_range",
+      story_id: "40000000-0000-4000-8000-000000000001",
+      start_scalar: 0,
+      end_scalar: 0,
+      replacement_text: "text",
+    },
+  };
+  const { calls, fetchImpl } = recorder(() => {
+    throw new Error("unexpected network request");
+  });
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC, fetchImpl,
+  });
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    command: {...intent.command, expected_before: "forged"},
+  }), /unknown|unsupported|additional|field|Story|intent/i);
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    command: {...intent.command, replacement_text: "line\nparagraph"},
+  }), /bounded plain Story replacements/);
+  await assert.rejects(() => service.commitStoryRange({
+    ...intent,
+    depends_on_client_operation_id: "previous-story-op",
+  }), /pending Story operation chains/);
+  assert.equal(calls.length, 0);
 });

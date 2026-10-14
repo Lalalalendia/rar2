@@ -1,0 +1,90 @@
+name: RESCUE-BATCH-PDF V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_batch_pdf_v1.py'
+      - 'tools/test_rescue_batch_pdf_v1.py'
+      - 'tools/rescue_batch_pdf_real_cli_acceptance.py'
+      - 'tools/test_rescue_batch_pdf_real_cli_acceptance.py'
+      - 'tools/rescue_batch_pdf_v1.md'
+      - '.github/workflows/rescue-batch-pdf-v1-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  synthetic-resume-and-safety:
+    name: Synthetic folder/ZIP/resume regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Compile stdlib-only tool and tests
+        run: |
+          python3 -m compileall -q \
+            tools/rescue_batch_pdf_v1.py \
+            tools/test_rescue_batch_pdf_v1.py \
+            tools/rescue_batch_pdf_real_cli_acceptance.py \
+            tools/test_rescue_batch_pdf_real_cli_acceptance.py
+      - name: Run source-free synthetic batch tests
+        run: python3 -m unittest discover -s tools -p test_rescue_batch_pdf_v1.py -v
+      - name: Run real CLI acceptance adapter contracts with fake CLI
+        run: python3 -m unittest discover -s tools -p test_rescue_batch_pdf_real_cli_acceptance.py -v
+
+  compiled-pub-cli-and-public-fixture:
+    name: Real PUB CLI → PDF batch/resume/ZIP, Apache sample
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install the same Rust toolchain as the existing Free PUB PDF CLI proof
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+      - name: Build actual existing Publisher-to-PDF CLI
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
+      - name: Materialize existing pinned explicit fallback font
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -q -p chaptera-desktop-fallback-font-resource \
+            --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+      - name: Acquire exact public Apache POI Publisher fixture with SHA/size fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --retry 2 \
+            'https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub' \
+            --output "$RUNNER_TEMP/SampleNewsletter.pub"
+          test "$(sha256sum "$RUNNER_TEMP/SampleNewsletter.pub" | cut -d' ' -f1)" = \
+            '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf'
+          test "$(wc -c < "$RUNNER_TEMP/SampleNewsletter.pub" | tr -d ' ')" = '291840'
+      - name: Validate the actual compiled CLI through batch, reuse, sidecar tamper and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/rescue_batch_pdf_real_cli_acceptance.py \
+            --source "$RUNNER_TEMP/SampleNewsletter.pub" \
+            --source-sha256 '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf' \
+            --font "$RUNNER_TEMP/chaptera-fallback.ttf" \
+            --pub-cli vendor/producer-a/target/debug/pub \
+            --receipt "$RUNNER_TEMP/rescue-batch-real-cli-acceptance.json"
+      - name: Upload only source-safe digest receipt, never PUB/PDF/font outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-batch-real-cli-acceptance-v1
+          path: ${{ runner.temp }}/rescue-batch-real-cli-acceptance.json
+          if-no-files-found: error
+          retention-days: 14

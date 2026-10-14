@@ -5,21 +5,35 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_5, EDITOR_PROJECT_VERSION_V0_6, EDITOR_PROJECT_VERSION_V0_7,
     EDITOR_PROJECT_VERSION_V0_8, EDITOR_PROJECT_VERSION_V0_9, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13,
-    EditOperation, EditorProject, Sha256Digest, open_mature_0x2c_editor,
+    EDITOR_PROJECT_VERSION_V0_14, EDITOR_PROJECT_VERSION_V0_15, EDITOR_PROJECT_VERSION_V0_16,
+    EDITOR_PROJECT_VERSION_V0_17, EDITOR_PROJECT_VERSION_V0_18, EDITOR_PROJECT_VERSION_V0_19,
+    EDITOR_PROJECT_VERSION_V0_20, EDITOR_PROJECT_VERSION_V0_21, EDITOR_PROJECT_VERSION_V0_22,
+    EDITOR_PROJECT_VERSION_V0_23, EDITOR_PROJECT_VERSION_V0_24, EDITOR_PROJECT_VERSION_V0_25,
+    EDITOR_PROJECT_VERSION_V0_26, EDITOR_PROJECT_VERSION_V0_27, EDITOR_PROJECT_VERSION_V0_28,
+    EDITOR_PROJECT_VERSION_V0_29, EDITOR_PROJECT_VERSION_V0_30, EDITOR_PROJECT_VERSION_V0_31,
+    EDITOR_PROJECT_VERSION_V0_32, EditOperation, EditorProject, Sha256Digest,
+    open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     blob_store::BlobStoreService,
+    product_replay_worker::IsolatedProductReplayProducer,
+    source_baseline::{
+        derive_authoring_state_identity, derive_history_revision_identities,
+        derive_import_baseline_identities,
+    },
     sqlite_store::{
         RevisionEdge, SqliteRevisionStore, decode_canonical_event, encode_canonical_event,
     },
 };
 
 pub const EDITOR_REVISION_EVENT_SCHEMA_V1: &str = "chaptera.editor-revision-event.v1";
+pub const EDITOR_HISTORY_EVENT_SCHEMA_V1: &str = "chaptera.editor-history-event.v1";
 pub const MATERIALIZATION_RECEIPT_SCHEMA_V1: &str = "chaptera.exact-revision-materialization.v1";
 pub const EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION: i64 = 1;
+pub const EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionMaterializerError {
@@ -183,17 +197,23 @@ impl EditorReplayEngine for PubEditorReplayEngine {
         }
 
         let mut session = Self::open(source_bytes, source_sha256)?;
-        session.apply_project(project).map_err(|error| {
+        let mut local_replay = project.clone();
+        if local_replay.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_replay.schema_version)
+        {
+            local_replay.identity = session.project().identity;
+        }
+        session.apply_project(&local_replay).map_err(|error| {
             RevisionMaterializerError::new(
                 "editor_replay_rejected",
                 format!("canonical EditorSession rejected persisted project replay: {error}"),
             )
         })?;
-        let replayed = session.project();
+        let replayed = cloud_revision_project(&session.project());
         if replayed != *project {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
-                "canonical EditorSession replay did not reproduce the exact persisted EditorProject",
+                "canonical EditorSession replay did not reproduce the exact Cloud semantic EditorProject",
             ));
         }
         Ok(replayed)
@@ -207,6 +227,21 @@ pub struct EditorRevisionEventV1 {
     pub source_sha256: String,
     pub before_project_sha256: String,
     pub after_project_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoring_root_hash: Option<String>,
+    pub operation: EditOperation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorHistoryEventV1 {
+    pub schema_version: String,
+    pub source_sha256: String,
+    pub transition_kind: String,
+    pub before_project_sha256: String,
+    pub after_project_sha256: String,
+    pub base_state_id: String,
+    pub resulting_state_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoring_root_hash: Option<String>,
     pub operation: EditOperation,
@@ -242,6 +277,7 @@ pub struct ExactRevisionMaterializer {
     source_loader: Arc<dyn ExactSourceLoader>,
     revision_store: SqliteRevisionStore,
     editor: Arc<dyn EditorReplayEngine>,
+    isolated_replay: Option<IsolatedProductReplayProducer>,
 }
 
 impl ExactRevisionMaterializer {
@@ -256,7 +292,14 @@ impl ExactRevisionMaterializer {
             source_loader,
             revision_store,
             editor,
+            isolated_replay: None,
         }
+    }
+
+    /// The configured production server always supplies this before serving.
+    /// Existing injected mock materializers retain an in-process test mode.
+    pub fn set_isolated_replay(&mut self, producer: IsolatedProductReplayProducer) {
+        self.isolated_replay = Some(producer);
     }
 
     pub async fn materialize(
@@ -303,14 +346,18 @@ impl ExactRevisionMaterializer {
         }
 
         let mut current_project = self
-            .editor
-            .baseline_project(&source_bytes, &source.source_sha256)?;
+            .baseline_project_authoritative(&source_bytes, &source)
+            .await?;
         require_project_source(&current_project, &source.source_sha256)?;
         if !current_project.assets.is_empty() {
             return Err(RevisionMaterializerError::new(
                 "editor_asset_replay_unsupported",
                 "baseline project contains asset metadata without a materialization asset resolver",
             ));
+        }
+
+        if self.isolated_replay.is_some() {
+            require_isolated_baseline_binding(&source, &current_project)?;
         }
 
         let edges = self
@@ -326,7 +373,9 @@ impl ExactRevisionMaterializer {
 
         let mut authoring_root_hash = None;
         for edge in &edges {
-            current_project = self.replay_edge(&source_bytes, &source, current_project, edge)?;
+            current_project = self
+                .replay_edge(&source_bytes, &source, current_project, edge)
+                .await?;
             authoring_root_hash = edge.authoring_root_hash.clone();
         }
 
@@ -358,7 +407,51 @@ impl ExactRevisionMaterializer {
         })
     }
 
-    fn replay_edge(
+    async fn baseline_project_authoritative(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        if let Some(worker) = &self.isolated_replay {
+            worker
+                .baseline_project(&source.document_id, &source.source_sha256, source_bytes)
+                .await
+                .map_err(|error| RevisionMaterializerError::new(error.code, error.message))
+        } else {
+            self.editor
+                .baseline_project(source_bytes, &source.source_sha256)
+        }
+    }
+
+    /// All canonical project replay in the configured Product service is
+    /// performed by a fresh isolated worker. The host retains durable
+    /// RevisionStream identity checks and applies no PUB parser itself.
+    async fn replay_project_authoritative(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+        project: &EditorProject,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        if let Some(worker) = &self.isolated_replay {
+            let expected_hash = project_sha256(project)?;
+            worker
+                .project_authoring_graph(
+                    &source.document_id,
+                    &source.source_sha256,
+                    source_bytes,
+                    project,
+                    &expected_hash,
+                )
+                .await
+                .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+            Ok(project.clone())
+        } else {
+            self.editor
+                .replay_project(source_bytes, &source.source_sha256, project)
+        }
+    }
+
+    async fn replay_edge(
         &self,
         source_bytes: &[u8],
         source: &AuthorizedDocumentSource,
@@ -371,11 +464,16 @@ impl ExactRevisionMaterializer {
                 "RevisionStream edge belongs to a different document",
             ));
         }
+        if edge.semantic_schema_version == EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION {
+            return self
+                .replay_history_edge_v2(source_bytes, source, current_project, edge)
+                .await;
+        }
         if edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION {
             return Err(RevisionMaterializerError::new(
                 "unsupported_event_schema",
                 format!(
-                    "semantic schema version {} is not supported by exact materialization V1",
+                    "semantic schema version {} is not supported by exact materialization",
                     edge.semantic_schema_version
                 ),
             ));
@@ -410,9 +508,9 @@ impl ExactRevisionMaterializer {
         }
 
         let candidate = append_event_operation(current_project, event.operation)?;
-        let replayed =
-            self.editor
-                .replay_project(source_bytes, &source.source_sha256, &candidate)?;
+        let replayed = self
+            .replay_project_authoritative(source_bytes, source, &candidate)
+            .await?;
         if replayed != candidate {
             return Err(RevisionMaterializerError::new(
                 "editor_replay_mismatch",
@@ -431,6 +529,119 @@ impl ExactRevisionMaterializer {
             return Err(RevisionMaterializerError::new(
                 "revision_state_hash_mismatch",
                 "durable RevisionStream resulting_state_hash does not match canonical replay",
+            ));
+        }
+
+        Ok(replayed)
+    }
+
+    async fn replay_history_edge_v2(
+        &self,
+        source_bytes: &[u8],
+        source: &AuthorizedDocumentSource,
+        current_project: EditorProject,
+        edge: &RevisionEdge,
+    ) -> Result<EditorProject, RevisionMaterializerError> {
+        let event = decode_editor_history_event_v1(edge)?;
+        if event.source_sha256 != source.source_sha256 {
+            return Err(RevisionMaterializerError::new(
+                "event_source_mismatch",
+                "history event is bound to a different immutable source",
+            ));
+        }
+        if event.authoring_root_hash != edge.authoring_root_hash {
+            return Err(RevisionMaterializerError::new(
+                "authoring_root_mismatch",
+                "history event authoring root does not match the durable RevisionStream edge",
+            ));
+        }
+
+        let before_hash = project_sha256(&current_project)?;
+        if event.before_project_sha256 != before_hash {
+            return Err(RevisionMaterializerError::new(
+                "before_state_mismatch",
+                "history event before-project hash does not match the materialized predecessor state",
+            ));
+        }
+        let base_state = derive_authoring_state_identity(
+            &edge.document_id,
+            &source.source_sha256,
+            &current_project.schema_version,
+            &current_project,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if event.base_state_id != base_state.state_id {
+            return Err(RevisionMaterializerError::new(
+                "history_base_state_mismatch",
+                "history event base_state_id does not match the materialized predecessor state",
+            ));
+        }
+
+        // The history event is immutable, source-bound and predecessor-hash bound.
+        // Redo applies only the exact operation carried by a prior Undo.
+        let candidate = match event.transition_kind.as_str() {
+            "undo" => undo_event_operation(current_project, &event.operation)?,
+            "redo" => append_event_operation(current_project, event.operation.clone())?,
+            _ => {
+                return Err(RevisionMaterializerError::new(
+                    "unsupported_history_transition",
+                    "durable history supports bounded undo and redo only",
+                ));
+            }
+        };
+        let replayed = self
+            .replay_project_authoritative(source_bytes, source, &candidate)
+            .await?;
+        if replayed != candidate {
+            return Err(RevisionMaterializerError::new(
+                "editor_replay_mismatch",
+                "canonical editor replay returned a different project after durable undo",
+            ));
+        }
+
+        let after_hash = project_sha256(&replayed)?;
+        if event.after_project_sha256 != after_hash {
+            return Err(RevisionMaterializerError::new(
+                "event_state_hash_mismatch",
+                "history event after-project hash does not match canonical replay",
+            ));
+        }
+        if edge.resulting_state_hash != after_hash {
+            return Err(RevisionMaterializerError::new(
+                "revision_state_hash_mismatch",
+                "durable RevisionStream resulting_state_hash does not match canonical undo replay",
+            ));
+        }
+
+        let resulting_state = derive_authoring_state_identity(
+            &edge.document_id,
+            &source.source_sha256,
+            &replayed.schema_version,
+            &replayed,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if event.resulting_state_id != resulting_state.state_id {
+            return Err(RevisionMaterializerError::new(
+                "history_resulting_state_mismatch",
+                "history event resulting_state_id does not match canonical undo replay",
+            ));
+        }
+        let identities = derive_history_revision_identities(
+            &edge.document_id,
+            &source.source_sha256,
+            &replayed.schema_version,
+            &replayed,
+            &edge.parent_revision,
+            &event.base_state_id,
+            &event.transition_kind,
+        )
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+        if identities.state_id != event.resulting_state_id
+            || identities.service_revision_id != edge.child_revision
+        {
+            return Err(RevisionMaterializerError::new(
+                "history_revision_identity_mismatch",
+                "durable history edge differs from the canonical history-transition revision law",
             ));
         }
 
@@ -462,6 +673,30 @@ pub fn decode_editor_revision_event_v1(
     Ok(event)
 }
 
+pub fn encode_editor_history_event_v1(
+    event: &EditorHistoryEventV1,
+) -> Result<Vec<u8>, RevisionMaterializerError> {
+    validate_history_event_fields(event)?;
+    let payload = canonical_json_bytes(event, "event_encode_failed", "editor history event")?;
+    encode_canonical_event(&payload)
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))
+}
+
+pub fn decode_editor_history_event_v1(
+    edge: &RevisionEdge,
+) -> Result<EditorHistoryEventV1, RevisionMaterializerError> {
+    let payload = decode_canonical_event(&edge.canonical_event)
+        .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+    let event: EditorHistoryEventV1 = serde_json::from_slice(&payload).map_err(|error| {
+        RevisionMaterializerError::new(
+            "event_decode_failed",
+            format!("canonical RevisionStream event is not supported history-event JSON: {error}"),
+        )
+    })?;
+    validate_history_event_fields(&event)?;
+    Ok(event)
+}
+
 /// Project view used by Cloud revision identity/replay.
 ///
 /// EditorProject v0.11 adds local project/document/history lineage. Those UUIDs
@@ -475,6 +710,34 @@ pub fn cloud_revision_project(project: &EditorProject) -> EditorProject {
     projected
 }
 
+pub(crate) fn cloud_replay_requires_local_identity(schema_version: &str) -> bool {
+    [
+        EDITOR_PROJECT_VERSION_V0_11,
+        EDITOR_PROJECT_VERSION_V0_12,
+        EDITOR_PROJECT_VERSION_V0_13,
+        EDITOR_PROJECT_VERSION_V0_14,
+        EDITOR_PROJECT_VERSION_V0_15,
+        EDITOR_PROJECT_VERSION_V0_16,
+        EDITOR_PROJECT_VERSION_V0_17,
+        EDITOR_PROJECT_VERSION_V0_18,
+        EDITOR_PROJECT_VERSION_V0_19,
+        EDITOR_PROJECT_VERSION_V0_20,
+        EDITOR_PROJECT_VERSION_V0_21,
+        EDITOR_PROJECT_VERSION_V0_22,
+        EDITOR_PROJECT_VERSION_V0_23,
+        EDITOR_PROJECT_VERSION_V0_24,
+        EDITOR_PROJECT_VERSION_V0_25,
+        EDITOR_PROJECT_VERSION_V0_26,
+        EDITOR_PROJECT_VERSION_V0_27,
+        EDITOR_PROJECT_VERSION_V0_28,
+        EDITOR_PROJECT_VERSION_V0_29,
+        EDITOR_PROJECT_VERSION_V0_30,
+        EDITOR_PROJECT_VERSION_V0_31,
+        EDITOR_PROJECT_VERSION_V0_32,
+    ]
+    .contains(&schema_version)
+}
+
 fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     let mut rank = if project.table_grids.is_empty() {
         2_u8
@@ -484,6 +747,31 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::DeleteAuthoredRectanglesPageV1 { .. } => 32,
+            EditOperation::DuplicateAuthoredRectanglesPageV1 { .. } => 31,
+            EditOperation::DuplicateAuthoredRectanglePageV1 { .. } => 30,
+            EditOperation::DeleteAuthoredRectanglePageV1 { .. } => 29,
+            EditOperation::InsertBlankPageAfterV1 { .. } => 28,
+            EditOperation::DuplicateBlankPageV1 { .. } => 27,
+            EditOperation::DeleteBlankAuthoredPageV1 { .. } => 26,
+            EditOperation::AppendBlankPageV1 { .. } => 25,
+            EditOperation::RegisterAuthoredPageIdentityV1 { .. } => 24,
+            EditOperation::ReorderPagesV1 { .. } => 23,
+            EditOperation::LinkTextFrameTail { .. } => 22,
+            EditOperation::InsertTableRow { .. }
+            | EditOperation::DeleteTableRow { .. }
+            | EditOperation::InsertTableColumn { .. }
+            | EditOperation::DeleteTableColumn { .. } => 21,
+            EditOperation::SetTableTrackExtent { .. } => 20,
+            EditOperation::SetImageCrop { .. } => 19,
+            EditOperation::CreateTable { .. } => 18,
+            EditOperation::CreateLine { .. } => 17,
+            EditOperation::SetTextFormatPropertyScopedV1 { .. }
+            | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. } => 16,
+            EditOperation::SetParagraphAlignmentOverride { .. }
+            | EditOperation::ClearParagraphAlignmentOverride { .. } => 15,
+            EditOperation::SetTextFormatProperty { .. }
+            | EditOperation::ClearTextFormatPropertyOverride { .. } => 14,
             EditOperation::ReorderAuthoredStack { .. } => 13,
             EditOperation::DeleteNode { .. } => 12,
             EditOperation::CreateTextBox { .. } => 11,
@@ -502,6 +790,25 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        32 => EDITOR_PROJECT_VERSION_V0_32,
+        31 => EDITOR_PROJECT_VERSION_V0_31,
+        30 => EDITOR_PROJECT_VERSION_V0_30,
+        29 => EDITOR_PROJECT_VERSION_V0_29,
+        28 => EDITOR_PROJECT_VERSION_V0_28,
+        27 => EDITOR_PROJECT_VERSION_V0_27,
+        26 => EDITOR_PROJECT_VERSION_V0_26,
+        25 => EDITOR_PROJECT_VERSION_V0_25,
+        24 => EDITOR_PROJECT_VERSION_V0_24,
+        23 => EDITOR_PROJECT_VERSION_V0_23,
+        22 => EDITOR_PROJECT_VERSION_V0_22,
+        21 => EDITOR_PROJECT_VERSION_V0_21,
+        20 => EDITOR_PROJECT_VERSION_V0_20,
+        19 => EDITOR_PROJECT_VERSION_V0_19,
+        18 => EDITOR_PROJECT_VERSION_V0_18,
+        17 => EDITOR_PROJECT_VERSION_V0_17,
+        16 => EDITOR_PROJECT_VERSION_V0_16,
+        15 => EDITOR_PROJECT_VERSION_V0_15,
+        14 => EDITOR_PROJECT_VERSION_V0_14,
         13 => EDITOR_PROJECT_VERSION_V0_13,
         12 => EDITOR_PROJECT_VERSION_V0_12,
         11 => EDITOR_PROJECT_VERSION_V0_11,
@@ -546,7 +853,7 @@ fn canonical_json_bytes<T: Serialize>(
     })
 }
 
-fn append_event_operation(
+pub(crate) fn append_event_operation(
     mut project: EditorProject,
     operation: EditOperation,
 ) -> Result<EditorProject, RevisionMaterializerError> {
@@ -559,6 +866,71 @@ fn append_event_operation(
     }
     project.operations.push(operation);
     Ok(cloud_revision_project(&project))
+}
+
+pub(crate) fn undo_event_operation(
+    mut project: EditorProject,
+    operation: &EditOperation,
+) -> Result<EditorProject, RevisionMaterializerError> {
+    require_project_source(&project, &project.source_hash.to_string())?;
+    if !project.assets.is_empty() {
+        return Err(RevisionMaterializerError::new(
+            "editor_asset_replay_unsupported",
+            "EditorProject asset metadata requires a separate immutable asset resolver",
+        ));
+    }
+    let Some(last) = project.operations.last() else {
+        return Err(RevisionMaterializerError::new(
+            "history_undo_empty",
+            "durable undo requires one canonical operation in current project history",
+        ));
+    };
+    if last != operation {
+        return Err(RevisionMaterializerError::new(
+            "history_undo_operation_mismatch",
+            "durable undo event does not match the latest canonical project operation",
+        ));
+    }
+    project.operations.pop();
+    Ok(cloud_revision_project(&project))
+}
+
+fn validate_history_event_fields(
+    event: &EditorHistoryEventV1,
+) -> Result<(), RevisionMaterializerError> {
+    if event.schema_version != EDITOR_HISTORY_EVENT_SCHEMA_V1 {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_event_schema",
+            format!(
+                "unsupported editor history event schema {:?}",
+                event.schema_version
+            ),
+        ));
+    }
+    if !matches!(event.transition_kind.as_str(), "undo" | "redo") {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_history_transition",
+            "materialization V2 admits bounded durable undo and redo only",
+        ));
+    }
+    if !matches!(
+        event.operation,
+        EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+    ) {
+        return Err(RevisionMaterializerError::new(
+            "unsupported_history_operation",
+            "durable history V2 admits MoveNode or plain StoryRange history only",
+        ));
+    }
+    require_sha256(&event.source_sha256, "event.source_sha256")?;
+    require_sha256(&event.before_project_sha256, "event.before_project_sha256")?;
+    require_sha256(&event.after_project_sha256, "event.after_project_sha256")?;
+    require_prefixed_sha256(&event.base_state_id, "event.base_state_id")?;
+    require_prefixed_sha256(&event.resulting_state_id, "event.resulting_state_id")?;
+    if let Some(root) = &event.authoring_root_hash {
+        require_sha256(root, "event.authoring_root_hash")?;
+    }
+    Ok(())
 }
 
 fn validate_event_fields(event: &EditorRevisionEventV1) -> Result<(), RevisionMaterializerError> {
@@ -657,6 +1029,19 @@ fn require_sha256(value: &str, field: &'static str) -> Result<(), RevisionMateri
     Ok(())
 }
 
+fn require_prefixed_sha256(
+    value: &str,
+    field: &'static str,
+) -> Result<(), RevisionMaterializerError> {
+    let Some(raw) = value.strip_prefix("sha256:") else {
+        return Err(RevisionMaterializerError::new(
+            "invalid_hash",
+            format!("{field} must use sha256: identity syntax"),
+        ));
+    };
+    require_sha256(raw, field)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
@@ -665,4 +1050,187 @@ fn sha256_hex(bytes: &[u8]) -> String {
         write!(&mut out, "{byte:02x}").expect("writing SHA-256 hex into String cannot fail");
     }
     out
+}
+
+fn require_isolated_baseline_binding(
+    source: &AuthorizedDocumentSource,
+    project: &EditorProject,
+) -> Result<(), RevisionMaterializerError> {
+    // A self-consistent receipt can still be malicious: bind its canonical
+    // baseline project to the immutable upload's *previously authorized*
+    // RevisionStream identity without parsing PUB in the host.
+    let baseline = derive_import_baseline_identities(
+        &source.document_id,
+        &source.source_sha256,
+        &project.schema_version,
+        project,
+    )
+    .map_err(|error| RevisionMaterializerError::new(error.code, error.message))?;
+    if baseline.service_revision_id != source.baseline_revision_id {
+        return Err(RevisionMaterializerError::new(
+            "isolated_baseline_identity_mismatch",
+            "isolated baseline does not match durable SourceAuthority identity",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod replay_identity_tests {
+    use super::*;
+
+    #[test]
+    fn isolated_baseline_must_match_durable_import_revision_even_if_hashes_are_consistent() {
+        let source_sha256 = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": source_sha256,
+            "operations": []
+        }))
+        .unwrap();
+        let identity = derive_import_baseline_identities(
+            "document-baseline",
+            source_sha256,
+            &project.schema_version,
+            &project,
+        )
+        .unwrap();
+        let mut source = AuthorizedDocumentSource {
+            tenant_id: "tenant-a".into(),
+            document_id: "document-baseline".into(),
+            binding_id: "binding-a".into(),
+            source_sha256: source_sha256.into(),
+            byte_len: 42,
+            baseline_revision_id: identity.service_revision_id,
+            baseline_cursor: 0,
+        };
+        require_isolated_baseline_binding(&source, &project).unwrap();
+
+        // A malicious response could recompute its own project/graph hashes.
+        // Only the durable import receipt decides the allowed baseline.
+        source.baseline_revision_id = format!("sha256:{}", "0".repeat(64));
+        assert_eq!(
+            require_isolated_baseline_binding(&source, &project)
+                .unwrap_err()
+                .code,
+            "isolated_baseline_identity_mismatch"
+        );
+    }
+
+    #[test]
+    fn durable_undo_rejects_empty_project_history() {
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.2",
+            "source_hash": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            "operations": []
+        }))
+        .unwrap();
+        let operation: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "move_node",
+            "node_id": "00000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 100, "height": 100},
+            "after": {"x": 10, "y": 20, "width": 100, "height": 100}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            undo_event_operation(project, &operation).unwrap_err().code,
+            "history_undo_empty"
+        );
+    }
+
+    #[test]
+    fn durable_undo_pops_only_the_exact_latest_canonical_operation() {
+        let operation: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "move_node",
+            "node_id": "00000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 100, "height": 100},
+            "after": {"x": 10, "y": 20, "width": 100, "height": 100}
+        }))
+        .unwrap();
+        let project: EditorProject = serde_json::from_value(serde_json::json!({
+            "schema_version": "pub-editor-v0.4",
+            "source_hash": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            "operations": [operation.clone()]
+        }))
+        .unwrap();
+
+        let undone = undo_event_operation(project, &operation).unwrap();
+        assert!(undone.operations.is_empty());
+        assert_eq!(undone.schema_version, EDITOR_PROJECT_VERSION_V0_2);
+    }
+
+    #[test]
+    fn durable_history_event_admits_plain_story_range_but_rejects_other_text_operations() {
+        let story_range: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_range",
+            "story_id": "40000000-0000-4000-8000-000000000001",
+            "start_scalar": 0,
+            "end_scalar": 1,
+            "expected_before": "A",
+            "replacement_text": "B",
+            "before_story_state_id": format!("sha256:{}", "1".repeat(64)),
+            "after_story_state_id": format!("sha256:{}", "2".repeat(64))
+        }))
+        .unwrap();
+        let event = EditorHistoryEventV1 {
+            schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
+            source_sha256: "a".repeat(64),
+            transition_kind: "undo".to_owned(),
+            before_project_sha256: "b".repeat(64),
+            after_project_sha256: "c".repeat(64),
+            base_state_id: format!("sha256:{}", "d".repeat(64)),
+            resulting_state_id: format!("sha256:{}", "e".repeat(64)),
+            authoring_root_hash: None,
+            operation: story_range,
+        };
+
+        assert!(validate_history_event_fields(&event).is_ok());
+
+        let mut unsupported = event;
+        unsupported.operation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_text",
+            "story_id": "40000000-0000-4000-8000-000000000001",
+            "before": "A",
+            "after": "B"
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_history_event_fields(&unsupported)
+                .unwrap_err()
+                .code,
+            "unsupported_history_operation"
+        );
+    }
+
+    #[test]
+    fn local_identity_rehydration_starts_at_v011() {
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_2
+        ));
+        assert!(!cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_10
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_11
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_20
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_21
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_29
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_30
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_31
+        ));
+        assert!(cloud_replay_requires_local_identity(
+            EDITOR_PROJECT_VERSION_V0_32
+        ));
+    }
 }

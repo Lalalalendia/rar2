@@ -121,6 +121,62 @@ def main() -> int:
             )
 
     reader_ci = Path('.github/workflows/reader-pr-ci.yml').read_text(encoding='utf-8')
+
+    reader_smoke_section = reader_ci.split('\n  reader-windows-smoke:\n', 1)[1].split(
+        '\n  reader-windows:\n', 1
+    )[0]
+    if "reader_windows_smoke == 'true'" not in reader_smoke_section:
+        violations.append(
+            'reader-pr-ci.yml: Reader Windows shared-core smoke lost classifier ownership'
+        )
+    if "visual_oracle != 'true'" not in reader_smoke_section:
+        violations.append(
+            'reader-pr-ci.yml: standalone shared-core smoke must be suppressed when visual oracle owns the combined Windows job'
+        )
+
+    visual_section = reader_ci.split('\n  visual-oracle:\n', 1)[1].split(
+        '\n  cloud-reference:\n', 1
+    )[0]
+    if (
+        "run_windows_shared_core_smoke: "
+        "${{ needs.classify.outputs.reader_windows_smoke == 'true' }}"
+        not in visual_section
+    ):
+        violations.append(
+            'reader-pr-ci.yml: visual oracle must consume the shared-core smoke classifier bit'
+        )
+
+    smoke_workflow = Path(
+        '.github/workflows/chaptera-reader-windows-smoke.yml'
+    ).read_text(encoding='utf-8')
+    for invariant in (
+        'CARGO_TARGET_DIR: target/reader-fidelity-win',
+        'reader-fidelity-win-v1-',
+        'mature_officeart_wmf_exact_product_tests',
+        'Run bounded Reader product and real-PUB smoke',
+    ):
+        if invariant not in smoke_workflow:
+            violations.append(
+                'chaptera-reader-windows-smoke.yml: missing parallel evidence invariant '
+                f'{invariant}'
+            )
+
+    visual_workflow = Path(
+        '.github/workflows/carlton-reader-visual-oracle.yml'
+    ).read_text(encoding='utf-8')
+    for invariant in (
+        'run_windows_shared_core_smoke:',
+        'chaptera.reader-windows-shared-core-smoke.v1',
+        'chaptera-reader-windows-shared-core-smoke',
+        'mature_officeart_wmf_exact_product_tests',
+        'Run bounded Reader product and real-PUB smoke',
+    ):
+        if invariant not in visual_workflow:
+            violations.append(
+                'carlton-reader-visual-oracle.yml: missing combined shared-core evidence invariant '
+                f'{invariant}'
+            )
+
     reusable = sorted(set(REUSABLE_USE.findall(reader_ci)))
     for raw in reusable:
         text = Path(raw).read_text(encoding='utf-8')

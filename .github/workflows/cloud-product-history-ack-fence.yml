@@ -1,0 +1,38 @@
+name: Cloud Product history ACK reconciliation fence
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/rich-reader-editor-shell-v1.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.test.mjs"
+      - "apps/web/product-editor-entry-v1.mjs"
+      - "apps/web/product-editor-entry-v1.test.mjs"
+      - "apps/web/product-editor.html"
+      - ".github/workflows/cloud-product-history-ack-fence.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  exact-history-reconciliation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate Product shell syntax
+        run: |
+          node --check apps/web/rich-reader-editor-shell-v1.mjs
+          node --check apps/web/product-editor-entry-v1.mjs
+      - name: Prove lost Undo and Redo ACK fences and Product status
+        run: |
+          node --test \
+            apps/web/rich-reader-editor-shell-v1.test.mjs \
+            apps/web/product-editor-entry-v1.test.mjs

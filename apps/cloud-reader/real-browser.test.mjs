@@ -17,6 +17,66 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function pngDimensions(png) {
+  assert.ok(Buffer.isBuffer(png) && png.length >= 24, "PNG capture must contain IHDR");
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "PNG signature drift");
+  assert.equal(png.subarray(12, 16).toString("ascii"), "IHDR", "PNG IHDR drift");
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  assert.ok(width > 0 && height > 0, "PNG capture dimensions must be positive");
+  return { width, height };
+}
+
+async function captureSvgScreenshotState(pageSvg) {
+  return pageSvg.evaluate((svg) => {
+    const rect = svg.getBoundingClientRect();
+    const viewBox = svg.viewBox?.baseVal ?? null;
+    const screenCtm = typeof svg.getScreenCTM === "function" ? svg.getScreenCTM() : null;
+    const viewport = window.visualViewport;
+    const number = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+    return {
+      device_pixel_ratio: number(window.devicePixelRatio),
+      scroll_x: number(window.scrollX),
+      scroll_y: number(window.scrollY),
+      inner_width: number(window.innerWidth),
+      inner_height: number(window.innerHeight),
+      visual_viewport: viewport ? {
+        width: number(viewport.width),
+        height: number(viewport.height),
+        scale: number(viewport.scale),
+        offset_left: number(viewport.offsetLeft),
+        offset_top: number(viewport.offsetTop),
+        page_left: number(viewport.pageLeft),
+        page_top: number(viewport.pageTop)
+      } : null,
+      svg_rect: {
+        x: number(rect.x),
+        y: number(rect.y),
+        width: number(rect.width),
+        height: number(rect.height),
+        top: number(rect.top),
+        right: number(rect.right),
+        bottom: number(rect.bottom),
+        left: number(rect.left)
+      },
+      view_box: viewBox ? {
+        x: number(viewBox.x),
+        y: number(viewBox.y),
+        width: number(viewBox.width),
+        height: number(viewBox.height)
+      } : null,
+      screen_ctm: screenCtm ? {
+        a: number(screenCtm.a),
+        b: number(screenCtm.b),
+        c: number(screenCtm.c),
+        d: number(screenCtm.d),
+        e: number(screenCtm.e),
+        f: number(screenCtm.f)
+      } : null
+    };
+  });
+}
 const defaultFixtures = [
   { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
   { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
@@ -25,6 +85,25 @@ const manifestPath = process.env.READER_REAL_MANIFEST ? resolve(process.env.READ
 const fixtures = manifestPath
   ? JSON.parse(await readFile(manifestPath, "utf8")).fixtures
   : defaultFixtures;
+// Explicit proof mode: an ephemeral Scene obtained from the real HTTPS guest
+// server and its host-owned decoder boundary, NEVER a raw worker result.
+// The existing corpus path remains unchanged without this env variable.
+const acceptedScenePath = process.env.READER_ACCEPTED_SCENE_JSON
+  ? resolve(process.env.READER_ACCEPTED_SCENE_JSON)
+  : null;
+if (acceptedScenePath) {
+  assert.equal(fixtures.length, 1, "live accepted-scene proof must contain exactly one source");
+}
+// Optional physical 001/023 gate: require every host-admitted preview to paint
+// as a decoded, nonzero-sized SVG image in Chromium, not merely in the Scene.
+const requiredHostImageCount = process.env.READER_REQUIRED_PAINTED_HOST_IMAGES
+  ? Number(process.env.READER_REQUIRED_PAINTED_HOST_IMAGES)
+  : null;
+if (requiredHostImageCount !== null) {
+  assert.ok(acceptedScenePath, "host image paint proof requires a real host-accepted Scene");
+  assert.ok(Number.isSafeInteger(requiredHostImageCount) && requiredHostImageCount > 0 && requiredHostImageCount <= 96,
+    "host image paint count must be bounded and positive");
+}
 assert.ok(Array.isArray(fixtures) && fixtures.length > 0, "real fixture manifest must contain fixtures");
 for (const fixture of fixtures) {
   assert.match(fixture.name, /^[A-Za-z0-9._-]+$/, "fixture name must be path-safe");
@@ -72,6 +151,7 @@ assert.ok(Number.isInteger(workerCpuSeconds) && workerCpuSeconds >= 15 && worker
 assert.ok(Number.isInteger(workerAddressSpaceMb) && workerAddressSpaceMb >= 256 && workerAddressSpaceMb <= 1024, "worker address-space limit must be 256..1024 MiB");
 
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
+const corpusDiagnosticMode = process.env.READER_CORPUS_DIAGNOSTIC === "1";
 assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
   "reference raster DPI must be 0 or an integer in 72..300"
@@ -149,51 +229,76 @@ try {
     assert.equal(bytes.length, fixture.bytes);
     assert.equal(sha256(bytes), fixture.sha256);
     await writeFile(source, bytes);
-    const workerOutput = join(temporary, fixture.name + "-worker");
+    let receiptBytes;
+    let receipt;
     let isolation;
-    try {
-      const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
-        "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
-        "--address-space-mb", String(workerAddressSpaceMb),
-        "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
-        worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
-        { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
-      isolation = JSON.parse(stdout);
-      assert.equal(isolation.status, "success");
-      assert.equal(isolation.network_policy, "seccomp_default_deny");
-    } catch (error) {
-      if (!continueWorkerFailures || fixture.require_render === true) throw error;
-      let failure = null;
+    if (acceptedScenePath) {
+      const accepted = JSON.parse(await readFile(acceptedScenePath, "utf8"));
+      assert.equal(accepted.protocol_version, "chaptera.live-accepted-guest-scene.v1");
+      assert.equal(accepted.source_sha256, fixture.sha256);
+      assert.equal(accepted.source_byte_len, fixture.bytes);
+      assert.equal(accepted.isolated_guest_scene_count, 1, "HTTPS service must prove one isolated worker");
+      assert.match(accepted.session_id, /^guest:[a-zA-Z0-9_-]{16,}$/);
+      assert.ok(["supported", "partial"].includes(accepted.classification));
+      assert.equal(accepted.scene?.document_id, accepted.session_id);
+      assert.equal(accepted.scene?.source_hash, fixture.sha256);
+      assert.equal(accepted.scene?.scene_authority, "server_viewer_projection");
+      receipt = {
+        filesystem_confinement: true,
+        source_sha256: accepted.source_sha256,
+        source_byte_len: accepted.source_byte_len,
+        session_id: accepted.session_id,
+        classification: accepted.classification,
+        scene: accepted.scene
+      };
+      receiptBytes = Buffer.from(JSON.stringify(receipt), "utf8");
+      isolation = { network_policy: "seccomp_default_deny" };
+    } else {
+      const workerOutput = join(temporary, fixture.name + "-worker");
       try {
-        failure = JSON.parse(String(error.stdout ?? ""));
-      } catch {}
-      results.push({
-        fixture: fixture.name,
-        source_sha256: fixture.sha256,
-        source_byte_len: fixture.bytes,
-        classification: "unsupported",
-        terminal_code: "reader_worker_isolation_failed",
-        rendered: false,
-        worker_failure: failure ? {
-          status: failure.status ?? null,
-          exit_code: failure.exit_code ?? null,
-          timed_out: failure.timed_out ?? null,
-        } : null,
-        filesystem_confinement: null,
-        network_policy: failure?.network_policy ?? "seccomp_default_deny",
-        screenshots: []
-      });
-      console.log(JSON.stringify({
-        fixture: fixture.name,
-        classification: "unsupported",
-        terminal_code: "reader_worker_isolation_failed",
-        worker_exit_code: failure?.exit_code ?? null
-      }));
-      continue;
+        const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
+          "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
+          "--address-space-mb", String(workerAddressSpaceMb),
+          "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
+          worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
+          "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
+          { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
+        isolation = JSON.parse(stdout);
+        assert.equal(isolation.status, "success");
+        assert.equal(isolation.network_policy, "seccomp_default_deny");
+      } catch (error) {
+        if (!continueWorkerFailures || fixture.require_render === true) throw error;
+        let failure = null;
+        try {
+          failure = JSON.parse(String(error.stdout ?? ""));
+        } catch {}
+        results.push({
+          fixture: fixture.name,
+          source_sha256: fixture.sha256,
+          source_byte_len: fixture.bytes,
+          classification: "unsupported",
+          terminal_code: "reader_worker_isolation_failed",
+          rendered: false,
+          worker_failure: failure ? {
+            status: failure.status ?? null,
+            exit_code: failure.exit_code ?? null,
+            timed_out: failure.timed_out ?? null,
+          } : null,
+          filesystem_confinement: null,
+          network_policy: failure?.network_policy ?? "seccomp_default_deny",
+          screenshots: []
+        });
+        console.log(JSON.stringify({
+          fixture: fixture.name,
+          classification: "unsupported",
+          terminal_code: "reader_worker_isolation_failed",
+          worker_exit_code: failure?.exit_code ?? null
+        }));
+        continue;
+      }
+      receiptBytes = await readFile(join(workerOutput, "result.json"));
+      receipt = JSON.parse(receiptBytes);
     }
-    const receiptBytes = await readFile(join(workerOutput, "result.json"));
-    const receipt = JSON.parse(receiptBytes);
     assert.equal(receipt.filesystem_confinement, true);
     assert.equal(receipt.source_sha256, fixture.sha256);
     assert.equal(receipt.source_byte_len, fixture.bytes);
@@ -206,7 +311,7 @@ try {
         classification: receipt.classification,
         terminal_code: receipt.terminal_code ?? null,
         rendered: false,
-        worker_receipt_sha256: sha256(receiptBytes),
+        worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct",
         filesystem_confinement: true,
         network_policy: isolation.network_policy,
         screenshots: []
@@ -216,16 +321,58 @@ try {
       continue;
     }
     const scene = receipt.scene;
+    const sceneSha256 = sha256(Buffer.from(JSON.stringify(scene), "utf8"));
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
     if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
     await page.goto(origin);
     await page.locator("#pub-file").setInputFiles(source);
-    await page.locator("#open-file").click();
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator("#pages svg.page").count(), fixturePages);
+    let hostImagePaintProof = null;
+    if (requiredHostImageCount !== null) {
+      const admitted = (scene.resources ?? [])
+        .filter((resource) => ["image/png", "image/jpeg"].includes(resource.mime)
+          && resource.availability === "inline_data_url")
+        .map((resource) => resource.resource_id);
+      assert.equal(admitted.length, requiredHostImageCount,
+        "host image paint evidence must start with the exact admitted resource set");
+      assert.equal(new Set(admitted).size, requiredHostImageCount,
+        "host image paint evidence requires unique admitted resource identities");
+      const paintedIds = await page.locator("#pages svg image[data-resource-id]").evaluateAll(async (elements) => {
+        const ids = [];
+        for (const element of elements) {
+          const id = element.getAttribute("data-resource-id");
+          const href = element.getAttribute("href");
+          const bounds = element.getBoundingClientRect();
+          if (!id || !/^data:image\/(?:png|jpeg);base64,/.test(href ?? "")) {
+            throw new Error("Chromium image paint used an untrusted or unidentified source");
+          }
+          const bitmap = new Image();
+          bitmap.src = href;
+          await bitmap.decode();
+          if (bitmap.naturalWidth <= 0 || bitmap.naturalHeight <= 0
+            || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)
+            || bounds.width <= 0 || bounds.height <= 0) {
+            throw new Error("Host image resource did not decode with positive SVG paint dimensions");
+          }
+          ids.push(id);
+        }
+        return ids;
+      });
+      assert.ok(paintedIds.length >= requiredHostImageCount,
+        "Chromium must paint all host-accepted images, not just accept resource descriptors");
+      assert.deepEqual([...new Set(paintedIds)].sort(), [...admitted].sort(),
+        "all and only host-authorized image resource IDs must paint in Chromium");
+      hostImagePaintProof = {
+        admitted_image_resources: admitted.length,
+        painted_image_resources: new Set(paintedIds).size,
+        painted_svg_elements: paintedIds.length,
+        all_decoded_and_positive_geometry: true
+      };
+    }
     const expectedNodeOrderByPage = [...scene.pages]
       .sort((left, right) => left.order - right.order)
       .map((pageModel) => ({
@@ -243,23 +390,160 @@ try {
       expectedNodeOrderByPage,
       "browser must preserve server scene node order within each page"
     );
+    const browserPreviewCensus = await page.locator('[data-text-authority="browser-preview-only"]').evaluateAll((elements) => {
+      const kinds = new Set(["text_frame", "other_node_text", "table_cell"]);
+      const reasons = new Set([
+        "scene_layout_missing", "shared_plan_invalid", "server_layout_unavailable",
+        "base_font_unavailable", "span_font_unavailable", "span_font_fingerprint_mismatch",
+        "invalid_text_viewport", "table_cell_preview"
+      ]);
+      const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
+      const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
+      const paintBoundsEmu = [];
+      const pages = [...document.querySelectorAll("#pages svg.page")];
+      const pagePaintBoundsEmu = (element) => {
+        const svg = element.closest("svg.page");
+        const pageBounds = svg?.getBoundingClientRect() ?? null;
+        const paintBounds = element.getBoundingClientRect();
+        const viewBox = svg?.viewBox?.baseVal ?? null;
+        if (!svg || !pageBounds || !viewBox || pageBounds.width <= 0 || pageBounds.height <= 0
+            || viewBox.width <= 0 || viewBox.height <= 0) {
+          throw new Error("browser preview census cannot resolve canonical page geometry");
+        }
+        const scaleX = viewBox.width / pageBounds.width;
+        const scaleY = viewBox.height / pageBounds.height;
+        const x = viewBox.x + (paintBounds.left - pageBounds.left) * scaleX;
+        const y = viewBox.y + (paintBounds.top - pageBounds.top) * scaleY;
+        const width = paintBounds.width * scaleX;
+        const height = paintBounds.height * scaleY;
+        if (![x, y, width, height, scaleX, scaleY].every(Number.isFinite)
+            || width <= 0 || height <= 0 || scaleX <= 0 || scaleY <= 0) {
+          throw new Error("browser preview census produced invalid canonical paint bounds");
+        }
+        return {
+          x_emu: Math.round(x),
+          y_emu: Math.round(y),
+          width_emu: Math.round(width),
+          height_emu: Math.round(height)
+        };
+      };
+      for (const element of elements) {
+        const kind = element.getAttribute("data-preview-kind");
+        const reason = element.getAttribute("data-preview-reason");
+        const sizeSource = element.getAttribute("data-preview-size-source");
+        if (!kinds.has(kind) || !reasons.has(reason) || !sizeSources.has(sizeSource)) {
+          throw new Error("browser preview census has an unknown paint decision");
+        }
+        const page = pages.indexOf(element.closest("svg.page")) + 1;
+        if (page < 1) throw new Error("browser preview was not painted inside an SVG page");
+        for (const [counts, key] of [
+          [byKind, kind], [byReason, reason], [bySizeSource, sizeSource],
+          [byPage, String(page)], [byPageCause, page + "|" + kind + "|" + reason + "|" + sizeSource]
+        ]) counts[key] = (counts[key] ?? 0) + 1;
+        paintBoundsEmu.push({
+          page,
+          kind,
+          reason,
+          size_source: sizeSource,
+          ...pagePaintBoundsEmu(element)
+        });
+      }
+      return { total: elements.length, by_kind: byKind, by_reason: byReason,
+        by_size_source: bySizeSource, by_page: byPage, by_page_cause: byPageCause,
+        paint_bounds_emu: paintBoundsEmu };
+    });
+    assert.equal(
+      Object.values(browserPreviewCensus.by_kind).reduce((sum, count) => sum + count, 0),
+      browserPreviewCensus.total,
+      "browser preview census must count only actually painted preview elements"
+    );
+    assert.equal(
+      browserPreviewCensus.paint_bounds_emu.length,
+      browserPreviewCensus.total,
+      "browser preview census must locate every actually painted preview element"
+    );
+    for (const bounds of browserPreviewCensus.paint_bounds_emu) {
+      assert.ok(Number.isSafeInteger(bounds.page) && bounds.page > 0);
+      for (const key of ["x_emu", "y_emu", "width_emu", "height_emu"]) {
+        assert.ok(Number.isSafeInteger(bounds[key]), "browser preview canonical bounds must be integer EMU");
+      }
+      assert.ok(bounds.width_emu > 0 && bounds.height_emu > 0);
+    }
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
       const bounds = line.getBoundingClientRect();
-      return { node_id: line.closest("[data-node-id]").dataset.nodeId, index: Number(line.dataset.textLineIndex), text: line.textContent,
-        font_size: parseFloat(getComputedStyle(line).fontSize), height: bounds.height, width: bounds.width };
+      const node = line.closest("[data-node-id]");
+      const svg = line.closest("svg.page");
+      const pageBounds = svg?.getBoundingClientRect();
+      const viewBox = svg?.viewBox?.baseVal ?? null;
+      const pageScreenScale = pageBounds && viewBox && viewBox.width > 0 && viewBox.height > 0
+        ? Math.min(pageBounds.width / viewBox.width, pageBounds.height / viewBox.height)
+        : null;
+      const normalizedWidthPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.width / pageScreenScale / 9525
+        : bounds.width;
+      const normalizedHeightPx96 = pageScreenScale && pageScreenScale > 0
+        ? bounds.height / pageScreenScale / 9525
+        : bounds.height;
+      const ctm = typeof line.getCTM === "function" ? line.getCTM() : null;
+      const screenCtm = typeof line.getScreenCTM === "function" ? line.getScreenCTM() : null;
+      return {
+        node_id: node.dataset.nodeId,
+        index: Number(line.dataset.textLineIndex),
+        text: line.textContent,
+        font_size: parseFloat(getComputedStyle(line).fontSize),
+        height: bounds.height,
+        width: bounds.width,
+        normalized_width_px_96: normalizedWidthPx96,
+        normalized_height_px_96: normalizedHeightPx96,
+        page_screen_scale_px_per_emu: pageScreenScale,
+        node_transform: node.getAttribute("transform"),
+        ctm: ctm ? { a: ctm.a, b: ctm.b, c: ctm.c, d: ctm.d, e: ctm.e, f: ctm.f } : null,
+        screen_ctm: screenCtm ? { a: screenCtm.a, b: screenCtm.b, c: screenCtm.c, d: screenCtm.d, e: screenCtm.e, f: screenCtm.f } : null,
+        page: svg ? {
+          page_id: svg.dataset.pageId,
+          width_px: pageBounds?.width ?? null,
+          height_px: pageBounds?.height ?? null,
+          width_attr: svg.getAttribute("width"),
+          height_attr: svg.getAttribute("height"),
+          view_box: svg.getAttribute("viewBox")
+        } : null
+      };
     }));
     assert.equal(painted.length, expectedLines.length, "actual SharedResolved frames must use loaded fonts");
     if (fixture.require_shared_text === true) {
       assert.ok(painted.some((line) => line.text.trim()), "fixture marked require_shared_text must exercise shared text");
     }
+    const visualDegeneracies = [];
     for (const line of painted) {
       const expected = expectedLines.find((candidate) => candidate.node_id === line.node_id && candidate.index === line.index);
       assert.ok(expected);
       assert.equal(line.text, expected.text, "server line breaks/content must survive painting");
       assert.ok(Math.abs(line.font_size - expected.font_size) < 0.001, "real shared font must not be browser-clamped");
-      if (line.text.trim()) assert.ok(line.height >= 5 && line.width >= 1, "shared text must not collapse to tiny specks");
+      // U+200B is the bounded render-only replacement for a projected Cmo
+      // object marker. It is intentionally zero-width, so marker-only lines
+      // are visually empty even though JavaScript trim() retains U+200B.
+      const visibleText = line.text.replaceAll("\u200B", "").trim();
+      if (visibleText && !(line.normalized_height_px_96 >= 5 && line.normalized_width_px_96 >= 1)) {
+        const degeneracy = {
+          code: "shared_text_tiny_speck",
+          node_id: line.node_id,
+          line_index: line.index,
+          width_px: line.width,
+          height_px: line.height,
+          normalized_width_px_96: line.normalized_width_px_96,
+          normalized_height_px_96: line.normalized_height_px_96,
+          page_screen_scale_px_per_emu: line.page_screen_scale_px_per_emu,
+          font_size_px: line.font_size,
+          node_transform: line.node_transform,
+          ctm: line.ctm,
+          screen_ctm: line.screen_ctm,
+          page: line.page
+        };
+        if (corpusDiagnosticMode) visualDegeneracies.push(degeneracy);
+        else assert.fail("shared text must not collapse to tiny specks");
+      }
     }
     await page.locator("#pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
@@ -321,7 +605,10 @@ try {
           svg.style.zIndex = "2147483647";
         });
       }
+      const captureStateBefore = await captureSvgScreenshotState(pageSvg);
       const png = await pageSvg.screenshot({ path: join(output, filename) });
+      const captureStateAfter = await captureSvgScreenshotState(pageSvg);
+      const dimensions = pngDimensions(png);
       if (referenceRasterDpi > 0) {
         await pageSvg.evaluate((svg) => {
           svg.style.removeProperty("position");
@@ -330,7 +617,14 @@ try {
           svg.style.removeProperty("z-index");
         });
       }
-      screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
+      screenshots.push({
+        page: i + 1,
+        filename,
+        sha256: sha256(png),
+        png_dimensions: dimensions,
+        capture_state_before: captureStateBefore,
+        capture_state_after: captureStateAfter
+      });
     }
     const nonempty = painted.filter((line) => line.text.trim());
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
@@ -364,13 +658,17 @@ try {
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
+      text_layout_fallback_counts: scene.text_layout_fallback_counts ?? {},
+      browser_preview_census: browserPreviewCensus,
+      ...(hostImagePaintProof ? { host_image_paint_proof: hostImagePaintProof } : {}),
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
+      visual_degeneracies: visualDegeneracies, visual_degeneracy_count: visualDegeneracies.length,
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
-      worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
+      worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct", scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
     console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
@@ -383,7 +681,9 @@ try {
   }
   await writeFile(join(output, "receipt.json"), JSON.stringify({ protocol: "chaptera.cloud-reader-real-scene-browser.v1",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(),
-    scope: "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
+    scope: acceptedScenePath
+      ? "pinned PUB -> real HTTPS guest service (OIDC/quarantine/isolated-worker/host-admitted preview) -> ephemeral Scene snapshot -> controlled HTTP -> browser; Publisher comparison separate"
+      : "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
     source_pub_bytes_emitted: false, results, errors, foreign }, null, 2) + "\n");
 } finally {
   if (browser) await browser.close();

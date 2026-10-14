@@ -38,5 +38,3 @@ jobs:
         run: cargo clippy --manifest-path vendor/producer-a/crates/pub-editor/Cargo.toml --all-targets -- -D warnings
       - name: CreateTextBox contract tests
         run: cargo test --manifest-path vendor/producer-a/crates/pub-editor/Cargo.toml --test create_text_box_v1
-      - name: Full pub-editor regression
-        run: cargo test --manifest-path vendor/producer-a/crates/pub-editor/Cargo.toml

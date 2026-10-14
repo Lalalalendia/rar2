@@ -1,0 +1,40 @@
+name: DOCX text-first adapter V1
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/producer-a/crates/pub-docx/**'
+      - 'vendor/producer-a/crates/pub-export/**'
+      - 'vendor/producer-a/crates/pub-model/**'
+      - 'vendor/producer-a/Cargo.toml'
+      - '.github/workflows/docx-text-first-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/producer-a/crates/pub-docx/**'
+      - 'vendor/producer-a/crates/pub-export/**'
+      - 'vendor/producer-a/crates/pub-model/**'
+      - 'vendor/producer-a/Cargo.toml'
+      - '.github/workflows/docx-text-first-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docx-text-first-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: vendor/producer-a
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check text-first DOCX adapter
+        run: cargo check -p pub-docx
+      - name: Test text-first DOCX adapter
+        run: cargo test -p pub-docx

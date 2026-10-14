@@ -1,0 +1,26 @@
+{
+  "schema": "pub-research-experiment.v1",
+  "id": "TEXT-WIDTH-HYPHENATION-M3-AUDIT-01",
+  "publisher_environment": "publisher-2019",
+  "requires_publisher": true,
+  "publisher": {
+    "version_prefix": "16.0.12527.",
+    "exe_sha256": "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+  },
+  "operation": {
+    "shell": "powershell",
+    "script": "tools/research-runner/operations/text_width_hyphenation_m3_audit_01.ps1",
+    "args": []
+  },
+  "evidence": {
+    "required": [
+      "environment.json",
+      "analysis/text-width-hyphenation-m3-audit-01.json",
+      "logs/text-width-hyphenation-m3-audit-01.txt"
+    ]
+  },
+  "reset": {
+    "required": false
+  },
+  "fixture": null
+}

@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
         with:
           components: rustfmt, clippy
@@ -27,8 +29,36 @@ jobs:
       - name: Clippy shared file authority
         run: cargo clippy --manifest-path crates/chaptera-suite-handoff/Cargo.toml --all-targets -- -D warnings
 
-      - name: Test exact-open and destination-write authority
-        run: cargo test --manifest-path crates/chaptera-suite-handoff/Cargo.toml
+      - name: Test exact-open, short stable snapshot and destination-write authority
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proof = Join-Path $env:RUNNER_TEMP "chaptera-source-snapshot-proof"
+          $derivedProof = Join-Path $env:RUNNER_TEMP "chaptera-derived-trust-proof"
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          New-Item -ItemType Directory -Force -Path $derivedProof | Out-Null
+          $env:CHAPTERA_SOURCE_SNAPSHOT_PROOF_DIR = $proof
+          $env:CHAPTERA_DERIVED_TRUST_PROOF_DIR = $derivedProof
+          $env:CHAPTERA_CANDIDATE_SHA = (git rev-parse HEAD).Trim()
+          cargo test --manifest-path crates/chaptera-suite-handoff/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "source/destination authority tests failed" }
+          foreach ($case in @("busy_writer", "mapped_writer", "external_mutator", "post_window_handle")) {
+            $receipt = Get-Content (Join-Path $proof "$case.json") -Raw | ConvertFrom-Json
+            if ($receipt.schema -ne "chaptera.win-source-snapshot.v1" -or $receipt.case -ne $case -or $receipt.git_commit -ne $env:CHAPTERA_CANDIDATE_SHA) { throw "source snapshot receipt identity mismatch" }
+            if ($receipt.source_bytes_serialized -ne $false -or $receipt.source_path_serialized -ne $false) { throw "source snapshot receipt exposed source data" }
+            foreach ($fact in $receipt.facts.PSObject.Properties) {
+              if ($fact.Value -ne $true) { throw "source snapshot case $case has an unproven fact $($fact.Name)" }
+            }
+          }
+          foreach ($case in @("internet_referrer", "local_referrer")) {
+            $receipt = Get-Content (Join-Path $derivedProof "$case.json") -Raw | ConvertFrom-Json
+            if ($receipt.schema -ne "chaptera.win-derived-file-trust.v1" -or $receipt.case -ne $case -or $receipt.git_commit -ne $env:CHAPTERA_CANDIDATE_SHA) { throw "derived trust receipt identity mismatch" }
+            if ($receipt.source_bytes_serialized -ne $false -or $receipt.source_path_serialized -ne $false) { throw "derived trust receipt exposed source data" }
+            foreach ($fact in $receipt.facts.PSObject.Properties) {
+              if ($fact.Value -ne $true) { throw "derived trust case $case has an unproven fact $($fact.Name)" }
+            }
+          }
+          "CHAPTERA_SOURCE_SNAPSHOT_VERIFIED=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Reader and Editor
         shell: pwsh
@@ -57,6 +87,75 @@ jobs:
           "CHAPTERA_PATH_ID_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_PATH_ID_FIXTURE=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_PATH_ID_SHA=$sha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove real asset, IDML, ODG and PDF consumers inherit source trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Assert-InternetZone([string]$Path) {
+            $zone = Get-Content -LiteralPath "${Path}:Zone.Identifier" -Raw
+            if ($zone -notmatch "(?m)^ZoneId=3\s*$") { throw "missing inherited Internet zone: $Path" }
+          }
+          function Assert-OutputSet([string[]]$Paths) {
+            foreach ($path in $Paths) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing derived output: $path" }
+              if ((Get-Item -LiteralPath $path).Length -le 0) { throw "empty derived output: $path" }
+              Assert-InternetZone $path
+            }
+          }
+
+          $root = Join-Path $env:CHAPTERA_PATH_ID_ROOT "derived-consumers"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $source = Join-Path $root "internet-source.pub"
+          Copy-Item $env:CHAPTERA_PATH_ID_FIXTURE $source -Force
+          Set-Content -LiteralPath "${source}:Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://example.invalid/SampleNewsletter.pub`r`n" -NoNewline
+          $sourceBefore = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $assets = Join-Path $root "assets"
+          cargo run --quiet -p chaptera-pub-cli -- extract-assets $source --output $assets --json | Out-File (Join-Path $root "manifest.stdout.json") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "real exact-asset consumer failed" }
+          $assetPaths = @(Get-ChildItem -LiteralPath $assets -File | ForEach-Object FullName)
+          if ($assetPaths.Count -lt 2) { throw "expected at least one asset plus manifest" }
+          Assert-OutputSet $assetPaths
+          $manifest = Get-Content -LiteralPath (Join-Path $assets "manifest.json") -Raw | ConvertFrom-Json
+          foreach ($entry in $manifest.assets) {
+            $asset = Join-Path $assets $entry.filename
+            $actual = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $entry.sha256) { throw "asset manifest SHA mismatch: $asset" }
+          }
+
+          $font = Join-Path $env:GITHUB_WORKSPACE "assets/fonts/ofl/abel/Abel-Regular.ttf"
+          $jobs = @(
+            @{ Kind = "idml"; Path = (Join-Path $root "document.idml"); Extra = @() },
+            @{ Kind = "odg"; Path = (Join-Path $root "document.odg"); Extra = @() },
+            @{ Kind = "pdf"; Path = (Join-Path $root "document.pdf"); Extra = @("--fallback-font", $font) }
+          )
+          $converted = @()
+          foreach ($job in $jobs) {
+            $arguments = @("run", "--quiet", "--manifest-path", "vendor/producer-a/Cargo.toml", "-p", "pub-cli", "--", "convert", $source, "--to", $job.Kind, "--output", $job.Path, "--json") + $job.Extra
+            & cargo @arguments | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "real $($job.Kind) consumer failed" }
+            $outputs = @($job.Path, "$($job.Path).loss.json", "$($job.Path).loss.txt")
+            Assert-OutputSet $outputs
+            $converted += $outputs
+          }
+
+          $sourceAfter = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sourceAfter -ne $sourceBefore -or $sourceAfter -ne $env:CHAPTERA_PATH_ID_SHA) { throw "consumer run mutated source main stream" }
+          $candidate = (git rev-parse HEAD).Trim()
+          [ordered]@{
+            schema = "chaptera.win-derived-consumers.v1"
+            task = "CHAPTERA-WIN-DERIVED-FILE-TRUST-01"
+            git_commit = $candidate
+            public_fixture_sha256 = $sourceAfter
+            asset_count = $assetPaths.Count - 1
+            converted_output_count = $converted.Count
+            all_output_main_streams_nonempty = $true
+            all_outputs_inherited_internet_zone = $true
+            source_main_stream_unchanged = $true
+            source_bytes_serialized = $false
+            source_path_serialized = $false
+          } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "consumers.json")
 
       - name: Prove Unicode and combining path acceptance
         shell: pwsh
@@ -223,11 +322,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          if ($env:CHAPTERA_SOURCE_SNAPSHOT_VERIFIED -ne "true") { throw "short source snapshot proof is missing" }
           $out = Join-Path $env:CHAPTERA_PATH_ID_ROOT "receipt.json"
           [ordered]@{
             schema = "chaptera.win-path-identity.v1"
             task = "CHAPTERA-WIN-PATH-IDENTITY-01"
+            git_commit = (git rev-parse HEAD).Trim()
             exact_open_handle_identity = $true
+            stable_source_read_hash_window = $true
+            separate_process_write_truncate_rename_exclusion = $true
+            short_window_released_without_path_rebind = $true
             receiver_capability_uses_admitted_bytes = $true
             final_fence_rehashes_opened_handle = $true
             unicode_path_accepted = $true
@@ -242,5 +346,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chaptera-win-path-identity
-          path: ${{ runner.temp }}/chaptera-path-identity/receipt.json
+          path: |
+            ${{ runner.temp }}/chaptera-path-identity/receipt.json
+            ${{ runner.temp }}/chaptera-source-snapshot-proof/*.json
+            ${{ runner.temp }}/chaptera-derived-trust-proof/*.json
+            ${{ runner.temp }}/chaptera-path-identity/derived-consumers/consumers.json
           if-no-files-found: error

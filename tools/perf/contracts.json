@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "contracts": {
+    "layout-projection-work": {
+      "description": "Keep pub-layout story/frame membership lookup within the declared binary-search work bound.",
+      "paths": [
+        "vendor/producer-a/crates/pub-layout/src/**",
+        "vendor/producer-a/crates/pub-layout/tests/projection_index_benchmark.rs",
+        "vendor/producer-a/crates/pub-layout/Cargo.toml"
+      ],
+      "command_id": "layout-projection-work"
+    }
+  }
+}

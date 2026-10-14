@@ -6,6 +6,19 @@
 //! testing. It does not own authoring truth and does not mutate PUB source
 //! state directly.
 
+mod resize_constraints_v1;
+mod snap;
+
+pub use resize_constraints_v1::{
+    RESIZE_CONSTRAINT_MAX_SAFE_EMU_V1, RESIZE_CONSTRAINT_MIN_SAFE_EMU_V1,
+    RESIZE_CONSTRAINT_PROTOCOL_V1, ResizeAspectControlAxisV1, ResizeConstraintErrorV1,
+    ResizeConstraintPlanV1, ResizeModifierMaskV1, plan_resize_constraint_v1,
+};
+pub use snap::{
+    SnapAnchorKind, SnapAxis, SnapError, SnapFeedback, SnapIndex, SnapObject, SnapResult,
+    SnapTargetKind,
+};
+
 use pub_model::{LengthEmu, NodeId, RectEmu};
 use std::collections::BTreeSet;
 
@@ -339,6 +352,21 @@ impl MoveTransaction {
         self.preview != self.before
     }
 
+    /// Replaces only the transient preview origin while preserving authored size.
+    pub fn set_preview_origin(
+        &mut self,
+        x: LengthEmu,
+        y: LengthEmu,
+    ) -> Result<RectEmu, MoveTransactionError> {
+        let preview = RectEmu::new(x, y, self.before.width, self.before.height);
+        if preview.right().is_none() || preview.bottom().is_none() {
+            return Err(MoveTransactionError::BoundsOverflow);
+        }
+
+        self.preview = preview;
+        Ok(preview)
+    }
+
     pub fn update(&mut self, pointer: DocumentPoint) -> Result<RectEmu, MoveTransactionError> {
         let dx = pointer
             .x
@@ -562,6 +590,7 @@ pub fn classify_resize_pointer_down(
 pub enum ResizeInvalidReason {
     NonPositiveSize,
     Overflow,
+    Constraint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -680,26 +709,18 @@ impl ResizeTransaction {
         self.state
     }
 
-    pub fn update(
-        &mut self,
+    fn raw_candidate(
+        &self,
         pointer: DocumentPoint,
-    ) -> Result<ResizeUpdate, ResizeTransactionError> {
+    ) -> Result<Result<RectEmu, ResizeInvalidReason>, ResizeTransactionError> {
         if self.state != ResizeTransactionState::Active {
             return Err(ResizeTransactionError::NotActive);
         }
         let Some(dx) = pointer.x.checked_sub(self.pointer_start.x) else {
-            self.last_update_valid = false;
-            return Ok(ResizeUpdate::Invalid {
-                reason: ResizeInvalidReason::Overflow,
-                last_valid: self.preview,
-            });
+            return Ok(Err(ResizeInvalidReason::Overflow));
         };
         let Some(dy) = pointer.y.checked_sub(self.pointer_start.y) else {
-            self.last_update_valid = false;
-            return Ok(ResizeUpdate::Invalid {
-                reason: ResizeInvalidReason::Overflow,
-                last_valid: self.preview,
-            });
+            return Ok(Err(ResizeInvalidReason::Overflow));
         };
 
         let Some(base_right) = self.before.right() else {
@@ -749,20 +770,60 @@ impl ResizeTransaction {
                         .get()
                         .checked_sub(top.get())
                         .is_some_and(|value| value <= 0);
-            self.last_update_valid = false;
-            return Ok(ResizeUpdate::Invalid {
-                reason: if non_positive {
-                    ResizeInvalidReason::NonPositiveSize
-                } else {
-                    ResizeInvalidReason::Overflow
-                },
-                last_valid: self.preview,
-            });
+            return Ok(Err(if non_positive {
+                ResizeInvalidReason::NonPositiveSize
+            } else {
+                ResizeInvalidReason::Overflow
+            }));
         };
 
-        self.preview = candidate;
-        self.last_update_valid = true;
-        Ok(ResizeUpdate::Preview(candidate))
+        Ok(Ok(candidate))
+    }
+
+    fn install_candidate(
+        &mut self,
+        candidate: Result<RectEmu, ResizeInvalidReason>,
+    ) -> ResizeUpdate {
+        match candidate {
+            Ok(candidate) => {
+                self.preview = candidate;
+                self.last_update_valid = true;
+                ResizeUpdate::Preview(candidate)
+            }
+            Err(reason) => {
+                self.last_update_valid = false;
+                ResizeUpdate::Invalid {
+                    reason,
+                    last_valid: self.preview,
+                }
+            }
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        pointer: DocumentPoint,
+    ) -> Result<ResizeUpdate, ResizeTransactionError> {
+        let candidate = self.raw_candidate(pointer)?;
+        Ok(self.install_candidate(candidate))
+    }
+
+    pub fn update_constrained(
+        &mut self,
+        pointer: DocumentPoint,
+        modifiers: ResizeModifierMaskV1,
+    ) -> Result<ResizeUpdate, ResizeTransactionError> {
+        let raw = match self.raw_candidate(pointer)? {
+            Ok(raw) => raw,
+            Err(reason) => return Ok(self.install_candidate(Err(reason))),
+        };
+
+        let constrained = match plan_resize_constraint_v1(self.before, self.handle, raw, modifiers)
+        {
+            Ok(plan) => Ok(plan.constrained_rect),
+            Err(_) => Err(ResizeInvalidReason::Constraint),
+        };
+        Ok(self.install_candidate(constrained))
     }
 
     pub fn cancel(&mut self) -> Result<(), ResizeTransactionError> {

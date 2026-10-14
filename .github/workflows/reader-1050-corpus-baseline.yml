@@ -146,7 +146,8 @@ jobs:
             -p pub-viewer \
             --release \
             --bin corpus-reader-receipt \
-            --bin corpus-reader-salvage-acceptance
+            --bin corpus-reader-salvage-acceptance \
+            --bin recovery-damage-classifier
 
       - name: Save Reader 1050 Cargo build cache
         if: steps.reader-1050-cargo-cache.outputs.cache-hit != 'true'
@@ -434,6 +435,88 @@ jobs:
                       "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
                   ]
               },
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Classify exact 1050 recovery damage outcomes
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/recovery-damage-classifier" \
+            out/materialized/native \
+            out/reader1050/recovery-damage-classifier.json \
+            tools/research-runner/manual/recovery-damage-classifier-01.rescue-evidence.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/reader1050/recovery-damage-classifier.json").read_text())
+          assert payload["schema"] == "chaptera.recovery-damage-classifier.v1", payload["schema"]
+          assert payload["file_count"] == 1050, payload["file_count"]
+          assert payload["reader_outcome_counts"] == {
+              "normal_open": 1041,
+              "salvage_open": 5,
+              "cannot_safely_display": 4,
+          }, payload["reader_outcome_counts"]
+
+          verdicts = payload["verdict_counts"]
+          assert verdicts.get("open", 0) == 1041, verdicts
+          assert verdicts.get("open_partial", 0) == 5, verdicts
+          assert verdicts.get("rescue", 0) == 0, verdicts
+          assert verdicts.get("no_safe_recovery", 0) == 4, verdicts
+
+          unsupported = [
+              row for row in payload["rows"]
+              if row["reader_outcome"] == "cannot_safely_display"
+          ]
+          assert len(unsupported) == 4, len(unsupported)
+          for row in unsupported:
+              assert row.get("registry_evidence_class") == "format_gap", row
+              assert row.get("registry_disposition") == "existing_format_owner", row
+              assert row.get("evidence_owner") == "QUILL-STORY-EARLY-TEXT-BOUNDARY-01", row
+              assert row.get("promotion_gap") == "existing_format_owner_not_damage_authority", row
+              assert row["rescue_outcome"] == "diagnostic_only", row
+
+          inferred_rescue = [
+              row for row in payload["rows"]
+              if row["compact_verdict"] == "rescue"
+          ]
+          promotion_gaps = {}
+          for row in inferred_rescue:
+              key = row.get("promotion_gap") or "none"
+              promotion_gaps[key] = promotion_gaps.get(key, 0) + 1
+
+          tracked_recovery = {
+              "koronavirus": "6eb0a85afb42d329e2241ce060ec3b6957ecd429a5122cfc908b4621ab4884b8",
+              "saudi": "b18c713e04398d2d4b23dd92678c7b5f1b0e25c694520b72de2e7138882ecffa",
+              "thai": "74cfefff12d624865cb1eb9b63a5aa6ed63bfea3e0ce6ad09fdf947f35077242",
+              "fap": "dd44367ac576407fa6313ff8654a0cef053f4bec5489ab5d62c5c02d1305532c",
+              "spring08": "a2d05984c50078e51fd0df236aae6e2790d76c38d786553103da0d75715ee546",
+              "thea": "b4381b1e3662dd468c641c6fbd28e88c16c74833cb8c48a465172c6eeb80b338",
+              "zbirka": "2173c7dd2349c6ced2f838df458cc2503e15606d073cc8d6146706d372dd64d8",
+          }
+          rows_by_sha = {row["source_sha256"]: row for row in payload["rows"]}
+          tracked_rows = {
+              label: {
+                  "present": sha in rows_by_sha,
+                  **({
+                      "reader_outcome": rows_by_sha[sha]["reader_outcome"],
+                      "compact_verdict": rows_by_sha[sha]["compact_verdict"],
+                      "rescue_outcome": rows_by_sha[sha]["rescue_outcome"],
+                      "recovery_class": rows_by_sha[sha].get("recovery_class"),
+                      "promotion_gap": rows_by_sha[sha].get("promotion_gap"),
+                  } if sha in rows_by_sha else {}),
+              }
+              for label, sha in tracked_recovery.items()
+          }
+
+          print(json.dumps({
+              "verdict_counts": verdicts,
+              "reader_outcome_counts": payload["reader_outcome_counts"],
+              "rescue_outcome_counts": payload["rescue_outcome_counts"],
+              "inferred_rescue_count": len(inferred_rescue),
+              "promotion_gap_counts": promotion_gaps,
+              "tracked_recovery_rows": tracked_rows,
           }, indent=2, sort_keys=True))
           PY
 

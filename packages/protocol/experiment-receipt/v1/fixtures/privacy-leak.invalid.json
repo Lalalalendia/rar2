@@ -1,0 +1,20 @@
+{
+  "receipt_version": "chaptera.experiment-receipt.v1",
+  "task_id": "PUB-T-846",
+  "run_id": "synthetic-privacy-leak-001",
+  "producer": {"name": "synthetic-producer", "version": "v1"},
+  "system": {"name": "synthetic-system", "version": "v1"},
+  "build": {"repository": "Lalalalendia/rar2", "revision": "85db0eb7890a6be8f3806b1f33f30a2a67786c39"},
+  "environment": {"os": "ubuntu-24.04", "architecture": "x86_64", "runtime": "python-3.12", "fingerprint_sha256": "3333333333333333333333333333333333333333333333333333333333333333"},
+  "source_identity": {"sha256": "1111111111111111111111111111111111111111111111111111111111111111", "size_bytes": 1},
+  "output_identity": {"status": "unavailable", "reason": "negative privacy control"},
+  "operation": {"kind": "SyntheticMutation", "parameters": {"output_path": "/home/alice/private-output.pub"}},
+  "semantic_observations": {"before": {"status": "known", "value": {}}, "after": {"status": "unknown", "reason": "negative privacy control"}, "reopen": {"status": "unavailable", "reason": "negative privacy control"}},
+  "changed_artifact_summary": {"status": "unknown", "reason": "negative privacy control"},
+  "evidence_refs": [],
+  "lifecycle_disposition": {"status": "partial", "reason": "negative privacy control"},
+  "evidence_scope": ["contract-shape"],
+  "authority_ceiling": "synthetic_contract",
+  "non_claims": ["This fixture must be rejected."],
+  "privacy": {"source_free": true, "private_content_serialized": false}
+}

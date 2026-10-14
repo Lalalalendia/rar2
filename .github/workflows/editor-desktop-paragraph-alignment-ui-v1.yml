@@ -1,0 +1,75 @@
+name: Editor Desktop Paragraph Alignment UI V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-desktop/src/text_session.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/paragraph_alignment_ui.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - ".github/workflows/editor-desktop-paragraph-alignment-ui-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-desktop-paragraph-alignment-ui-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Desktop paragraph UI formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop paragraph UI integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Clippy Desktop paragraph UI integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+      - name: Prove canonical paragraph targeting and shortcut law
+        run: cargo test -p chaptera-desktop paragraph_alignment -- --nocapture
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire pinned Carlton March source
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/paragraph-alignment-ui-carlton"
+          mkdir -p "${root}"
+          python tools/acquire_carlton_march_pair.py "${root}"
+          pub="${root}/March-2026.pub"
+          expected="bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          found="$(sha256sum "${pub}" | cut -d' ' -f1)"
+          test "${found}" = "${expected}"
+          echo "CHAPTERA_CARLTON_PUB=${pub}" >> "${GITHUB_ENV}"
+
+      - name: Prove real Carlton paragraph controls Set Clear and provenance
+        run: >-
+          cargo test -p chaptera-desktop
+          real_carlton_paragraph_alignment_ui_state_set_clear_and_left
+          -- --ignored --nocapture

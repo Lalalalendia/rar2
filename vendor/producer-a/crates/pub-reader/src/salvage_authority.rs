@@ -37,6 +37,14 @@ struct EvidenceAuthorityReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReaderEvidenceDisposition {
+    pub source_sha256: String,
+    pub owner: String,
+    pub evidence_class: String,
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReaderSalvageAuthority {
     pub source_sha256: String,
     pub owner: String,
@@ -45,6 +53,33 @@ pub struct ReaderSalvageAuthority {
     pub artifact_id: u64,
     pub evidence_digest: String,
     pub classification: String,
+}
+
+pub fn reader_evidence_disposition(source_sha256: &str) -> Option<ReaderEvidenceDisposition> {
+    let registry = evidence_registry()?;
+    if !is_sha256_hex(source_sha256) {
+        return None;
+    }
+
+    let mut matches = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source_sha256 == source_sha256);
+    let entry = matches.next()?;
+    if matches.next().is_some()
+        || entry.owner.trim().is_empty()
+        || entry.evidence_class.trim().is_empty()
+        || entry.disposition.trim().is_empty()
+    {
+        return None;
+    }
+
+    Some(ReaderEvidenceDisposition {
+        source_sha256: entry.source_sha256.clone(),
+        owner: entry.owner.clone(),
+        evidence_class: entry.evidence_class.clone(),
+        disposition: entry.disposition.clone(),
+    })
 }
 
 pub fn typed_corruption_authority(source_sha256: &str) -> Option<ReaderSalvageAuthority> {
@@ -242,6 +277,17 @@ mod tests {
         assert!(
             typed_corruption_authority_from_registry(&registry, OPNHOUS_SHA256).is_none()
         );
+    }
+
+    #[test]
+    fn exact_format_gap_disposition_is_visible_but_non_authorizing() {
+        let disposition = reader_evidence_disposition(
+            "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+        )
+        .expect("format-gap disposition");
+        assert_eq!(disposition.evidence_class, "format_gap");
+        assert_eq!(disposition.disposition, "existing_format_owner");
+        assert_eq!(disposition.owner, "QUILL-STORY-EARLY-TEXT-BOUNDARY-01");
     }
 
     #[test]

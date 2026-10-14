@@ -67,6 +67,39 @@ function services() {
   };
 }
 
+test("durable catalog can drive a read-only project home without projection or lifecycle services", async () => {
+  const row = project();
+  const controller = new WebProjectHomeControllerV1({
+    catalog: {
+      async listProjects() { return [structuredClone(row)]; },
+    },
+  });
+  const state = await controller.loadProjects();
+  assert.equal(state.mode, "projects");
+  assert.equal(state.cards.length, 1);
+  assert.equal(state.cards[0].project_id, row.project_id);
+  assert.equal(state.cards[0].document_id, row.document_id);
+  assert.equal(state.cards[0].current_revision_id, row.current_revision_id);
+  assert.equal(state.cards[0].thumbnail.freshness, "missing");
+});
+
+test("read-only catalog does not pretend Recent or lifecycle mutations exist", async () => {
+  const controller = new WebProjectHomeControllerV1({
+    catalog: {
+      async listProjects() { return [project()]; },
+    },
+  });
+
+  const recent = await controller.loadRecent();
+  assert.equal(recent.mode, "error");
+  assert.match(recent.error_code, /project_home_failed|undefined/);
+
+  await assert.rejects(
+    () => controller.rename("project:1", "Renamed"),
+    /lifecycle must implement renameProject/,
+  );
+});
+
 test("card preserves explicit thumbnail freshness and recent activity", () => {
   const card = normalizeProjectCardV1({
     project: project(),

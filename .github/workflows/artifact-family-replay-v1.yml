@@ -1,0 +1,42 @@
+name: Artifact family replay V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/corpus/artifact_family.py'
+      - 'tools/corpus/artifact_family_coverage_replay.py'
+      - 'tools/corpus/test_artifact_family.py'
+      - 'tools/corpus/test_artifact_family_coverage_replay.py'
+      - 'tools/corpus/artifact_family_provenance_join.py'
+      - 'tools/corpus/test_artifact_family_provenance_join.py'
+      - 'tools/corpus/artifact_family_label_coverage.py'
+      - 'tools/corpus/test_artifact_family_label_coverage.py'
+      - '.github/workflows/artifact-family-replay-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/corpus/artifact_family.py'
+      - 'tools/corpus/artifact_family_coverage_replay.py'
+      - 'tools/corpus/test_artifact_family.py'
+      - 'tools/corpus/test_artifact_family_coverage_replay.py'
+      - '.github/workflows/artifact-family-replay-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: artifact-family-replay-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test conservative artifact-family classifier and replay
+        run: |
+          python tools/corpus/test_artifact_family.py
+          python tools/corpus/test_artifact_family_coverage_replay.py
+          python tools/corpus/test_artifact_family_provenance_join.py
+          python tools/corpus/test_artifact_family_label_coverage.py

@@ -15,6 +15,30 @@ EVIDENCE_ONLY_PATHS = {
     "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs",
 }
 
+VIEWER_AUTHORING_PROJECTION = (
+    "vendor/producer-a/crates/pub-viewer/src/authoring_projection.rs"
+)
+VIEWER_FACADE = "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+VIEWER_IMAGES = "vendor/producer-a/crates/pub-viewer/src/images.rs"
+READER_PAINT_PROJECTION = "vendor/producer-a/crates/pub-reader/src/paint_projection.rs"
+READER_PAGE_PROJECTION = "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+READER_SOURCE_PAINT_ORDER = "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+READER_STORY_FRAME_ANALYSIS = "vendor/producer-a/crates/pub-reader/src/story_frame_analysis.rs"
+READER_TYPOGRAPHY_PROJECTION = "vendor/producer-a/crates/pub-reader/src/typography_projection.rs"
+READER_DIRECT_TRANSFORM = "vendor/producer-a/crates/pub-reader/src/direct_transform.rs"
+READER_GROUPED_PROJECTION = "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+READER_SOURCE_GRAPH_MODEL = "vendor/producer-a/crates/pub-reader/src/source_graph_model.rs"
+READER_ANCHOR_GEOMETRY = "vendor/producer-a/crates/pub-reader/src/anchor_geometry.rs"
+READER_STORY_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
+READER_QUILL_ADMISSION = "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
+READER_PUBLICATION_DOCUMENT = "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+READER_CONTENTS_ACCESS = "vendor/producer-a/crates/pub-reader/src/contents_access.rs"
+READER_SOURCE_IDENTITY = "vendor/producer-a/crates/pub-reader/src/source_identity.rs"
+READER_NODE_MATERIALIZATION = "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
+READER_ASSET_EXPORT = "vendor/producer-a/crates/pub-reader/src/asset_export.rs"
+READER_ASSETS = "vendor/producer-a/crates/pub-reader/src/assets.rs"
+
+
 TEST_REGION_EVIDENCE_CANDIDATES = {
     "apps/chaptera-server/src/reader_scene_v1.rs",
 }
@@ -26,6 +50,8 @@ HUNK_HEADER = re.compile(
 
 SCOPES = (
     "tier_a",
+    "free_pub_asset_cli",
+    "desktop_rustfmt",
     "reader_windows_smoke",
     "reader_windows",
     "editor_windows",
@@ -37,6 +63,7 @@ SCOPES = (
     "android_core",
     "android",
     "web",
+    "local_portable_assets",
     "local_portable",
     "installer",
     "path_identity",
@@ -63,6 +90,101 @@ def matches(path: str, patterns: Iterable[str]) -> bool:
         if fnmatch.fnmatchcase(path, pattern):
             return True
     return False
+
+
+DESKTOP_MAIN = "apps/chaptera-desktop/src/main.rs"
+RAW_STRING_START = re.compile(r'(?:br|cr|r)(#*)"')
+CHAR_LITERAL = re.compile(r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}))'")
+
+
+def without_standalone_rust_comments(source: str) -> str | None:
+    """Remove ordinary comment lines only outside Rust literals/comments.
+
+    Keep every other byte, including inline comments and documentation. Unknown
+    or unterminated lexical state cannot establish a neutral source change.
+    """
+    output: list[str] = []
+    state = "code"
+    block_depth = 0
+    raw_end = ""
+    for line in source.splitlines(keepends=True):
+        stripped = line.lstrip(" \t")
+        if state == "code" and stripped.startswith("//") and not stripped.startswith(("///", "//!")):
+            continue
+        output.append(line)
+        index = 0
+        while index < len(line):
+            if state == "raw":
+                end = line.find(raw_end, index)
+                if end < 0:
+                    break
+                index = end + len(raw_end)
+                state = "code"
+            elif state == "string":
+                if line[index] == "\\":
+                    index += 2
+                elif line[index] == '"':
+                    index += 1
+                    state = "code"
+                else:
+                    index += 1
+            elif state == "block":
+                if line.startswith("/*", index):
+                    block_depth += 1
+                    index += 2
+                elif line.startswith("*/", index):
+                    block_depth -= 1
+                    index += 2
+                    if not block_depth:
+                        state = "code"
+                else:
+                    index += 1
+            elif line.startswith("//", index):
+                break
+            elif line.startswith("/*", index):
+                state = "block"
+                block_depth = 1
+                index += 2
+            else:
+                raw = RAW_STRING_START.match(line, index)
+                char = CHAR_LITERAL.match(line, index)
+                if raw:
+                    raw_end = '"' + raw.group(1)
+                    state = "raw"
+                    index = raw.end()
+                elif char:
+                    index = char.end()
+                elif line[index] == '"':
+                    state = "string"
+                    index += 1
+                else:
+                    index += 1
+    return "".join(output) if state == "code" else None
+
+
+def desktop_main_visual_change_is_neutral(base_source: str, head_source: str) -> bool:
+    base = without_standalone_rust_comments(base_source)
+    head = without_standalone_rust_comments(head_source)
+    return base is not None and head is not None and base == head
+
+
+VIEWER_AUTHORING_REEXPORT = re.compile(
+    r"^pub use authoring_projection::[A-Za-z_][A-Za-z0-9_]*;$"
+)
+
+
+def viewer_authoring_facade_diff_is_product_neutral(diff_text: str) -> bool:
+    changed = []
+    for line in diff_text.splitlines():
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if not line.startswith(("+", "-")):
+            continue
+        payload = line[1:].strip()
+        if not payload:
+            continue
+        changed.append(payload)
+    return bool(changed) and all(VIEWER_AUTHORING_REEXPORT.fullmatch(line) for line in changed)
 
 
 def cfg_test_module_line(source: str) -> int | None:
@@ -139,6 +261,15 @@ def test_region_evidence_only_paths(
     return evidence_only
 
 
+FREE_PUB_ASSET_CLI = (
+    READER_ASSET_EXPORT,
+    READER_ASSETS,
+    "apps/chaptera-pub-cli/**",
+    ".github/workflows/free-pub-asset-cli-v1.yml",
+    "Cargo.toml",
+    "Cargo.lock",
+)
+
 READER_SHARED = (
     "Cargo.toml",
     "Cargo.lock",
@@ -168,17 +299,23 @@ TIER_A = READER_SHARED + (
     ".github/workflows/reader-consumer-preflight.yml",
 )
 
+DESKTOP_RUSTFMT = (
+    "apps/chaptera-desktop/**",
+)
+
 READER_DESKTOP = (
     "apps/chaptera-desktop/Cargo.toml",
-    "apps/chaptera-desktop/src/main.rs",
     "apps/chaptera-desktop/src/diagnostic_sweep.rs",
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_cli.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
 READER_WINDOWS_SMOKE = READER_SHARED + (
+    "apps/chaptera-desktop/src/main.rs",
     ".github/workflows/chaptera-reader-windows-smoke.yml",
 )
 
@@ -220,7 +357,8 @@ VISUAL_ORACLE = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    DESKTOP_MAIN,
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     "tools/acquire_carlton_march_pair.py",
     "tools/pdf_reference_diff_v1.py",
     "tools/reader_reference_pdf_raster_v1.py",
@@ -235,6 +373,13 @@ CLOUD_REFERENCE = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
+    READER_SOURCE_PAINT_ORDER,
+    READER_TYPOGRAPHY_PROJECTION,
+    READER_STORY_MATERIALIZATION,
+    READER_QUILL_ADMISSION,
+    READER_PUBLICATION_DOCUMENT,
+    READER_NODE_MATERIALIZATION,
     "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
     "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
     "tools/acquire_carlton_march_pair.py",
@@ -267,6 +412,13 @@ VISUAL_BATCH01 = (
     "crates/chaptera-viewer-render-plan/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    READER_PAGE_PROJECTION,
+    READER_SOURCE_PAINT_ORDER,
+    READER_TYPOGRAPHY_PROJECTION,
+    READER_STORY_MATERIALIZATION,
+    READER_QUILL_ADMISSION,
+    READER_PUBLICATION_DOCUMENT,
+    READER_NODE_MATERIALIZATION,
 )
 
 TYPOGRAPHY_GOLDEN = (
@@ -276,7 +428,8 @@ TYPOGRAPHY_GOLDEN = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    DESKTOP_MAIN,
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     ".github/workflows/reader-typography-golden.yml",
 )
 
@@ -306,6 +459,28 @@ WEB = (
     ".github/workflows/web-acceptance-real-chromium.yml",
 )
 
+LOCAL_PORTABLE_NEUTRAL_PATHS = {
+    "apps/chaptera-server/src/guest_reader_runtime.rs",
+}
+
+# These files are shipped byte-for-byte inside Chaptera Local, but changing
+# them does not alter either Windows PE binary, embedded Python, or package
+# bootstrap. Prove their real ZIP bytes/hashes on Ubuntu instead of rebuilding
+# two Rust release executables on Windows.
+LOCAL_PORTABLE_WEB_ASSETS = (
+    "apps/web/local-editor.html",
+    "apps/web/editor-shell-v1.mjs",
+    "apps/web/editor-service-client-v1.mjs",
+    "apps/web/observability-v1.mjs",
+    "apps/web/render-v1.mjs",
+    "apps/web/interaction-v1.mjs",
+    "apps/web/export-preview-v1.schema.json",
+    "apps/web/acceptance/receipts/**",
+)
+LOCAL_PORTABLE_ASSET_CONTRACT_INPUTS = LOCAL_PORTABLE_WEB_ASSETS + (
+    "tools/ci/test_local_portable_web_asset_package.py",
+)
+
 LOCAL_PORTABLE = (
     "Start-Chaptera-Local.cmd",
     "tools/run_local_full_stack.py",
@@ -319,7 +494,17 @@ LOCAL_PORTABLE = (
     "tools/validate_export_preview.py",
     "tools/verify_editable_export_geometry.py",
     "services/editor-api/**",
-    "apps/web/**",
+    # Only the web files actually embedded into Chaptera Local should pay the
+    # Windows portable package gate. Other Cloud/Web product modules have their
+    # own browser/HTTP owners and are not present in the portable ZIP.
+    "apps/web/local-editor.html",
+    "apps/web/editor-shell-v1.mjs",
+    "apps/web/editor-service-client-v1.mjs",
+    "apps/web/observability-v1.mjs",
+    "apps/web/render-v1.mjs",
+    "apps/web/interaction-v1.mjs",
+    "apps/web/export-preview-v1.schema.json",
+    "apps/web/acceptance/receipts/**",
     "apps/chaptera-server/**",
     "packages/protocol/revision/v1/**",
     "packages/product/local-portable/**",
@@ -346,11 +531,21 @@ UPDATE_ACCEPT = (
     "crates/chaptera-update-orchestrator/**",
     "crates/chaptera-update-trust/**",
     "crates/chaptera-update-handoff/**",
-    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "installer/windows/chaptera-reader.iss",
     ".github/workflows/chaptera-win-update-accept.yml",
     ".github/workstream-scopes/chaptera-win-update-accept-01.md",
 )
+
+RUST_INTEGRATION_TEST_PATTERNS = (
+    "crates/*/tests/**",
+    "vendor/producer-a/crates/*/tests/**",
+)
+
+
+def is_rust_integration_test_path(path: str) -> bool:
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in RUST_INTEGRATION_TEST_PATTERNS)
+
 
 SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/main.rs",
@@ -358,20 +553,126 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/diagnostic_sweep.rs",
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_cli.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
     "apps/chaptera-desktop/src/source_font.rs",
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
+    # Exact text-session shell changes keep Tier A plus dedicated Linux/Windows
+    # Text Session/TextBox GUI owners; they do not require the broad Editor package gate.
+    "apps/chaptera-desktop/src/text_session_shell.rs",
+    # Selection keyboard shell has its own Windows GUI owner and is also
+    # covered by TextBox Restore; do not add the broad Editor package gate.
+    "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+    # TextBox creation shell already has dedicated Linux contract + Windows GUI
+    # acceptance; avoid paying the broad Editor package gate for this exact leaf.
+    "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+    # History shortcuts have their own Linux contract + real Windows GUI owner;
+    # avoid the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/history.rs",
+    # Duplicate Rectangle has its own focused core + real Windows GUI owner;
+    # do not add the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+    # Page navigation shortcuts have a focused Linux contract + real Windows GUI
+    # owner; avoid the broad Editor package gate for this exact semantic leaf.
+    "apps/chaptera-desktop/src/page_navigation.rs",
 }
+
+
+WINDOWS_DLL_BOOTSTRAP_SOURCE = "apps/chaptera-desktop/src/main.rs"
+
+
+def windows_dll_bootstrap_errors(source: str) -> list[str]:
+    errors: list[str] = []
+    module_marker = '#[cfg(target_os = "windows")]\nmod windows_dll_search;'
+    if module_marker not in source:
+        errors.append("Windows DLL policy module must remain cfg-gated and wired in Desktop main.rs")
+
+    main_marker = "fn main() -> eframe::Result<()> {"
+    main_start = source.find(main_marker)
+    if main_start < 0:
+        errors.append("Desktop main entrypoint is missing")
+        return errors
+
+    args_marker = "let mut args = std::env::args_os().skip(1).peekable();"
+    args_start = source.find(args_marker, main_start)
+    if args_start < 0:
+        errors.append("Desktop argument bootstrap marker is missing")
+        return errors
+
+    prefix = source[main_start:args_start]
+    cfg_pos = prefix.find('#[cfg(target_os = "windows")]')
+    err_pos = prefix.find("if let Err(")
+    call_pos = prefix.find("windows_dll_search::install_process_policy()")
+    exit_pos = prefix.find("std::process::exit(2);", max(call_pos, 0))
+
+    if min(cfg_pos, err_pos, call_pos, exit_pos) < 0:
+        errors.append(
+            "Desktop main must install the Windows DLL search policy fail-closed before argument handling"
+        )
+    elif not (cfg_pos < err_pos < call_pos < exit_pos):
+        errors.append(
+            "Windows DLL search bootstrap order drifted; cfg + Err handling + install + exit(2) must precede argument handling"
+        )
+    return errors
+
+
+READER_PRODUCT_CLI_SOURCE = "apps/chaptera-desktop/src/main.rs"
+
+
+def reader_product_cli_bootstrap_errors(source: str) -> list[str]:
+    errors: list[str] = []
+    if "mod reader_product_cli;" not in source:
+        errors.append("Desktop main must retain the Reader product CLI module")
+
+    main_marker = "fn main() -> eframe::Result<()> {"
+    main_start = source.find(main_marker)
+    if main_start < 0:
+        errors.append("Desktop main entrypoint is missing")
+        return errors
+
+    gui_marker = "let initial_path = first_arg.map(PathBuf::from);"
+    gui_start = source.find(gui_marker, main_start)
+    if gui_start < 0:
+        errors.append("Desktop GUI bootstrap marker is missing")
+        return errors
+
+    prefix = source[main_start:gui_start]
+    product_call = "reader_product_cli::try_handle_product_smoke(first_arg.as_deref(), &mut args)"
+    probe_call = "reader_product_cli::try_handle_reader_probe("
+    if product_call not in prefix:
+        errors.append("Desktop main must dispatch Reader product smoke through reader_product_cli")
+    if probe_call not in prefix:
+        errors.append("Desktop main must dispatch Reader activation/smoke probes through reader_product_cli")
+    return errors
 
 
 def classify(
     paths: list[str],
     dynamic_evidence_only_paths: set[str] | None = None,
+    *,
+    visual_neutral_paths: set[str] | None = None,
+    product_neutral_paths: set[str] | None = None,
 ) -> dict[str, bool]:
     evidence_only = EVIDENCE_ONLY_PATHS | (dynamic_evidence_only_paths or set())
+    product_neutral = product_neutral_paths or set()
     semantic_paths = [path for path in paths if path not in evidence_only]
+    # Standalone Rust integration tests are development/evidence surfaces, not
+    # shipped product inputs. Keep them in Tier A so they still compile/lint
+    # against the Reader graph, but do not admit expensive product/render/
+    # corpus gates solely because a crate-level ** glob also covers tests/.
+    product_paths = [
+        path
+        for path in semantic_paths
+        if not is_rust_integration_test_path(path)
+        and path not in product_neutral
+        and path not in {VIEWER_AUTHORING_PROJECTION, READER_STORY_FRAME_ANALYSIS}
+    ]
     mapping = {
         "tier_a": TIER_A,
+        "free_pub_asset_cli": FREE_PUB_ASSET_CLI,
+        "desktop_rustfmt": DESKTOP_RUSTFMT,
         "reader_windows_smoke": READER_WINDOWS_SMOKE,
         "reader_windows": READER_WINDOWS,
         "editor_windows": EDITOR_WINDOWS,
@@ -389,15 +690,55 @@ def classify(
         "update_accept": UPDATE_ACCEPT,
     }
     result = {
-        scope: any(matches(path, patterns) for path in semantic_paths)
+        scope: any(
+            matches(path, patterns)
+            for path in (
+                semantic_paths
+                if scope in {"tier_a", "desktop_rustfmt"}
+                else product_paths
+            )
+        )
         for scope, patterns in mapping.items()
     }
+    local_portable_paths = [
+        path for path in product_paths if path not in LOCAL_PORTABLE_NEUTRAL_PATHS
+    ]
+    local_portable_asset_paths = [
+        path for path in local_portable_paths
+        if matches(path, LOCAL_PORTABLE_ASSET_CONTRACT_INPUTS)
+    ]
+    local_portable_heavy_paths = [
+        path for path in local_portable_paths
+        if matches(path, LOCAL_PORTABLE)
+        and not matches(path, LOCAL_PORTABLE_WEB_ASSETS)
+    ]
+    result["local_portable_assets"] = bool(local_portable_asset_paths) and not bool(
+        local_portable_heavy_paths
+    )
+    result["local_portable"] = bool(local_portable_heavy_paths)
+    # Golden tests still call ViewerApp and paint helpers owned by main.rs.
+    # A path alone cannot prove those dependencies unchanged. Only an exact
+    # standalone-comment proof may suppress their visual/typography allocation.
+    visual_paths = [
+        path for path in product_paths
+        if path != DESKTOP_MAIN or path not in (visual_neutral_paths or set())
+    ]
+    result["visual_oracle"] = any(matches(path, VISUAL_ORACLE) for path in visual_paths)
+    typography_paths = [
+        path
+        for path in visual_paths
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_PAGE_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_ANCHOR_GEOMETRY, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY}
+    ]
+    result["typography_golden"] = any(
+        matches(path, TYPOGRAPHY_GOLDEN) for path in typography_paths
+    )
     # The historical Virginia gate explicitly excluded probe-only binaries.
     # Preserve that boundary after routing it through the central PR DAG.
     virginia_paths = [
         path
-        for path in semantic_paths
-        if not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
+        for path in product_paths
+        if path not in {VIEWER_IMAGES, READER_PAINT_PROJECTION, READER_SOURCE_PAINT_ORDER, READER_TYPOGRAPHY_PROJECTION, READER_DIRECT_TRANSFORM, READER_GROUPED_PROJECTION, READER_SOURCE_GRAPH_MODEL, READER_ANCHOR_GEOMETRY, READER_STORY_MATERIALIZATION, READER_QUILL_ADMISSION, READER_CONTENTS_ACCESS, READER_SOURCE_IDENTITY, READER_NODE_MATERIALIZATION}
+        and not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
         and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
     ]
     result["virginia_page_role"] = any(
@@ -413,7 +754,7 @@ def classify(
     if any(
         path.startswith("apps/chaptera-desktop/")
         and path not in SHARED_DESKTOP_FILES
-        for path in semantic_paths
+        for path in product_paths
     ):
         result["editor_windows"] = True
     return result
@@ -428,8 +769,70 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_paths(args.base, args.head)
+
+    try:
+        desktop_main = subprocess.check_output(
+            ["git", "show", f"{args.head}:{WINDOWS_DLL_BOOTSTRAP_SOURCE}"],
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"reader-pr-ci: could not read {WINDOWS_DLL_BOOTSTRAP_SOURCE} at {args.head}: {error}"
+        )
+        return 2
+    bootstrap_errors = windows_dll_bootstrap_errors(desktop_main)
+    if bootstrap_errors:
+        for error in bootstrap_errors:
+            print(f"reader-pr-ci: Windows DLL bootstrap invariant failed: {error}")
+        return 2
+
+    reader_cli_errors = reader_product_cli_bootstrap_errors(desktop_main)
+    if reader_cli_errors:
+        for error in reader_cli_errors:
+            print(f"reader-pr-ci: Reader product CLI bootstrap invariant failed: {error}")
+        return 2
+
     dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
-    scopes = classify(paths, dynamic_evidence_only)
+    product_neutral: set[str] = set()
+    if VIEWER_FACADE in paths and VIEWER_AUTHORING_PROJECTION in paths:
+        try:
+            facade_diff = subprocess.check_output(
+                [
+                    "git",
+                    "diff",
+                    "--unified=0",
+                    f"{args.base}...{args.head}",
+                    "--",
+                    VIEWER_FACADE,
+                ],
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            facade_diff = ""
+        if viewer_authoring_facade_diff_is_product_neutral(facade_diff):
+            product_neutral.add(VIEWER_FACADE)
+
+    visual_neutral: set[str] = set()
+    if DESKTOP_MAIN in paths:
+        try:
+            merge_base = subprocess.check_output(
+                ["git", "merge-base", args.base, args.head], text=True
+            ).strip()
+            base_main = subprocess.check_output(
+                ["git", "show", f"{merge_base}:{DESKTOP_MAIN}"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            base_main = None
+        if base_main is not None and desktop_main_visual_change_is_neutral(base_main, desktop_main):
+            visual_neutral.add(DESKTOP_MAIN)
+    scopes = classify(
+        paths,
+        dynamic_evidence_only,
+        visual_neutral_paths=visual_neutral,
+        product_neutral_paths=product_neutral,
+    )
     receipt = {
         "schema": "chaptera.reader-pr-fanout.v1",
         "base_sha": args.base,
@@ -438,6 +841,8 @@ def main() -> int:
         "evidence_only_paths": sorted(
             (EVIDENCE_ONLY_PATHS & set(paths)) | dynamic_evidence_only
         ),
+        "visual_neutral_paths": sorted(visual_neutral),
+        "product_neutral_paths": sorted(product_neutral),
         "scopes": scopes,
     }
 

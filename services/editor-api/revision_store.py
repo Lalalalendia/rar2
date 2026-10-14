@@ -977,30 +977,54 @@ class RevisionKernel:
             )
             node_id = command["node_id"]
             shapes = base_project.get("shapes")
-            target = shapes.get(node_id) if isinstance(shapes, dict) else None
-            if not isinstance(target, dict):
-                raise ValueError("RotateNodeQuarterTurn target missing from base project")
-            expected_pivot = authored_bounds_center_v1(target.get("bounds"))
+            picture_frames = base_project.get("picture_frames")
+            shape_target = (
+                shapes.get(node_id)
+                if isinstance(shapes, dict)
+                else None
+            )
+            picture_target = (
+                picture_frames.get(node_id)
+                if isinstance(picture_frames, dict)
+                else None
+            )
+            shape_present = isinstance(shape_target, dict)
+            picture_present = isinstance(picture_target, dict)
+            if shape_present == picture_present:
+                raise ValueError(
+                    "RotateNodeQuarterTurn target must resolve to exactly one canonical registry"
+                )
+
+            if shape_present:
+                registry_name = "shapes"
+                geometry_key = "bounds"
+                target = shape_target
+            else:
+                registry_name = "picture_frames"
+                geometry_key = "frame"
+                target = picture_target
+
+            expected_pivot = authored_bounds_center_v1(target.get(geometry_key))
             if operation.get("pivot") != expected_pivot:
                 raise ValueError(
                     "canonical RotateNodeQuarterTurn pivot differs from authored bounds center"
                 )
-            result_shapes = resulting_project.get("shapes")
+
+            result_registry = resulting_project.get(registry_name)
             result_target = (
-                result_shapes.get(node_id)
-                if isinstance(result_shapes, dict)
+                result_registry.get(node_id)
+                if isinstance(result_registry, dict)
                 else None
             )
             expected_transform = {
                 "kind": "affine",
                 **operation.get("after", {}),
             }
-            if (
-                not isinstance(result_target, dict)
-                or result_target.get("transform") != expected_transform
-            ):
+            expected_target = copy.deepcopy(target)
+            expected_target["transform"] = expected_transform
+            if result_target != expected_target:
                 raise ValueError(
-                    "RotateNodeQuarterTurn resulting project is not bound to canonical after transform"
+                    "RotateNodeQuarterTurn resulting target changed fields outside canonical transform"
                 )
             return operation, resulting_project, consequences
 
@@ -1235,6 +1259,19 @@ class RevisionKernel:
             request_validator=self._validate_reorder_authored_stack_request_shape,
             canonical_validator=self._validate_canonical_reorder_authored_stack,
             pre_execute_validator=pre_execute_validator,
+        )
+
+    def commit_admitted_font_resource(
+        self,
+        request: dict,
+        executor: AuthoritativeExecutor,
+    ) -> dict:
+        """Atomic, idempotent exact physical-font commit with Rust authority."""
+        return self._commit_command(
+            request,
+            executor,
+            request_validator=self._validate_font_resource_request_shape,
+            canonical_validator=self._validate_canonical_font_resource,
         )
 
     def commit_story_range(
@@ -1929,6 +1966,88 @@ class RevisionKernel:
             or command["y_emu"] + command["height_emu"] < MIN_SAFE_EMU
         ):
             raise ValueError("resize bounds overflow the V1 JavaScript-safe EMU range")
+
+    @staticmethod
+    def _validate_font_resource_request_shape(request: dict) -> None:
+        expected = {
+            "protocol_version", "document_id", "source_hash",
+            "base_revision_id", "client_operation_id", "command",
+        }
+        if not isinstance(request, dict) or set(request) != expected:
+            raise ValueError("font intent must contain only the canonical commit envelope")
+        if request["protocol_version"] != "chaptera.font-resource-intent.v1":
+            raise ValueError("font resource protocol mismatch")
+        for key in ("document_id", "source_hash", "base_revision_id", "client_operation_id"):
+            value = request[key]
+            if not isinstance(value, str) or not (1 <= len(value) <= 192):
+                raise ValueError("font intent invalid " + key)
+        cmd = request["command"]
+        if not isinstance(cmd, dict) or set(cmd) != {
+            "kind", "story_id", "start_scalar", "end_scalar",
+            "expected_state_hash", "candidate",
+        } or cmd["kind"] != "set_admitted_font_resource":
+            raise ValueError("font intent command is not an exact resource selection")
+        import re
+        uuid = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z")
+        sha = re.compile(r"sha256:[0-9a-f]{64}\Z")
+        raw_sha = re.compile(r"[0-9a-f]{64}\Z")
+        if not isinstance(cmd["story_id"], str) or not uuid.fullmatch(cmd["story_id"]):
+            raise ValueError("font Story identity is invalid")
+        first, last = cmd["start_scalar"], cmd["end_scalar"]
+        if any(type(x) is not int for x in (first, last)) or not (0 <= first < last <= 0xFFFFFFFF):
+            raise ValueError("font scalar range must be nonempty and within u32")
+        if not isinstance(cmd["expected_state_hash"], str) or not raw_sha.fullmatch(cmd["expected_state_hash"]):
+            raise ValueError("canonical font overlay state hash required")
+        candidate = cmd["candidate"]
+        if not isinstance(candidate, dict) or set(candidate) != {
+            "protocol_version", "document_id", "expected_revision_id",
+            "scene_snapshot_id", "layout_environment_id",
+            "font_set_fingerprint", "resource_id", "font_fingerprint",
+            "content_hash", "face_index", "authority",
+        }:
+            raise ValueError("font selector contains missing or authoritative fields")
+        if (candidate["protocol_version"] != "chaptera.font-replacement-candidate.v1"
+                or candidate["authority"] != "candidate_only_server_validation_required"
+                or candidate["document_id"] != request["document_id"]
+                or candidate["expected_revision_id"] != request["base_revision_id"]):
+            raise ValueError("font selector not scoped to current commit")
+        for key in ("scene_snapshot_id", "layout_environment_id",
+                    "font_set_fingerprint", "font_fingerprint"):
+            if not isinstance(candidate[key], str) or not sha.fullmatch(candidate[key]):
+                raise ValueError("invalid admitted physical-font " + key)
+        if not isinstance(candidate["resource_id"], str) or not uuid.fullmatch(candidate["resource_id"]):
+            raise ValueError("invalid physical resource identity")
+        if not isinstance(candidate["content_hash"], str) or not raw_sha.fullmatch(candidate["content_hash"]):
+            raise ValueError("invalid physical resource content hash")
+        if type(candidate["face_index"]) is not int or not (0 <= candidate["face_index"] <= 65535):
+            raise ValueError("invalid physical font face index")
+
+    @staticmethod
+    def _validate_canonical_font_resource(command: dict, operation: dict) -> None:
+        if not isinstance(operation, dict) or set(operation) != {
+            "kind", "story_id", "start_scalar", "end_scalar",
+            "property", "value", "before_state_hash", "after_state_hash",
+        }:
+            raise ValueError("Rust canonical font operation has unsupported fields")
+        candidate = command["candidate"]
+        if (operation["kind"] != "set_text_format_property"
+                or operation["property"] != "font_resource"
+                or any(operation[key] != command[key]
+                       for key in ("story_id", "start_scalar", "end_scalar"))
+                or operation["before_state_hash"] != command["expected_state_hash"]):
+            raise ValueError("Rust canonical font operation differs from intent")
+        value = operation["value"]
+        if not isinstance(value, dict) or value != {
+            key: candidate[key] for key in
+            ("resource_id", "font_fingerprint", "content_hash", "face_index")
+        }:
+            raise ValueError("Rust canonical font value differs from exact candidate")
+        import re
+        after = operation["after_state_hash"]
+        if (not isinstance(after, str)
+                or re.fullmatch(r"[0-9a-f]{64}", after) is None
+                or after == operation["before_state_hash"]):
+            raise ValueError("Rust canonical font operation did not change format state")
 
     @staticmethod
     def _validate_story_range_request_shape(request: dict) -> None:

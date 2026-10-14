@@ -1,5 +1,17 @@
+mod derived_file_trust;
+#[cfg(all(test, target_os = "windows"))]
+mod derived_file_trust_windows_tests;
 mod destination;
+mod packet_admission;
+mod source_snapshot;
+#[cfg(all(test, target_os = "windows"))]
+mod source_snapshot_windows_tests;
 
+pub use packet_admission::{HandoffPacketAdmissionError, HandoffPacketAdmissionV1};
+
+pub use derived_file_trust::{
+    DerivedFileTrustDisposition, DerivedFileTrustError, DerivedFileTrustReceipt,
+};
 pub use destination::{
     AdmittedDestination, DestinationCommitReceipt, DestinationWriteError, FileIdentity,
     identify_existing_path,
@@ -18,6 +30,7 @@ pub const EDITOR_PRODUCT_ID: &str = "chaptera.editor";
 pub const RESCUE_PRODUCT_ID: &str = "chaptera.rescue";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffPacket {
     pub protocol_version: String,
     pub sender_product_id: String,
@@ -30,6 +43,7 @@ pub struct HandoffPacket {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffSource {
     pub path: String,
     pub sha256: String,
@@ -37,24 +51,28 @@ pub struct HandoffSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffContext {
     pub capability: String,
     pub loss_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffProvenance {
     pub source_identity_verified: bool,
     pub mutable_document_state_included: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffConsent {
     pub local_file_handoff: bool,
     pub user_initiated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HandoffAcceptance {
     pub protocol_version: String,
     pub sender_product_id: String,
@@ -79,11 +97,15 @@ pub struct AdmittedSource {
 
 impl AdmittedSource {
     pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_read_observer(path, |_| {})
+    }
+
+    fn open_with_read_observer(path: &Path, observer: impl FnMut(usize)) -> Result<Self, String> {
         require_pub_path(path)?;
         let display_path = path.to_path_buf();
         let locator_path = fs::canonicalize(path)
             .map_err(|error| source_path_error("canonicalize", path, error))?;
-        let mut file = File::open(&locator_path)
+        let mut file = source_snapshot::open_snapshot_file(&locator_path)
             .map_err(|error| source_path_error("open", &locator_path, error))?;
         let policy = chaptera_untrusted_pub_scan::PubScanPolicyV1::default()
             .validate()
@@ -99,11 +121,9 @@ impl AdmittedSource {
             ));
         }
 
-        let mut bytes = Vec::new();
-        file.by_ref()
-            .take(policy.max_file_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("read {}: {error}", locator_path.display()))?;
+        let bytes =
+            source_snapshot::read_bounded_snapshot(&mut file, policy.max_file_bytes, observer)
+                .map_err(|error| format!("read {}: {error}", locator_path.display()))?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.max_file_bytes {
             return Err(format!(
                 "source_rejected_by_policy: input_size_limit: streamed bytes exceed {}",
@@ -111,6 +131,9 @@ impl AdmittedSource {
             ));
         }
         let sha256 = sha256_bytes(&bytes);
+        // Relax the short snapshot lock by reopening the same object, never the path.
+        let file = source_snapshot::retain_admitted_handle(file)
+            .map_err(|error| format!("source_unstable: retain admitted source handle: {error}"))?;
         Ok(Self {
             display_path,
             locator_path,
@@ -134,6 +157,29 @@ impl AdmittedSource {
 
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    pub fn commit_derived_output(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+    ) -> Result<DerivedFileTrustReceipt, DerivedFileTrustError> {
+        derived_file_trust::commit_derived_output(self, destination, bytes)
+    }
+
+    pub(crate) fn file_identity(&self) -> Result<FileIdentity, DestinationWriteError> {
+        destination::identify_open_file(&self.file)
+    }
+
+    pub(crate) fn verify_unchanged(&self) -> Result<(), String> {
+        let actual = self.rehash_opened_file()?;
+        if actual != self.sha256 {
+            return Err(format!(
+                "source_changed: admitted source hash changed from {} to {actual}",
+                self.sha256
+            ));
+        }
+        Ok(())
     }
 
     fn rehash_opened_file(&self) -> Result<String, String> {
@@ -190,6 +236,10 @@ fn lower_sha256(value: &str) -> bool {
 }
 
 fn source_path_error(operation: &str, path: &Path, error: std::io::Error) -> String {
+    #[cfg(target_os = "windows")]
+    if matches!(error.raw_os_error(), Some(32 | 33 | 1224)) {
+        return format!("source_busy: {operation} {}: {error}", path.display());
+    }
     #[cfg(target_os = "windows")]
     if error.raw_os_error() == Some(206) {
         return format!(
@@ -316,6 +366,7 @@ pub fn create_reader_handoff_from_admitted(
 }
 
 pub fn validate_packet(packet: &HandoffPacket) -> Result<(), String> {
+    HandoffPacketAdmissionV1::check_lengths(packet).map_err(|error| error.to_string())?;
     if packet.protocol_version != PACKET_VERSION {
         return Err(format!(
             "unsupported suite handoff version: {}",
@@ -366,6 +417,10 @@ pub fn write_packet(packet: &HandoffPacket, output: &Path) -> Result<(), String>
     if Path::new(&packet.source.path) == output {
         return Err("handoff packet must not overwrite the source PUB".to_owned());
     }
+    let mut bytes = serde_json::to_vec_pretty(packet)
+        .map_err(|error| format!("serialize suite handoff packet: {error}"))?;
+    bytes.push(b'\n');
+    HandoffPacketAdmissionV1::check_byte_length(bytes.len()).map_err(|error| error.to_string())?;
     if let Some(parent) = output
         .parent()
         .filter(|value| !value.as_os_str().is_empty())
@@ -373,20 +428,17 @@ pub fn write_packet(packet: &HandoffPacket, output: &Path) -> Result<(), String>
         fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
-    let bytes = serde_json::to_vec_pretty(packet)
-        .map_err(|error| format!("serialize suite handoff packet: {error}"))?;
-    fs::write(output, [bytes.as_slice(), b"\n"].concat())
-        .map_err(|error| format!("write {}: {error}", output.display()))
+    fs::write(output, bytes).map_err(|error| format!("write {}: {error}", output.display()))
 }
 
 pub fn load_for_receiver(
     packet_path: &Path,
     expected_receiver: &str,
 ) -> Result<ValidatedHandoff, String> {
-    let packet_bytes = fs::read(packet_path)
-        .map_err(|error| format!("read {}: {error}", packet_path.display()))?;
-    let packet: HandoffPacket = serde_json::from_slice(&packet_bytes)
-        .map_err(|error| format!("parse suite handoff packet: {error}"))?;
+    let packet_bytes =
+        HandoffPacketAdmissionV1::read_path(packet_path).map_err(|error| error.to_string())?;
+    let packet =
+        HandoffPacketAdmissionV1::decode(&packet_bytes).map_err(|error| error.to_string())?;
     validate_packet(&packet)?;
     if packet.target_product_id != expected_receiver {
         return Err(format!(

@@ -1,8 +1,13 @@
 import { traceHeadersV1 } from "./observability-v1.mjs";
-import { projectCurrentAuthoringGraphToScene } from "./current-authoring-graph-scene-v1.mjs";
+import { validateStoryRangeIntentV1 } from "./text-protocol-v1.mjs";
+import { adaptReaderSceneToEditorScene } from "./reader-scene-editor-adapter-v1.mjs";
+import { projectReaderSceneToEditorInteractionScene } from "./reader-scene-editor-interaction-v1.mjs";
 
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
+const HISTORY_TRANSITION_INTENT_V1 = "chaptera.history-transition-intent.v1";
+const HISTORY_TRANSITION_ACCEPTED_V1 = "chaptera.history-transition-accepted.v1";
+const HISTORY_TRANSITION_REJECTED_V1 = "chaptera.history-transition-rejected.v1";
 const EXPORT_CREATE_V1 = "chaptera.export-create.v1";
 const MIGRATION_EDITABLE_ROUTE_REQUEST_V1 =
   "chaptera.migration-editable-route-request.v1";
@@ -16,6 +21,18 @@ const REJECTABLE_COMMIT_CODES = new Set([
   "move_node_rejected",
   "authz_denied",
   "authz_expired",
+]);
+
+const REJECTABLE_HISTORY_CODES = new Set([
+  "stale_revision",
+  "idempotency_conflict",
+  "source_hash_mismatch",
+  "undo_rejected",
+  "redo_unavailable",
+  "undo_operation_unsupported",
+  "grant_missing",
+  "grant_expired",
+  "capability_denied",
 ]);
 
 function clone(value) {
@@ -65,7 +82,7 @@ export class ChapteraProductEditorServiceV1 {
     baseUrl,
     {
       documentId,
-      fetchImpl = globalThis.fetch,
+      fetchImpl = (...args) => globalThis.fetch(...args),
       observability = null,
     } = {},
   ) {
@@ -130,18 +147,173 @@ export class ChapteraProductEditorServiceV1 {
   }
 
   async currentScene() {
-    return projectCurrentAuthoringGraphToScene(await this.currentDocument());
+    return adaptReaderSceneToEditorScene(await this.#currentReaderScene());
+  }
+
+  async currentVisualScene() {
+    const [current, visualResult] = await Promise.all([
+      this.currentDocument(),
+      this.#fetchJson(
+        "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
+        { method: "GET" },
+        this.#context("scene_read"),
+      ),
+    ]);
+    this.#throwUnlessOk(visualResult, "current visual scene");
+    const visual = ensureProtocol(
+      visualResult.value,
+      "chaptera.reader-scene.v1",
+      "current visual scene",
+    );
+    if (visual.document_id !== current.document_id) {
+      throw new Error("visual Scene document identity mismatch");
+    }
+    if (visual.source_hash !== current.source_hash) {
+      throw new Error("visual Scene source identity mismatch");
+    }
+    if (visual.revision_id !== current.revision_id) {
+      throw new Error("visual Scene revision differs from canonical current document");
+    }
+    return {
+      current_document: clone(current),
+      visual_scene: clone(visual),
+    };
+  }
+
+  // Reuse the current Product API's exact document/source/revision visual fence.
+  // The non-visual interaction projection is never a second paint authority.
+  async currentRichEditorState() {
+    const { current_document, visual_scene } = await this.currentVisualScene();
+    return {
+      current_document,
+      reader_scene: visual_scene,
+      interaction_scene: projectReaderSceneToEditorInteractionScene(visual_scene),
+    };
+  }
+
+  async readerSceneForRevision(revisionId) {
+    ident(revisionId, "revisionId");
+    const { current_document, visual_scene } = await this.currentVisualScene();
+    if (current_document.revision_id !== revisionId) {
+      throw new Error(
+        "canonical current revision advanced before exact rich Scene reconciliation",
+      );
+    }
+    return visual_scene;
   }
 
   async sceneForRevision(revisionId) {
     ident(revisionId, "revisionId");
-    const current = await this.currentDocument();
-    if (current.revision_id !== revisionId) {
+    const readerScene = await this.#currentReaderScene();
+    if (readerScene.revision_id !== revisionId) {
       throw new Error(
         "canonical current revision advanced before exact Scene reconciliation",
       );
     }
-    return projectCurrentAuthoringGraphToScene(current);
+    return adaptReaderSceneToEditorScene(readerScene);
+  }
+
+  async #currentReaderScene() {
+    const context = this.#context("scene_read");
+    const result = await this.#fetchJson(
+      "/v1/reader/documents/" + encodeURIComponent(this.documentId) + "/scene",
+      { method: "GET" },
+      context,
+    );
+    this.#throwUnlessOk(result, "current Reader scene");
+    const value = ensureProtocol(
+      result.value,
+      "chaptera.reader-scene.v1",
+      "current Reader scene",
+    );
+    if (value.document_id !== this.documentId) {
+      throw new Error("current Reader scene document identity mismatch");
+    }
+    return clone(value);
+  }
+
+  // Supported plain StoryRange intents only. Browser provides no canonical
+  // expected_before or durable text state; the isolated server derives both.
+  async commitStoryRange(request) {
+    const intent = validateStoryRangeIntentV1(request);
+    const outerKeys = new Set([
+      "protocol_version", "document_id", "source_hash", "base_revision_id",
+      "client_operation_id", "depends_on_client_operation_id", "command",
+    ]);
+    const commandKeys = new Set([
+      "kind", "story_id", "start_scalar", "end_scalar", "replacement_text",
+    ]);
+    if (Object.keys(intent).some((key) => !outerKeys.has(key)) ||
+        Object.keys(intent.command).length !== commandKeys.size ||
+        Object.keys(intent.command).some((key) => !commandKeys.has(key))) {
+      throw new TypeError("unknown Story intent fields are not admitted");
+    }
+    if (intent.document_id !== this.documentId) {
+      throw new TypeError("Story commit document differs from bound service document");
+    }
+    if (intent.depends_on_client_operation_id != null) {
+      throw new TypeError("pending Story operation chains are not admitted by Product V1");
+    }
+    if (intent.command.replacement_text.length > 8192 ||
+        [...intent.command.replacement_text].some((ch) => /\p{Cc}/u.test(ch))) {
+      throw new TypeError("Product V1 admits only bounded plain Story replacements");
+    }
+    this.commitRequests += 1;
+    this.lastRequest = clone(intent);
+    const context = this.#context("commit", intent.client_operation_id);
+    this.lastCommitTraceContext = context;
+
+    const result = await this.#mutationJson(
+      "/v1/documents/" + encodeURIComponent(this.documentId) + "/story-commit",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(intent),
+      },
+      context,
+    );
+
+    if (result.response.ok) {
+      const accepted = ensureProtocol(
+        result.value, "chaptera.commit-accepted.v1", "Story commit accepted",
+      );
+      const operation = accepted.canonical_operation;
+      if (accepted.document_id !== intent.document_id ||
+          accepted.source_hash !== intent.source_hash ||
+          accepted.base_revision_id !== intent.base_revision_id ||
+          accepted.client_operation_id !== intent.client_operation_id ||
+          typeof accepted.revision_id !== "string" ||
+          !/^sha256:[0-9a-f]{64}$/.test(accepted.revision_id) ||
+          accepted.revision_id === intent.base_revision_id ||
+          operation?.kind !== "replace_story_range" ||
+          operation.story_id !== intent.command.story_id ||
+          operation.start_scalar !== intent.command.start_scalar ||
+          operation.end_scalar !== intent.command.end_scalar ||
+          operation.replacement_text !== intent.command.replacement_text) {
+        throw new Error("Story commit accepted identity mismatch");
+      }
+      return clone(accepted);
+    }
+
+    const code = responseErrorCode(result.value);
+    if (!REJECTABLE_COMMIT_CODES.has(code) &&
+        !["story_range_invalid", "story_id_invalid", "story_range_rejected",
+          "product_story_range_rejected", "product_story_range_invalid",
+          "text_causal_chain_unsupported"].includes(code)) {
+      this.#throwUnlessOk(result, "Story commit");
+    }
+    const currentRevisionId = code === "stale_revision"
+      ? (await this.currentDocument()).revision_id : null;
+    return {
+      protocol_version: COMMIT_REJECTED_V1,
+      document_id: intent.document_id,
+      base_revision_id: intent.base_revision_id,
+      current_revision_id: currentRevisionId,
+      client_operation_id: intent.client_operation_id,
+      code,
+      message_key: "revision." + code,
+      retryable: code === "stale_revision",
+    };
   }
 
   async commit(request) {
@@ -169,9 +341,24 @@ export class ChapteraProductEditorServiceV1 {
     );
 
     if (result.response.ok) {
-      return clone(
-        ensureProtocol(result.value, "chaptera.commit-accepted.v1", "commit accepted"),
+      const accepted = ensureProtocol(
+        result.value, "chaptera.commit-accepted.v1", "commit accepted",
       );
+      // A 2xx is not authority to release the mutation fence unless it
+      // acknowledges this exact document, source, base and operation.
+      // Treat an inconsistent ACK as uncertain, never as a saved change.
+      if (
+        accepted.document_id !== this.documentId ||
+        accepted.source_hash !== request.source_hash ||
+        accepted.base_revision_id !== request.base_revision_id ||
+        accepted.client_operation_id !== request.client_operation_id ||
+        typeof accepted.revision_id !== "string" ||
+        !/^sha256:[0-9a-f]{64}$/.test(accepted.revision_id) ||
+        accepted.revision_id === request.base_revision_id
+      ) {
+        throw new Error("commit accepted identity mismatch");
+      }
+      return clone(accepted);
     }
 
     const code = responseErrorCode(result.value);
@@ -192,6 +379,82 @@ export class ChapteraProductEditorServiceV1 {
       client_operation_id: request.client_operation_id,
       code,
       message_key: "revision." + code,
+      retryable: code === "stale_revision",
+    };
+  }
+
+  async undo(request) {
+    return this.#historyTransition("undo", request);
+  }
+
+  async redo(request) {
+    return this.#historyTransition("redo", request);
+  }
+
+  async #historyTransition(kind, { sourceHash, baseRevisionId, clientOperationId }) {
+    if (kind !== "undo" && kind !== "redo") throw new TypeError("unsupported history kind");
+    ident(sourceHash, "sourceHash");
+    ident(baseRevisionId, "baseRevisionId");
+    ident(clientOperationId, "clientOperationId");
+    const request = {
+      protocol_version: HISTORY_TRANSITION_INTENT_V1,
+      document_id: this.documentId,
+      source_hash: sourceHash,
+      base_revision_id: baseRevisionId,
+      client_operation_id: clientOperationId,
+      command: { kind },
+    };
+
+    // History is a durable revision mutation, so reuse the supported "commit"
+    // observability class rather than inventing an unsupported telemetry class.
+    const context = this.#context("commit", clientOperationId);
+    this.lastCommitTraceContext = context;
+    this.lastRequest = clone(request);
+    const result = await this.#mutationJson(
+      "/v1/documents/" + encodeURIComponent(this.documentId) + "/history",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+      context,
+    );
+
+    if (result.response.ok) {
+      const accepted = ensureProtocol(
+        result.value,
+        HISTORY_TRANSITION_ACCEPTED_V1,
+        "history transition accepted",
+      );
+      if (
+        accepted.document_id !== this.documentId ||
+        accepted.source_hash !== sourceHash ||
+        accepted.base_revision_id !== baseRevisionId ||
+        accepted.client_operation_id !== clientOperationId ||
+        accepted.transition_kind !== kind
+      ) {
+        throw new Error("history transition accepted identity mismatch");
+      }
+      return clone(accepted);
+    }
+
+    const code = responseErrorCode(result.value);
+    if (!REJECTABLE_HISTORY_CODES.has(code)) {
+      this.#throwUnlessOk(result, "history transition");
+    }
+    let currentRevisionId = null;
+    if (code === "stale_revision") {
+      currentRevisionId = (await this.currentDocument()).revision_id;
+    }
+    return {
+      protocol_version: HISTORY_TRANSITION_REJECTED_V1,
+      document_id: this.documentId,
+      base_revision_id: baseRevisionId,
+      current_revision_id: currentRevisionId,
+      client_operation_id: clientOperationId,
+      transition_kind: kind,
+      code,
+      message_key: "history." + code,
       retryable: code === "stale_revision",
     };
   }

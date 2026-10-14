@@ -1,0 +1,38 @@
+name: Reader feature prevalence V2
+
+on:
+  pull_request:
+    paths:
+      - "tools/corpus/reader_feature_prevalence.py"
+      - "tools/corpus/test_reader_feature_prevalence.py"
+      - ".github/workflows/reader-feature-prevalence-v2.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/corpus/reader_feature_prevalence.py"
+      - "tools/corpus/test_reader_feature_prevalence.py"
+      - ".github/workflows/reader-feature-prevalence-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "reader-feature-prevalence-v2-${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test file-level prevalence aggregator
+        run: |
+          python -m py_compile \
+            tools/corpus/reader_feature_prevalence.py \
+            tools/corpus/test_reader_feature_prevalence.py
+          python tools/corpus/test_reader_feature_prevalence.py

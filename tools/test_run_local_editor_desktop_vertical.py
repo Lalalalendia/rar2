@@ -2,6 +2,7 @@
 import hashlib
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import textwrap
@@ -13,6 +14,8 @@ sys.path.insert(0, str(TOOLS))
 
 from run_local_editor_desktop_vertical import (
     DesktopVerticalError,
+    IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS,
+    SUPPORTED_EDITOR_PROJECT_SCHEMA_VERSIONS,
     run_local_desktop_vertical,
 )
 from validate_editor_desktop_vertical_receipt import validate_schema, validate_semantics
@@ -217,6 +220,79 @@ class DesktopVerticalRunnerTests(unittest.TestCase):
         validate_schema(saved)
         self.assertEqual(receipt, saved)
         self.assertEqual(saved["project"]["schema_version"], "pub-editor-v0.11")
+
+    def test_v0_12_and_v0_13_identity_projects_are_accepted(self):
+        identity = '''"identity": {
+        "project_id": "018f0000-0000-7000-8000-000000000001",
+        "document_id": "018f0000-0000-7000-8000-000000000002",
+        "history_id": "018f0000-0000-7000-8000-000000000003",
+        "genesis_revision_id": "018f0000-0000-7000-8000-000000000004"
+    },'''
+        for schema_version in ("pub-editor-v0.12", "pub-editor-v0.13"):
+            with self.subTest(schema_version=schema_version):
+                engine = FAKE_ENGINE.replace(
+                    '"schema_version": "pub-editor-v0.4",',
+                    f'"schema_version": "{schema_version}",\n    ' + identity,
+                    1,
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture, project, export, receipt_path, command = self.make_files(tmp, engine)
+                    receipt = run_local_desktop_vertical(
+                        fixture=fixture,
+                        project_output=project,
+                        export_output=export,
+                        receipt_output=receipt_path,
+                        command_template=command,
+                        expected_hash=SOURCE_HASH,
+                        expected_len=len(SOURCE_BYTES),
+                        rar_commit=RAR_COMMIT,
+                    )
+                    saved = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+                validate_schema(saved)
+                self.assertEqual(receipt, saved)
+                self.assertEqual(saved["project"]["schema_version"], schema_version)
+
+    def test_current_rust_editor_project_schema_is_admitted_everywhere(self):
+        pub_editor = (
+            ROOT
+            / "vendor"
+            / "producer-a"
+            / "crates"
+            / "pub-editor"
+            / "src"
+            / "lib.rs"
+        ).read_text(encoding="utf-8")
+        current = re.search(
+            r'pub const EDITOR_PROJECT_VERSION_CURRENT: &str = (EDITOR_PROJECT_VERSION_V0_\d+);',
+            pub_editor,
+        )
+        self.assertIsNotNone(current)
+        symbol = current.group(1)
+        value = re.search(
+            rf'pub const {re.escape(symbol)}: &str = "([^"]+)";',
+            pub_editor,
+        )
+        self.assertIsNotNone(value)
+        current_schema = value.group(1)
+
+        receipt_schema = json.loads(
+            (
+                ROOT
+                / "packages"
+                / "product"
+                / "editor-desktop-vertical"
+                / "v1"
+                / "acceptance-receipt.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        receipt_versions = set(
+            receipt_schema["properties"]["project"]["properties"]["schema_version"]["enum"]
+        )
+
+        self.assertIn(current_schema, SUPPORTED_EDITOR_PROJECT_SCHEMA_VERSIONS)
+        self.assertIn(current_schema, receipt_versions)
+        self.assertIn(current_schema, IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS)
 
     def test_project_move_must_match_observation(self):
         broken = FAKE_ENGINE.replace(

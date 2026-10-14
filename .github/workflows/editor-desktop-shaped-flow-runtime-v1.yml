@@ -3,10 +3,16 @@ name: Editor Desktop Shaped Flow Runtime V1
 on:
   pull_request:
     paths:
-      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/font_resource.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_font_spans.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_mixed_font_flow.rs"
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-layout/**"
+      - "tools/acquire_carlton_march_pair.py"
       - ".github/workflows/editor-desktop-shaped-flow-runtime-v1.yml"
   workflow_dispatch:
 
@@ -27,6 +33,9 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Format
         run: cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
@@ -49,7 +58,39 @@ jobs:
           test "$actual_len" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
 
+      - name: Acquire pinned Carlton March source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+          root="$RUNNER_TEMP/paragraph-alignment-carlton"
+          mkdir -p "$root"
+          python tools/acquire_carlton_march_pair.py "$root"
+          pub="$root/March-2026.pub"
+          actual_sha="$(sha256sum "$pub" | awk '{print $1}')"
+          test "$actual_sha" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          echo "CHAPTERA_CARLTON_PUB=$pub" >> "$GITHUB_ENV"
+
+      - name: Real paragraph alignment caret geometry and Clear restore
+        run: |
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_carlton_paragraph_alignment_moves_caret_and_clear_restores_source_geometry -- --nocapture
+
       - name: Real current-Story shaped-flow edit rebuild
         run: |
           cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
             real_sample_newsletter_current_story_builds_deterministically_and_rebinds_after_edit -- --nocapture
+      - name: Real Publisher exact physical-font override glyph spans with fresh project
+        run: |
+          set -o pipefail
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_newsletter_font_history_shapes_only_admitted_scalar_and_survives_reopen -- --nocapture \
+            | tee /tmp/chaptera-current-exact-font-spans.log
+          grep -Fq 'REAL_PUB_FONT_SPANS_OK' /tmp/chaptera-current-exact-font-spans.log
+      - name: Real Publisher exact physical-font Unicode break and reciprocal frame fit
+        run: |
+          set -o pipefail
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_publisher_full_physical_override_reflows_and_survives_fresh_project_reopen -- --nocapture \
+            | tee /tmp/chaptera-current-mixed-font-flow.log
+          grep -Fq 'REAL_PUB_MIXED_FONT_FLOW_OK' /tmp/chaptera-current-mixed-font-flow.log

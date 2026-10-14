@@ -132,20 +132,23 @@ def verify_odg(package: zipfile.ZipFile, node_id: str, rect: RectEmu) -> dict:
     if "content.xml" not in package.namelist():
         raise AssertionError("ODG package has no content.xml")
 
-    frame_name = "Frame_" + canonical_node_hex(node_id)
+    node_hex = canonical_node_hex(node_id)
+    identity_candidates = {"Frame_" + node_hex, "Image_" + node_hex}
     root = ET.fromstring(package.read("content.xml"))
     matches = [
-        element
+        (element, attr_by_local(element, "name"))
         for element in root.iter()
         if local_name(element.tag) == "frame"
-        and attr_by_local(element, "name") == frame_name
+        and attr_by_local(element, "name") in identity_candidates
     ]
     if len(matches) != 1:
+        observed_names = sorted(name for _, name in matches if name is not None)
         raise AssertionError(
-            f"expected exactly one ODG frame for {node_id}, found {len(matches)}"
+            f"expected exactly one ODG semantic frame for {node_id}, "
+            f"found {len(matches)} identities={observed_names}"
         )
 
-    frame = matches[0]
+    frame, frame_name = matches[0]
     observed = {
         "x": attr_by_local(frame, "x"),
         "y": attr_by_local(frame, "y"),

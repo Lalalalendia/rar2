@@ -200,34 +200,76 @@ def _quarter_turn_about_center(
     return _affine_dict((a_f, b_f, c_f, d_f, tx, ty))
 
 
+def _resolve_rotate_target_v1(
+    base_project: dict,
+    node_id: str,
+) -> tuple[str, str, dict]:
+    shapes = base_project.get("shapes")
+    picture_frames = base_project.get("picture_frames")
+    shape = shapes.get(node_id) if isinstance(shapes, dict) else None
+    picture_frame = (
+        picture_frames.get(node_id)
+        if isinstance(picture_frames, dict)
+        else None
+    )
+
+    if isinstance(shape, dict) and isinstance(picture_frame, dict):
+        raise RotateQuarterError("rotate target identity is ambiguous across registries")
+
+    if isinstance(shape, dict):
+        if (
+            shape.get("kind") != "shape"
+            or shape.get("shape_kind") != "rectangle"
+            or shape.get("provenance") != {"kind": "author_created"}
+        ):
+            raise RotateQuarterError("rotate target is unsupported or source-backed")
+        if shape.get("parent_id") != shape.get("page_id"):
+            raise RotateQuarterError(
+                "V1 rotation admits only direct page-owned authored rectangles"
+            )
+        if "source_ref" in shape:
+            raise RotateQuarterError("source-backed rotate targets are unsupported")
+        return "shapes", "bounds", shape
+
+    if isinstance(picture_frame, dict):
+        if (
+            picture_frame.get("kind") != "image_frame"
+            or picture_frame.get("provenance") != {"kind": "author_created"}
+            or picture_frame.get("supported") is not True
+        ):
+            raise RotateQuarterError(
+                "rotate PictureFrame target is unsupported or source-backed"
+            )
+        if picture_frame.get("parent_id") != picture_frame.get("page_id"):
+            raise RotateQuarterError(
+                "V1 PictureFrame rotation admits only direct page-owned frames"
+            )
+        if "source_ref" in picture_frame:
+            raise RotateQuarterError("source-backed rotate targets are unsupported")
+        if not isinstance(picture_frame.get("crop"), dict):
+            raise RotateQuarterError("rotate PictureFrame requires canonical crop state")
+        if not isinstance(picture_frame.get("placement"), dict):
+            raise RotateQuarterError(
+                "rotate PictureFrame requires canonical placement state"
+            )
+        return "picture_frames", "frame", picture_frame
+
+    raise RotateQuarterError("rotate target is not an admitted author-created node")
+
+
 def apply_rotate_node_quarter_v1(
     base_project: dict,
     command: dict,
 ) -> tuple[dict, dict, list]:
     validate_rotate_node_quarter_intent_v1(command)
 
-    shapes = base_project.get("shapes")
-    if not isinstance(shapes, dict):
-        raise RotateQuarterError("canonical shapes registry is required")
     node_id = command["node_id"]
-    entity = shapes.get(node_id)
-    if not isinstance(entity, dict):
-        raise RotateQuarterError("rotate target is not an author-created shape")
-    if (
-        entity.get("kind") != "shape"
-        or entity.get("shape_kind") != "rectangle"
-        or entity.get("provenance") != {"kind": "author_created"}
-    ):
-        raise RotateQuarterError("rotate target is unsupported or source-backed")
-    if entity.get("parent_id") != entity.get("page_id"):
-        raise RotateQuarterError(
-            "V1 rotation admits only direct page-owned authored rectangles"
-        )
-    if "source_ref" in entity:
-        raise RotateQuarterError("source-backed rotate targets are unsupported")
+    registry_name, geometry_key, entity = _resolve_rotate_target_v1(
+        base_project,
+        node_id,
+    )
 
-    bounds = entity.get("bounds")
-    pivot = authored_bounds_center_v1(bounds)
+    pivot = authored_bounds_center_v1(entity.get(geometry_key))
 
     before = canonical_entity_affine_v1(entity.get("transform"))
     expected_before = validate_affine_v1(
@@ -250,7 +292,7 @@ def apply_rotate_node_quarter_v1(
         raise RotateQuarterError("canonical quarter turn produced no state change")
 
     resulting = copy.deepcopy(base_project)
-    resulting_entity = resulting["shapes"][node_id]
+    resulting_entity = resulting[registry_name][node_id]
     resulting_entity["transform"] = {"kind": "affine", **after}
 
     operation = {

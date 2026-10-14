@@ -8,14 +8,23 @@ on:
     paths:
       - ".github/workflows/publisher-visual-golden-batch01.yml"
       - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/cloud_reader_page_membership_gate_v1.py"
+      - "tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-borderart-v1.json"
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
+      - "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
+      - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
 
 permissions:
   contents: read
@@ -26,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-batch01
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-batch01-rust
 
 jobs:
   visual-fingerprint:
@@ -45,6 +54,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+
+      # Warm-cache measurement control: Cargo manifests intentionally unchanged.
+      - name: Build Batch01 Cargo cache key
+        id: batch01-cargo-cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'apps/chaptera-server/Cargo.toml', 'crates/**/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=publisher-visual-batch01-rust-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      # PRs restore trusted-main Cargo artifacts; no implicit post-job save.
+      - name: Restore Batch01 Cargo build cache
+        id: batch01-cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-batch01-rust
+          key: ${{ steps.batch01-cargo-cache-key.outputs.key }}
 
       - uses: actions/setup-node@v4
         with:
@@ -150,6 +178,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python -m py_compile tools/cloud_reader_page_membership_gate_v1.py
+          python tools/cloud_reader_page_membership_gate_v1.py --self-test
           python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -179,23 +209,40 @@ jobs:
             "$RUNNER_TEMP/publisher-visual-batch01/manifest.json"
 
       - name: Build canonical Cloud Reader worker
-        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+        env:
+          BATCH01_CARGO_CACHE_HIT: ${{ steps.batch01-cargo-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          start="$(date +%s)"
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+          elapsed="$(($(date +%s) - start))"
+          echo "batch01_cargo_cache_hit=${BATCH01_CARGO_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "batch01_cargo_build_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Restore pinned Playwright Chromium cache
+        id: playwright-chromium-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cache/ms-playwright
           key: publisher-visual-batch01-${{ runner.os }}-playwright-1.55.0-chromium
 
       - name: Install pinned browser acceptance runtime
+        env:
+          PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-chromium-cache.outputs.cache-hit }}
         run: |
+          set -euo pipefail
+          start="$(date +%s)"
           npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+          node -e 'const { chromium } = require("playwright"); (async()=>{const b=await chromium.launch({headless:true}); const p=await b.newPage(); await p.setContent("<title>chaptera-playwright-smoke</title>"); if((await p.title())!=="chaptera-playwright-smoke") throw new Error("smoke title mismatch"); await b.close();})().catch(e=>{console.error(e);process.exit(1)})'
+          elapsed="$(($(date +%s) - start))"
+          echo "playwright_cache_hit=${PLAYWRIGHT_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "playwright_setup_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Render exact Batch 01 PUB set through current Cloud Reader
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.sha }}
-          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-batch01/debug/chaptera
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-batch01-rust/debug/chaptera
           READER_REAL_MANIFEST: ${{ runner.temp }}/publisher-visual-batch01/manifest.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/publisher-visual-batch01/browser
           READER_REFERENCE_RASTER_DPI: "144"
@@ -213,6 +260,90 @@ jobs:
             "$RUNNER_TEMP/publisher-visual-batch01/browser/receipt.json" \
             tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
             target/publisher-visual-batch01/summary.json
+
+      - name: Build real-PUB BorderArt visual subset receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          overlap_path = Path("tools/corpus/receipts/publisher-visual-golden-batch-01-borderart-v1.json")
+          summary_path = Path("target/publisher-visual-batch01/summary.json")
+          overlap = json.loads(overlap_path.read_text())
+          summary = json.loads(summary_path.read_text())
+
+          assert overlap["schema"] == "chaptera.publisher-visual-golden-borderart-overlap.v1"
+          assert overlap["borderart_pair_count"] == 6
+          assert len(overlap["pairs"]) == 6
+          assert sum(row["nonstretch_marker_count"] > 0 for row in overlap["pairs"]) == 2
+          assert sum(row["default_stretch_use_count"] > 0 for row in overlap["pairs"]) == 5
+
+          current_by_fixture = {row["fixture"]: row for row in summary["pairs"]}
+          rows = []
+          historically_rendered = 0
+          still_rendered = 0
+          for authority in overlap["pairs"]:
+              fixture = authority["fixture"]
+              assert fixture in current_by_fixture, fixture
+              current = current_by_fixture[fixture]
+              if authority["baseline"]["rendered"]:
+                  historically_rendered += 1
+                  assert current["rendered"], f"previously renderable BorderArt pair regressed to unsupported: {fixture}"
+                  still_rendered += 1
+              rows.append({
+                  "oracle_id": authority["oracle_id"],
+                  "fixture": fixture,
+                  "pub_sha256": authority["pub_sha256"],
+                  "stretch_modes_present": authority["stretch_modes_present"],
+                  "fbid_use_count": authority["fbid_use_count"],
+                  "nonstretch_marker_count": authority["nonstretch_marker_count"],
+                  "baseline": authority["baseline"],
+                  "current": current,
+                  "mean_changed_cell_fraction_delta": (
+                      None
+                      if authority["baseline"]["mean_changed_cell_fraction"] is None
+                      or current["mean_changed_cell_fraction"] is None
+                      else current["mean_changed_cell_fraction"]
+                          - authority["baseline"]["mean_changed_cell_fraction"]
+                  ),
+              })
+
+          assert historically_rendered == 4
+          assert still_rendered == 4
+          receipt = {
+              "schema": "chaptera.publisher-visual-golden-borderart-subset.v1",
+              "repository_commit_sha": summary["repository_commit_sha"],
+              "publisher_reference_pair_count": len(rows),
+              "historically_rendered_pair_count": historically_rendered,
+              "current_rendered_pair_count": sum(row["current"]["rendered"] for row in rows),
+              "repeat_nonstretch_reference_pair_count": sum(
+                  "repeat_nonstretch" in row["stretch_modes_present"] for row in rows
+              ),
+              "stretch_default_reference_pair_count": sum(
+                  "stretch_default" in row["stretch_modes_present"] for row in rows
+              ),
+              "pairs": rows,
+          }
+          out = Path("target/publisher-visual-batch01/borderart-subset.json")
+          out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({
+              "publisher_reference_pair_count": receipt["publisher_reference_pair_count"],
+              "current_rendered_pair_count": receipt["current_rendered_pair_count"],
+              "repeat_nonstretch_reference_pair_count": receipt["repeat_nonstretch_reference_pair_count"],
+              "stretch_default_reference_pair_count": receipt["stretch_default_reference_pair_count"],
+              "pairs": [
+                  {
+                      "fixture": row["fixture"],
+                      "stretch_modes_present": row["stretch_modes_present"],
+                      "rendered": row["current"]["rendered"],
+                      "mean_changed_cell_fraction": row["current"]["mean_changed_cell_fraction"],
+                      "delta": row["mean_changed_cell_fraction_delta"],
+                  }
+                  for row in rows
+              ],
+          }, indent=2, sort_keys=True))
+          PY
 
       - name: Compare with previous successful main baseline
         id: baseline-delta
@@ -242,6 +373,16 @@ jobs:
           echo "baseline_found=true" >> "$GITHUB_OUTPUT"
           echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce stage-aware exact PAGE membership authority
+        if: steps.baseline-delta.outputs.baseline_found == 'true'
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_page_membership_gate_v1.py \
+            --current target/publisher-visual-batch01/summary.json \
+            --baseline "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
+            --authority tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json \
+            --out target/publisher-visual-batch01/membership-gate.json
+
       - name: Print top residuals
         run: |
           python - <<'PY'
@@ -254,6 +395,7 @@ jobs:
               "compared_page_count": data["compared_page_count"],
               "unsupported_pair_count": data["unsupported_pair_count"],
               "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "reference_surface_stage_counts": data["reference_surface_stage_counts"],
               "corpus_mean_changed_cell_fraction": data["corpus_mean_changed_cell_fraction"],
               "worst_pages": data["worst_pages"][:10],
           }, indent=2, sort_keys=True))
@@ -267,6 +409,7 @@ jobs:
                   "remapped_page_count": delta["remapped_page_count"],
                   "identity_unknown_page_count": delta["identity_unknown_page_count"],
                   "page_identity_remaps": delta["page_identity_remaps"][:10],
+                  "reference_surface_stage_counts": delta["reference_surface_stage_counts"],
                   "improved_page_count": delta["improved_page_count"],
                   "regressed_page_count": delta["regressed_page_count"],
                   "unchanged_page_count": delta["unchanged_page_count"],
@@ -276,6 +419,15 @@ jobs:
               }, indent=2, sort_keys=True))
           PY
 
+      # Seed a reusable cache only from a passing trusted-main visual run.
+      # The PR path has no Cargo save action, independent of cache-mode reporting.
+      - name: Save trusted main Batch01 Cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.batch01-cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/publisher-visual-batch01-rust
+          key: ${{ steps.batch01-cargo-cache-key.outputs.key }}
+
       - name: Upload source-free Batch 01 visual receipt
         uses: actions/upload-artifact@v4
         if: always()
@@ -284,5 +436,7 @@ jobs:
           path: |
             target/publisher-visual-batch01/summary.json
             target/publisher-visual-batch01/delta.json
+            target/publisher-visual-batch01/membership-gate.json
+            target/publisher-visual-batch01/borderart-subset.json
           if-no-files-found: warn
           retention-days: 90

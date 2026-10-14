@@ -9,8 +9,15 @@ on:
       - "crates/pub-model/**"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "!vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_table.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_image.rs"
+      - "!vendor/producer-a/crates/pub-editor/src/session_text.rs"
+      - "!vendor/producer-a/crates/pub-editor/tests/story_text_session_v1.rs"
       - "tools/ci/chaptera_server_ci_audit.py"
       - "tools/ci/chaptera_server_ci_before_v1.json"
+      - "tools/run_product_isolation_security_probe.py"
       - ".github/workflows/chaptera-server-package-integrity-v1.yml"
       - ".github/workflows/cloud-async-runtime-v0.yml"
       - ".github/workflows/cloud-authz-rust-v1.yml"
@@ -65,6 +72,21 @@ jobs:
       - name: Run ordinary chaptera-server regression once
         run: cargo test -p chaptera-server
 
+      - name: Verify owner-pinned S3 probe fail-closed policy offline
+        run: cargo test -p chaptera-server --example cloud_blob_provider_probe
+
+      - name: Verify sampled AWS S3 IAM deny probe fail-closed laws offline
+        run: cargo test -p chaptera-server --example cloud_s3_iam_list_probe
+
+      - name: Prove Product worker physical isolation boundary
+        run: |
+          python3 - <<'PY'
+          import ctypes.util
+          assert ctypes.util.find_library("seccomp"), "libseccomp required for Product isolation receipt"
+          PY
+          python3 tools/run_product_isolation_security_probe.py             --output target/product-security-isolation/receipt.json
+
+
       - name: Prove one-command install into an isolated Linux root
         run: |
           cargo build -p chaptera-server --bin chaptera
@@ -95,6 +117,13 @@ jobs:
         run: >-
           python tools/ci/chaptera_server_ci_audit.py
           --out target/ci/chaptera-server-routing-receipt.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chaptera-product-isolation-security-receipt-v1
+          path: target/product-security-isolation/receipt.json
+          if-no-files-found: error
+          retention-days: 90
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

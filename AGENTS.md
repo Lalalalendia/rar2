@@ -78,6 +78,36 @@ Mandatory rules:
 
 If a task requires several corrective edits, inspect failures first, make the bounded correction set, then push once.
 
+### Local development loop before hosted feedback
+
+For ordinary repository code/workflow changes, GitHub Actions is not the development REPL.
+
+- After a bounded local edit batch, run `python tools/dev_fast_loop.py --run` and fix task-owned failures locally before publishing another head.
+- Before publishing a coherent semantic slice, run `python tools/dev_fast_loop.py --mode feature --run`.
+- If the local environment genuinely cannot execute a selected check, record the exact missing runtime/tool in the task/PR instead of silently skipping it or pushing speculative fixes.
+- Do not push a head that is already known to fail the local fast loop solely to obtain hosted diagnostics.
+- A green fast loop is development evidence only. It does not replace the task's declared product, visual, native, integration, security, packaging, or release acceptance.
+- When `sccache` is installed, the fast loop automatically reuses the shared compiler-object cache across sibling git worktrees; do not replace this with a shared `CARGO_TARGET_DIR`.
+- Do not delete `.chaptera-local/dev-fast-loop/history.jsonl` merely to make a task look faster. It is ignored local telemetry for finding the actual p50/p95 development bottleneck.
+
+The purpose is to permit many local implementation iterations per hosted head while preserving the existing acceptance law.
+
+### Optional bounded integration-train mode
+
+The ordinary task-specific PR remains the default. A task may stay branch-only for promotion through a shared integration train **only** when its owning Notion task explicitly names the active train/coordinator.
+
+In that mode:
+
+- the task branch remains the sole implementation owner;
+- the agent must complete both local fast loops before handing off its exact head SHA;
+- do not open a separate task PR merely to obtain hosted feedback;
+- the coordinator must validate all candidates with `python tools/integration_train.py` against one exact common base;
+- V0 trains are limited to the tool's bounded non-overlapping feature-code surface; any rejected/control/shared/release-sensitive change returns to the ordinary per-task PR path;
+- the train PR is a promotion carrier, not a second implementation owner;
+- closure for each task records both its exact candidate commit SHA and the shared train PR/accepted integration SHA.
+
+Never improvise a train outside an explicit Notion assignment, and never add candidates to a train after its hosted acceptance has gone red.
+
 ## 4. Mandatory latest-head concurrency for PR validation
 
 A PR-validation workflow whose older head loses evidentiary value when a newer commit arrives must cancel obsolete same-PR attempts.

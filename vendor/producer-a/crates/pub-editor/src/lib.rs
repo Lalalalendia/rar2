@@ -6,67 +6,208 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
-mod authored_stack_lifecycle_v1;
-mod authored_stack_runtime_v1;
-mod create_shape_runtime_v1;
+mod authored_paragraph_alignment_v1;
+mod duplicate_authored_rectangle_v1;
+mod imported_paragraph_alignment_v1;
+mod imported_paragraph_flow_v1;
+mod imported_paragraphs_v1;
+mod link_text_frame_tail_v1;
+mod session_geometry;
+mod session_image;
+mod session_table;
+use session_table::apply_table_cell_state;
+mod session_text;
+use session_geometry::{
+    apply_authored_line_inverse, apply_authored_shape_delete_forward,
+    apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
+    apply_authored_stack_history_forward_v1, apply_page_lifecycle_graph_forward_v1,
+    apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation,
+    authored_shape_from_operation, authored_stack_operation_page_id_v1,
+    derive_authored_stacks_from_operations_v1, display_page_append_error_v1,
+    display_page_delete_error_v1, display_page_duplicate_error_v1, display_page_insert_error_v1,
+    validate_move_nodes_transition, validate_resize_nodes_transition,
+};
+use session_image::{
+    apply_crop_forward, apply_crop_inverse, apply_image_forward, apply_image_inverse,
+};
+pub use session_text::EditorProjectFontReopenGrantV1;
+use session_text::{
+    apply_text_format_history_operation_semantic_v1, apply_text_format_history_operation_v1,
+    is_scoped_text_format_operation_v1,
+    replay_project_operation_with_font_grants_v1 as replay_font, text_format_operation_property_v1,
+    text_format_operation_story_id_v1,
+};
+mod table_rowcol_graph_v1;
+mod table_rowcol_history_v1;
+use table_rowcol_history_v1::{
+    effective_table_bounds_with_history, effective_table_grids_with_history,
+    table_rowcol_history_v1, table_rowcol_operation_matches_mutation_v1,
+};
+mod text_format_property_base_v1;
 mod writer_assessment;
+use writer_assessment::{
+    minimum_identity_project_schema_v1, reject_legacy_page_lifecycle_schemas_v032,
+    required_editor_asset_refs_v1,
+};
 
-pub use authored_stack_lifecycle_v1::{
-    AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
-    AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
-    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
-    validate_authored_stack_v1,
+pub use authored_paragraph_alignment_v1::{
+    AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
+    EffectiveParagraphAlignmentValueV1, ParagraphAlignmentAuthorityV1,
+    ParagraphAlignmentOverrideSnapshotV1, ParagraphAlignmentTransitionErrorV1,
 };
-pub use authored_stack_runtime_v1::{
-    AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
+pub use duplicate_authored_rectangle_v1::{
+    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
+    DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
+    validate_duplicate_authored_rectangle_source_v1,
+};
+pub use imported_paragraph_alignment_v1::{
+    ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
+    ImportedParagraphBaseAlignmentV1,
+};
+pub use imported_paragraph_flow_v1::{
+    ImportedParagraphFlowConstraintBindingV1, ImportedParagraphFlowConstraintV1,
+    ImportedParagraphFlowErrorV1,
+};
+pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+pub use link_text_frame_tail_v1::TextFrameLinkTransitionV1;
+pub use pub_editor_authoring_core::{
+    APPEND_BLANK_PAGE_PROTOCOL_V1, AUTHORED_STACK_PROTOCOL_V1,
+    AUTHORED_TABLE_SENTINEL_CONTENTS_SEQ_NUM_V1, AUTHORED_TABLE_SENTINEL_TEXT_ID_V1,
+    AppendBlankPageErrorV1, AppendBlankPageTransitionV1, AuthoredEntityProvenanceV1,
+    AuthoredLineRuntimeV1, AuthoredPageIdentityV1, AuthoredPageIdentityValidationErrorV1,
+    AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1, AuthoredShapeTransformV1,
+    AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
+    AuthoredStackLifecycleKindV1, AuthoredStackLifecycleTransitionV1, AuthoredStackReorderErrorV1,
+    AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1, AuthoredStackV1,
+    AuthoredTableStoryRangesV1, CreateLineRuntimeValidationError,
+    CreateShapeRuntimeValidationError, CreateTablePlanV1, CreateTableRuntimeV1,
+    CreateTableRuntimeValidationError, DELETE_BLANK_AUTHORED_PAGE_PROTOCOL_V1,
+    DeleteAuthoredRectanglePageTransitionV1, DeleteAuthoredRectanglesPageTransitionV1,
+    DeleteBlankAuthoredPageErrorV1, DeleteBlankAuthoredPageTransitionV1, LineGeometryV1,
+    PAGE_ORDER_PROTOCOL_V1, PageOrderErrorV1, PageOrderTransitionV1, PointEmuV1, Srgb8V1,
+    apply_append_blank_page_forward_v1, apply_append_blank_page_inverse_v1,
     apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
-    plan_reorder_authored_stack_v1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    apply_create_table_forward_v1, apply_create_table_inverse_v1,
+    apply_delete_blank_authored_page_forward_v1, apply_delete_blank_authored_page_inverse_v1,
+    apply_page_order_transition_forward_v1, apply_page_order_transition_inverse_v1,
+    authored_stack_state_id_v1, build_create_table_plan_v1, line_bounds_v1, page_order_state_id_v1,
+    plan_append_blank_page_v1, plan_create_line_append_v1, plan_create_shape_append_v1,
+    plan_create_table_append_v1, plan_delete_blank_authored_page_v1, plan_delete_shape_remove_v1,
+    plan_page_order_transition_v1, plan_reorder_authored_stack_v1, qualified_page_order_v1,
+    rebuild_authored_table_story_v1, validate_authored_line_runtime_v1,
+    validate_authored_page_identity_v1, validate_authored_shape_runtime_v1,
+    validate_authored_stack_v1, validate_create_table_runtime_v1,
 };
-pub use create_shape_runtime_v1::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
-    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
+pub use pub_editor_authoring_core::{
+    DELETE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1, DUPLICATE_AUTHORED_RECTANGLE_PAGE_PROTOCOL_V1,
+    DUPLICATE_AUTHORED_RECTANGLES_PAGE_PROTOCOL_V1, DuplicateAuthoredRectanglePageTransitionV1,
+    DuplicateAuthoredRectanglesPageTransitionV1, MAX_DELETED_AUTHORED_RECTANGLES_PAGE_V1,
+    MAX_DUPLICATED_AUTHORED_RECTANGLES_PAGE_V1,
+};
+pub use pub_editor_authoring_core::{
+    DUPLICATE_BLANK_PAGE_PROTOCOL_V1, DuplicateBlankPageErrorV1, DuplicateBlankPageTransitionV1,
+    apply_duplicate_blank_page_forward_v1, apply_duplicate_blank_page_inverse_v1,
+    duplicate_blank_page_document_state_id_v1, plan_duplicate_blank_page_v1,
+};
+pub use pub_editor_authoring_core::{
+    INSERT_BLANK_PAGE_AFTER_PROTOCOL_V1, InsertBlankPageAfterErrorV1,
+    InsertBlankPageAfterTransitionV1, apply_insert_blank_page_after_forward_v1,
+    apply_insert_blank_page_after_inverse_v1, plan_insert_blank_page_after_v1,
+};
+pub use pub_editor_geometry_core::{
+    MAX_MOVE_NODES_V1, MAX_RESIZE_NODES_V1, MoveNodeBatchEntry, ResizeNodeBatchEntry,
+};
+pub use pub_editor_image_core::ImageCropStateV1;
+pub use pub_editor_table_core::{
+    SetTableTrackExtentErrorV1, SetTableTrackExtentHistoryV1, TABLE_TRACK_EXTENT_HISTORY_V1,
+    TableTrackExtentHistoryErrorV1, TableTrackExtentPlanV1, TableTrackTargetV1,
+    apply_table_track_extent_history_forward_v1, apply_table_track_extent_history_inverse_v1,
+    canonical_table_track_extent_history_v1, plan_table_track_extent_v1, set_table_track_extent_v1,
+};
+pub use pub_editor_text_core::story_state_id_v1;
+use pub_editor_text_core::{
+    apply_story_range_forward_v1, apply_story_range_inverse_v1, replace_scalar_range_text_v1,
+};
+
+pub use table_rowcol_graph_v1::{
+    TableRowColGraphErrorV1, apply_table_structure_snapshot_to_graph_v1,
+    table_structure_snapshot_from_graph_v1,
+};
+pub use table_rowcol_history_v1::{
+    TABLE_ROWCOL_HISTORY_V1, TableCellContentSnapshotV1, TableRowColHistoryErrorV1,
+    TableRowColHistoryV1, TableRowColMutationV1, TableStructureSnapshotV1,
+    apply_table_rowcol_history_forward_v1, apply_table_rowcol_history_inverse_v1,
+    canonical_table_rowcol_history_v1, plan_table_rowcol_mutation_v1,
+    validate_table_structure_snapshot_v1,
+};
+pub use text_format_property_base_v1::{
+    TEXT_FORMAT_PROPERTY_STATE_V1, TextFormatPropertyBaseRunV1, TextFormatPropertyOverrideRunV1,
+    TextFormatPropertyStateV1, apply_text_format_property_operation_checked_v1,
+    apply_text_format_property_operation_semantic_v1, build_source_text_format_property_state_v1,
+    clear_text_format_property_state_v1, effective_text_format_property_segments_v1,
+    fold_text_format_property_history_v1, set_text_format_property_state_v1,
+    text_format_property_state_hash_v1,
 };
 pub use writer_assessment::{
-    EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
+    EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorNativePubCandidate,
+    EditorNativePubMaterializationBlocked, EditorPubPersistenceAssessment,
     EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,
     EditorStoryWriterProbeState, EffectiveStoryTextMutation,
 };
 
+use chaptera_text_format_overlay::{
+    BaseCharacterFormatV1, BaseFormatRunV1, TextFormatOverlayStateV1,
+    build_text_format_overlay_state_v1,
+    clear_text_format_property_override_v1 as overlay_clear_text_format_property_override_v1,
+    set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
+};
+pub use chaptera_text_format_overlay::{
+    EffectivePropertySegmentV1, EffectivePropertySourceV1, FormatPropertyV1, FormatValueV1,
+};
 use pub_export::{
     AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
     AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
     ExportReport, ExportReportSource, ExportSolidPaintV1, ExportSolidStrokeV1, ExportSrgb8V1,
-    FormatCompatibilityManifest, FormatRepresentability, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, PersistenceCompatibilityAssessment, PersistenceCompatibilityError,
-    PersistenceRequirement, PersistenceRequirements, PersistenceTargetProfile,
-    STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
-    STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError, ScopedCapabilityOverride,
-    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    FormatCompatibilityManifest, FormatRepresentability, FullStoryParagraphAlignmentV1,
+    FullStoryTypographyV1, LossItem, LossKind, LossSeverity, ParagraphAlignmentV1,
+    ParagraphScopedAlignmentV1,
+    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
+    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
+    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
     render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_authored_rectangles_to_idml, add_embedded_images_to_idml,
-    add_full_story_typography_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlParagraphScopedAlignmentPlacement, IdmlWireProfile, add_authored_rectangles_to_idml,
+    add_embedded_images_to_idml,
+    add_full_story_paragraph_alignment_to_idml, add_full_story_typography_to_idml,
+    add_paragraph_scoped_alignment_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
     EffectiveTableTrackV1, Node, NodeHeader, NodeKind, ResourceId, SourceDerivedIdInput, Story,
     StoryFrame, TableColumnId, TableRowId, derive_source_canonical_id, validate_story_frames,
 };
-pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
+pub use pub_model::{
+    BoxEdges, LengthEmu, NodeId, Page, PageId, ParagraphId, RectEmu, Sha256Digest, Size2D, StoryId,
+    TableCellId,
+};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    OdgFullStoryTypographyPlacement, add_authored_rectangles_to_odg, add_embedded_images_to_odg,
-    add_full_story_typography_to_odg, project_resolved_graph_to_odg, write_odg,
+    OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
+    OdgParagraphScopedAlignmentPlacement, add_authored_rectangles_to_odg,
+    add_embedded_images_to_odg,
+    add_full_story_paragraph_alignment_to_odg, add_full_story_typography_to_odg,
+    add_paragraph_scoped_alignment_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
+    PubAssetExportBundle, PubParagraphAlignmentRun, PubParagraphFlowRun, PubResolvedGraph,
+    PubResolvedNodePayload, PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -90,29 +231,28 @@ pub const EDITOR_PROJECT_VERSION_V0_10: &str = "pub-editor-v0.10";
 pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
 pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
 pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_13;
-pub const MAX_MOVE_NODES_V1: usize = 1024;
-pub const MAX_RESIZE_NODES_V1: usize = 1024;
+pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
+pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
+pub const EDITOR_PROJECT_VERSION_V0_16: &str = "pub-editor-v0.16";
+pub const EDITOR_PROJECT_VERSION_V0_17: &str = "pub-editor-v0.17";
+pub const EDITOR_PROJECT_VERSION_V0_18: &str = "pub-editor-v0.18";
+pub const EDITOR_PROJECT_VERSION_V0_19: &str = "pub-editor-v0.19";
+pub const EDITOR_PROJECT_VERSION_V0_20: &str = "pub-editor-v0.20";
+pub const EDITOR_PROJECT_VERSION_V0_21: &str = "pub-editor-v0.21";
+pub const EDITOR_PROJECT_VERSION_V0_22: &str = "pub-editor-v0.22";
+pub const EDITOR_PROJECT_VERSION_V0_23: &str = "pub-editor-v0.23";
+pub const EDITOR_PROJECT_VERSION_V0_24: &str = "pub-editor-v0.24";
+pub const EDITOR_PROJECT_VERSION_V0_25: &str = "pub-editor-v0.25";
+pub const EDITOR_PROJECT_VERSION_V0_26: &str = "pub-editor-v0.26";
+pub const EDITOR_PROJECT_VERSION_V0_27: &str = "pub-editor-v0.27";
+pub const EDITOR_PROJECT_VERSION_V0_28: &str = "pub-editor-v0.28";
+pub const EDITOR_PROJECT_VERSION_V0_29: &str = "pub-editor-v0.29";
+pub const EDITOR_PROJECT_VERSION_V0_30: &str = "pub-editor-v0.30";
+pub const EDITOR_PROJECT_VERSION_V0_31: &str = "pub-editor-v0.31";
+pub const EDITOR_PROJECT_VERSION_V0_32: &str = "pub-editor-v0.32";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_23;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
-
-/// Canonical Story-state identity shared with services/editor-api/story_range_v1.py.
-pub fn story_state_id_v1(story_id: StoryId, text: &str) -> String {
-    let payload = serde_json::json!({
-        "protocol_version": "chaptera.story-state.v1",
-        "story_id": story_id.as_canonical().to_string(),
-        "text": text,
-    });
-    let bytes =
-        serde_json::to_vec(&payload).expect("canonical Story state JSON serialization cannot fail");
-    let digest = Sha256::digest(bytes);
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
-    }
-    format!("sha256:{encoded}")
-}
 
 /// Canonical authored-shape state identity used by persisted DeleteNode V1.
 pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
@@ -129,54 +269,6 @@ pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
     }
     format!("sha256:{encoded}")
-}
-
-fn scalar_byte_offset(text: &str, scalar_index: u32) -> Option<usize> {
-    let target = usize::try_from(scalar_index).ok()?;
-    if target == text.chars().count() {
-        return Some(text.len());
-    }
-    text.char_indices().nth(target).map(|(offset, _)| offset)
-}
-
-fn replace_scalar_range_text(
-    text: &str,
-    start_scalar: u32,
-    end_scalar: u32,
-    expected_before: &str,
-    replacement_text: &str,
-) -> Option<String> {
-    if end_scalar < start_scalar {
-        return None;
-    }
-    let start = scalar_byte_offset(text, start_scalar)?;
-    let end = scalar_byte_offset(text, end_scalar)?;
-    if text.get(start..end)? != expected_before {
-        return None;
-    }
-    let mut after = String::with_capacity(
-        text.len()
-            .saturating_sub(end.saturating_sub(start))
-            .saturating_add(replacement_text.len()),
-    );
-    after.push_str(&text[..start]);
-    after.push_str(replacement_text);
-    after.push_str(&text[end..]);
-    Some(after)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MoveNodeBatchEntry {
-    pub node_id: NodeId,
-    pub before: RectEmu,
-    pub after: RectEmu,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResizeNodeBatchEntry {
-    pub node_id: NodeId,
-    pub before: RectEmu,
-    pub after: RectEmu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,6 +336,9 @@ pub enum EditOperation {
         before_frames: Vec<StoryFrame<StoryId, NodeId>>,
         after_frames: Vec<StoryFrame<StoryId, NodeId>>,
     },
+    LinkTextFrameTail {
+        transition: TextFrameLinkTransitionV1,
+    },
     ReplaceTableCellText {
         node_id: NodeId,
         story_id: StoryId,
@@ -258,6 +353,11 @@ pub enum EditOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_asset: Option<Sha256Digest>,
         after_asset: Sha256Digest,
+    },
+    SetImageCrop {
+        node_id: NodeId,
+        before: ImageCropStateV1,
+        after: ImageCropStateV1,
     },
     MoveNode {
         node_id: NodeId,
@@ -294,6 +394,32 @@ pub enum EditOperation {
         paint: AuthoredShapePaintV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    CreateLine {
+        node_id: NodeId,
+        page_id: PageId,
+        parent_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+        provenance: AuthoredEntityProvenanceV1,
+    },
+    CreateTable {
+        table: CreateTableRuntimeV1,
+    },
+    SetTableTrackExtent {
+        history: SetTableTrackExtentHistoryV1,
+    },
+    InsertTableRow {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableRow {
+        history: TableRowColHistoryV1,
+    },
+    InsertTableColumn {
+        history: TableRowColHistoryV1,
+    },
+    DeleteTableColumn {
+        history: TableRowColHistoryV1,
+    },
     DeleteNode {
         node_id: NodeId,
         page_id: PageId,
@@ -303,177 +429,81 @@ pub enum EditOperation {
     ReorderAuthoredStack {
         transition: AuthoredStackReorderTransitionV1,
     },
-}
-
-impl EditOperation {
-    /// Exact editor-owned asset identities required to retain this canonical
-    /// operation in a durable EditorProject.
-    ///
-    /// Keep this match exhaustive: every future asset-bearing operation must
-    /// make an explicit reachability decision here.
-    pub fn durable_editor_asset_refs_v1(&self) -> Vec<Sha256Digest> {
-        match self {
-            Self::ReplaceImage {
-                before_asset,
-                after_asset,
-                ..
-            } => {
-                let mut refs = Vec::with_capacity(2);
-                if let Some(before_asset) = before_asset {
-                    refs.push(*before_asset);
-                }
-                refs.push(*after_asset);
-                refs.sort_unstable();
-                refs.dedup();
-                refs
-            }
-            Self::ReplaceStoryRange { .. }
-            | Self::ReplaceStoryText { .. }
-            | Self::BreakTextFrameForwardLink { .. }
-            | Self::ReplaceTableCellText { .. }
-            | Self::MoveNode { .. }
-            | Self::MoveNodes { .. }
-            | Self::ResizeNode { .. }
-            | Self::ResizeNodes { .. }
-            | Self::CreateTextBox { .. }
-            | Self::CreateShape { .. }
-            | Self::DeleteNode { .. }
-            | Self::ReorderAuthoredStack { .. } => Vec::new(),
-        }
-    }
-}
-
-fn required_editor_asset_refs_v1(operations: &[EditOperation]) -> BTreeSet<Sha256Digest> {
-    operations
-        .iter()
-        .flat_map(EditOperation::durable_editor_asset_refs_v1)
-        .collect()
-}
-
-impl PersistenceRequirements for EditOperation {
-    fn persistence_requirements(&self) -> Vec<PersistenceRequirement> {
-        match self {
-            Self::ReplaceStoryRange { story_id, .. } | Self::ReplaceStoryText { story_id, .. } => {
-                vec![PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                }]
-            }
-            Self::BreakTextFrameForwardLink {
-                story_id,
-                new_story_id,
-                ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "story.linked_frames".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.frames".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(new_story_id.into_canonical()),
-                    property_path: Some("story".into()),
-                },
-            ],
-            Self::ReplaceTableCellText {
-                story_id, cell_id, ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                },
-                PersistenceRequirement {
-                    feature: "table.cell_text".into(),
-                    origin: Some(cell_id.into_canonical()),
-                    property_path: Some("table.cell.text".into()),
-                },
-            ],
-            Self::ReplaceImage { node_id, .. } => vec![PersistenceRequirement {
-                feature: "image.replacement".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.image.resource".into()),
-            }],
-            Self::MoveNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.geometry.position".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.bounds.position".into()),
-            }],
-            Self::MoveNodes { entries, .. } => entries
-                .iter()
-                .map(|entry| PersistenceRequirement {
-                    feature: "node.geometry.position".into(),
-                    origin: Some(entry.node_id.into_canonical()),
-                    property_path: Some("node.bounds.position".into()),
-                })
-                .collect(),
-            Self::ResizeNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.geometry.bounds".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node.bounds".into()),
-            }],
-            Self::ResizeNodes { entries, .. } => entries
-                .iter()
-                .map(|entry| PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(entry.node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                })
-                .collect(),
-            Self::CreateTextBox {
-                node_id, story_id, ..
-            } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.created_identity".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-                PersistenceRequirement {
-                    feature: "story.text".into(),
-                    origin: Some(story_id.into_canonical()),
-                    property_path: Some("story.text".into()),
-                },
-            ],
-            Self::CreateShape { node_id, .. } => vec![
-                PersistenceRequirement {
-                    feature: "node.created_identity".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node".into()),
-                },
-                PersistenceRequirement {
-                    feature: "node.geometry.bounds".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.bounds".into()),
-                },
-                PersistenceRequirement {
-                    feature: "shape.paint".into(),
-                    origin: Some(node_id.into_canonical()),
-                    property_path: Some("node.paint".into()),
-                },
-            ],
-            Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
-                feature: "node.deleted_identity".into(),
-                origin: Some(node_id.into_canonical()),
-                property_path: Some("node".into()),
-            }],
-            Self::ReorderAuthoredStack { transition } => vec![PersistenceRequirement {
-                feature: "node.authored_stack_order".into(),
-                origin: Some(transition.node_id.into_canonical()),
-                property_path: Some("page.authored_stack".into()),
-            }],
-        }
-    }
+    ReorderPagesV1 {
+        transition: PageOrderTransitionV1,
+    },
+    RegisterAuthoredPageIdentityV1 {
+        identity: AuthoredPageIdentityV1,
+    },
+    AppendBlankPageV1 {
+        transition: AppendBlankPageTransitionV1,
+    },
+    DeleteBlankAuthoredPageV1 {
+        transition: DeleteBlankAuthoredPageTransitionV1,
+    },
+    DeleteAuthoredRectanglePageV1 {
+        transition: DeleteAuthoredRectanglePageTransitionV1,
+    },
+    DeleteAuthoredRectanglesPageV1 {
+        transition: Box<DeleteAuthoredRectanglesPageTransitionV1>,
+    },
+    DuplicateAuthoredRectanglePageV1 {
+        transition: Box<DuplicateAuthoredRectanglePageTransitionV1>,
+    },
+    DuplicateAuthoredRectanglesPageV1 {
+        transition: Box<DuplicateAuthoredRectanglesPageTransitionV1>,
+    },
+    DuplicateBlankPageV1 {
+        transition: DuplicateBlankPageTransitionV1,
+    },
+    InsertBlankPageAfterV1 {
+        transition: InsertBlankPageAfterTransitionV1,
+    },
+    SetTextFormatProperty {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
+    ClearTextFormatPropertyOverride {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
+    SetTextFormatPropertyScopedV1 {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
+    ClearTextFormatPropertyOverrideScopedV1 {
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        before_state_hash: String,
+        after_state_hash: String,
+    },
+    SetParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
+    ClearParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -503,10 +533,130 @@ pub struct EditorReplacementAsset {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorCurrentImageResourceV1 {
+    pub resource_id: ResourceId,
+    pub mime: String,
+    pub node_ids: Vec<NodeId>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorCurrentImageResourceError {
+    MissingSourceAsset { resource_id: ResourceId },
+    MissingReplacementAsset { sha256: Sha256Digest },
+    ResourceIdentityCollision { resource_id: ResourceId },
+}
+
+impl fmt::Display for EditorCurrentImageResourceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSourceAsset { resource_id } => write!(
+                formatter,
+                "current image source resource {} has no exact byte backing",
+                resource_id.as_canonical()
+            ),
+            Self::MissingReplacementAsset { sha256 } => write!(
+                formatter,
+                "current image replacement asset {sha256} has no exact byte backing"
+            ),
+            Self::ResourceIdentityCollision { resource_id } => write!(
+                formatter,
+                "current image resource {} resolved to conflicting byte payloads",
+                resource_id.as_canonical()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditorCurrentImageResourceError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditorSourceImageAsset {
     mime: String,
     bytes: Vec<u8>,
+}
+
+fn current_image_resources_v1(
+    source_image_assets: &BTreeMap<ResourceId, EditorSourceImageAsset>,
+    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    replacement_assets: &BTreeMap<Sha256Digest, EditorReplacementAsset>,
+    image_replacements: &BTreeMap<NodeId, Sha256Digest>,
+) -> Result<Vec<EditorCurrentImageResourceV1>, EditorCurrentImageResourceError> {
+    let mut resources = BTreeMap::<ResourceId, (String, Vec<u8>, BTreeSet<NodeId>)>::new();
+
+    for (node_id, resource_id) in source_image_nodes {
+        if image_replacements.contains_key(node_id) {
+            continue;
+        }
+        let asset = source_image_assets.get(resource_id).ok_or(
+            EditorCurrentImageResourceError::MissingSourceAsset {
+                resource_id: *resource_id,
+            },
+        )?;
+        match resources.entry(*resource_id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((
+                    asset.mime.clone(),
+                    asset.bytes.clone(),
+                    BTreeSet::from([*node_id]),
+                ));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (mime, bytes, node_ids) = entry.get_mut();
+                if mime != &asset.mime || bytes != &asset.bytes {
+                    return Err(EditorCurrentImageResourceError::ResourceIdentityCollision {
+                        resource_id: *resource_id,
+                    });
+                }
+                node_ids.insert(*node_id);
+            }
+        }
+    }
+
+    for (node_id, asset_sha) in image_replacements {
+        let asset = replacement_assets.get(asset_sha).ok_or(
+            EditorCurrentImageResourceError::MissingReplacementAsset { sha256: *asset_sha },
+        )?;
+        let resource_id = replacement_asset_resource_id(*asset_sha);
+        match resources.entry(resource_id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((
+                    asset.mime.clone(),
+                    asset.bytes.clone(),
+                    BTreeSet::from([*node_id]),
+                ));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (mime, bytes, node_ids) = entry.get_mut();
+                if mime != &asset.mime || bytes != &asset.bytes {
+                    return Err(EditorCurrentImageResourceError::ResourceIdentityCollision {
+                        resource_id,
+                    });
+                }
+                node_ids.insert(*node_id);
+            }
+        }
+    }
+
+    Ok(resources
+        .into_iter()
+        .map(
+            |(resource_id, (mime, bytes, node_ids))| EditorCurrentImageResourceV1 {
+                resource_id,
+                mime,
+                node_ids: node_ids.into_iter().collect(),
+                bytes,
+            },
+        )
+        .collect())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EditableExportImageState<'a> {
+    replacements: &'a BTreeMap<NodeId, Sha256Digest>,
+    crop_overrides: &'a BTreeMap<NodeId, ImageCropStateV1>,
+    source_nodes: &'a BTreeMap<NodeId, ResourceId>,
 }
 
 fn source_image_context_from_bundle(
@@ -780,6 +930,11 @@ pub enum EditorError {
         upstream_frame_id: NodeId,
         downstream_frame_id: NodeId,
     },
+    LinkTextFrameUnsupported {
+        source_frame_id: NodeId,
+        target_frame_id: NodeId,
+        reason: String,
+    },
     NewStoryIdInvalid {
         story_id: StoryId,
     },
@@ -800,6 +955,18 @@ pub enum EditorError {
         node_id: NodeId,
         cell_id: TableCellId,
     },
+    TableTrackResizeUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableTrackResize {
+        node_id: NodeId,
+    },
+    TableRowColUnsupported {
+        node_id: NodeId,
+    },
+    StaleTableRowCol {
+        node_id: NodeId,
+    },
     ImageReplaceUnsupported {
         node_id: NodeId,
     },
@@ -811,6 +978,15 @@ pub enum EditorError {
         sha256: Sha256Digest,
     },
     StaleImageOperation {
+        node_id: NodeId,
+    },
+    ImageCropUnsupported {
+        node_id: NodeId,
+    },
+    ImageCropNoChange {
+        node_id: NodeId,
+    },
+    StaleImageCrop {
         node_id: NodeId,
     },
     CreateTextBoxInvalidNodeId {
@@ -857,6 +1033,27 @@ pub enum EditorError {
     CreateShapeMalformed {
         node_id: NodeId,
     },
+    CreateLineInvalidNodeId {
+        node_id: NodeId,
+    },
+    CreateLinePageMissing {
+        page_id: PageId,
+    },
+    CreateLineIdCollision {
+        node_id: NodeId,
+    },
+    CreateLineInvalidGeometry {
+        node_id: NodeId,
+    },
+    CreateLineInvalidStroke {
+        node_id: NodeId,
+    },
+    CreateLineInvalidProvenance {
+        node_id: NodeId,
+    },
+    CreateLineMalformed {
+        node_id: NodeId,
+    },
     NodeDeleteUnsupported {
         node_id: NodeId,
     },
@@ -876,6 +1073,33 @@ pub enum EditorError {
     StaleAuthoredStack {
         page_id: PageId,
     },
+    PageOrderUnsupported {
+        message: String,
+    },
+    PageOrderNoChange,
+    StalePageOrder,
+    AuthoredPageIdentityInvalid {
+        page_id: PageId,
+    },
+    AuthoredPageIdentityConflict {
+        page_id: PageId,
+    },
+    PageAppendUnsupported {
+        message: String,
+    },
+    StalePageAppend,
+    PageDeleteUnsupported {
+        message: String,
+    },
+    StalePageDelete,
+    PageDuplicateUnsupported {
+        message: String,
+    },
+    StalePageDuplicate,
+    PageInsertUnsupported {
+        message: String,
+    },
+    StalePageInsert,
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -940,6 +1164,30 @@ pub enum EditorError {
     StaleOperation {
         story_id: StoryId,
     },
+    TextFormatUnsupported {
+        story_id: StoryId,
+        reason: String,
+    },
+    TextFormatStateInvalid {
+        story_id: StoryId,
+        message: String,
+    },
+    TextFormatTextMutationConflict {
+        story_id: StoryId,
+    },
+    ParagraphAlignmentTargetsEmpty,
+    ParagraphAlignmentProjectionUnavailable,
+    ParagraphAlignmentParagraphUnavailable {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentNoChange,
+    StaleParagraphAlignmentOverride {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentTransitionInvalid,
+    ParagraphAlignmentLifecycleUnsupported {
+        story_id: StoryId,
+    },
     NothingToUndo,
     NothingToRedo,
 }
@@ -989,6 +1237,7 @@ impl fmt::Display for EditorError {
                 "new Story identity {} is not an editor-created UUIDv7",
                 story_id.as_canonical()
             ),
+            Self::LinkTextFrameUnsupported { reason, .. } => formatter.write_str(reason),
             Self::NewStoryIdConflict { story_id } => write!(
                 formatter,
                 "new Story identity {} already exists",
@@ -1016,9 +1265,29 @@ impl fmt::Display for EditorError {
                 node_id.as_canonical(),
                 cell_id.as_canonical()
             ),
+            Self::TableTrackResizeUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded track-resize slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableTrackResize { node_id } => write!(
+                formatter,
+                "table node {} track-resize state no longer matches persisted history",
+                node_id.as_canonical()
+            ),
+            Self::TableRowColUnsupported { node_id } => write!(
+                formatter,
+                "table node {} is outside the bounded row/column lifecycle slice",
+                node_id.as_canonical()
+            ),
+            Self::StaleTableRowCol { node_id } => write!(
+                formatter,
+                "table node {} row/column state no longer matches persisted history",
+                node_id.as_canonical()
+            ),
             Self::ImageReplaceUnsupported { node_id } => write!(
                 formatter,
-                "image node {} is outside the bounded crop-free replacement slice",
+                "image node {} is outside the bounded image replacement slice",
                 node_id.as_canonical()
             ),
             Self::MissingReplacementAsset { sha256 } => write!(
@@ -1033,6 +1302,21 @@ impl fmt::Display for EditorError {
             Self::StaleImageOperation { node_id } => write!(
                 formatter,
                 "image node {} no longer matches the replacement operation precondition",
+                node_id.as_canonical()
+            ),
+            Self::ImageCropUnsupported { node_id } => write!(
+                formatter,
+                "image node {} is outside the bounded source-backed crop slice",
+                node_id.as_canonical()
+            ),
+            Self::ImageCropNoChange { node_id } => write!(
+                formatter,
+                "image node {} already has the requested crop state",
+                node_id.as_canonical()
+            ),
+            Self::StaleImageCrop { node_id } => write!(
+                formatter,
+                "image node {} no longer matches the expected crop state",
                 node_id.as_canonical()
             ),
             Self::CreateTextBoxInvalidNodeId { node_id } => write!(
@@ -1109,6 +1393,41 @@ impl fmt::Display for EditorError {
                 "CreateShape node {} violates the bounded rectangle/identity/page contract",
                 node_id.as_canonical()
             ),
+            Self::CreateLineInvalidNodeId { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not an editor-created UUIDv7",
+                node_id.as_canonical()
+            ),
+            Self::CreateLinePageMissing { page_id } => write!(
+                formatter,
+                "CreateLine page {} is not present in the opened document",
+                page_id.as_canonical()
+            ),
+            Self::CreateLineIdCollision { node_id } => write!(
+                formatter,
+                "CreateLine node {} collides with an existing visual node",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidGeometry { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid or unsafe ordered endpoint geometry",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidStroke { node_id } => write!(
+                formatter,
+                "CreateLine node {} has invalid explicit stroke",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineInvalidProvenance { node_id } => write!(
+                formatter,
+                "CreateLine node {} is not explicitly author-created",
+                node_id.as_canonical()
+            ),
+            Self::CreateLineMalformed { node_id } => write!(
+                formatter,
+                "CreateLine node {} violates the bounded identity/page contract",
+                node_id.as_canonical()
+            ),
             Self::NodeDeleteUnsupported { node_id } => write!(
                 formatter,
                 "node {} is not an admitted author-created direct page-owned Rectangle",
@@ -1140,6 +1459,37 @@ impl fmt::Display for EditorError {
                 "authored stack for page {} no longer matches the persisted transition precondition",
                 page_id.as_canonical()
             ),
+            Self::PageOrderUnsupported { message } => {
+                write!(formatter, "page reorder is unsupported: {message}")
+            }
+            Self::PageOrderNoChange => {
+                formatter.write_str("requested page order does not change the current document")
+            }
+            Self::StalePageOrder => formatter.write_str(
+                "current customer-page order no longer matches the reorder precondition",
+            ),
+            Self::AuthoredPageIdentityInvalid { page_id } => write!(
+                formatter,
+                "authored Page identity {} is not an explicit author-created UUIDv7",
+                page_id.as_canonical()
+            ),
+            Self::AuthoredPageIdentityConflict { page_id } => write!(
+                formatter,
+                "authored Page identity {} collides with an existing source or authored PageId",
+                page_id.as_canonical()
+            ),
+            Self::PageAppendUnsupported { .. } | Self::StalePageAppend => {
+                display_page_append_error_v1(self, formatter)
+            }
+            Self::PageDeleteUnsupported { .. } | Self::StalePageDelete => {
+                display_page_delete_error_v1(self, formatter)
+            }
+            Self::PageDuplicateUnsupported { .. } | Self::StalePageDuplicate => {
+                display_page_duplicate_error_v1(self, formatter)
+            }
+            Self::PageInsertUnsupported { .. } | Self::StalePageInsert => {
+                display_page_insert_error_v1(self, formatter)
+            }
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1243,6 +1593,46 @@ impl fmt::Display for EditorError {
                 "story {} no longer matches the edit operation precondition",
                 story_id.as_canonical()
             ),
+            Self::TextFormatUnsupported { story_id, reason } => write!(
+                formatter,
+                "story {} is outside the bounded text-format authoring slice: {reason}",
+                story_id.as_canonical()
+            ),
+            Self::TextFormatStateInvalid { story_id, message } => write!(
+                formatter,
+                "story {} text-format state is invalid: {message}",
+                story_id.as_canonical()
+            ),
+            Self::TextFormatTextMutationConflict { story_id } => write!(
+                formatter,
+                "story {} has active character-format history and cannot change text until range rebasing is implemented",
+                story_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentTargetsEmpty => {
+                formatter.write_str("paragraph alignment operation requires at least one ParagraphId")
+            }
+            Self::ParagraphAlignmentProjectionUnavailable => formatter.write_str(
+                "current Story state does not expose a canonical imported Paragraph projection",
+            ),
+            Self::ParagraphAlignmentParagraphUnavailable { paragraph_id } => write!(
+                formatter,
+                "paragraph {} is not a current imported Paragraph target",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentNoChange => formatter
+                .write_str("paragraph alignment operation produces no canonical state change"),
+            Self::StaleParagraphAlignmentOverride { paragraph_id } => write!(
+                formatter,
+                "paragraph alignment override for {} changed since the operation was recorded",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentTransitionInvalid => formatter
+                .write_str("paragraph alignment override transition is not canonical"),
+            Self::ParagraphAlignmentLifecycleUnsupported { story_id } => write!(
+                formatter,
+                "story {} has applied paragraph alignment history; Story text/topology mutation is fenced until ParagraphId lifecycle rebasing is implemented",
+                story_id.as_canonical()
+            ),
             Self::NothingToUndo => formatter.write_str("editor session has nothing to undo"),
             Self::NothingToRedo => formatter.write_str("editor session has nothing to redo"),
         }
@@ -1259,6 +1649,7 @@ impl EditorError {
             Self::FrameCountUnsupported { .. } => "frame_count_unsupported",
             Self::FrameTopologyUnsupported { .. } => "frame_topology_unsupported",
             Self::BreakLinkUnsupported { .. } => "break_link_unsupported",
+            Self::LinkTextFrameUnsupported { .. } => "link_text_frame_unsupported",
             Self::NewStoryIdInvalid { .. } => "new_story_id_invalid",
             Self::NewStoryIdConflict { .. } => "new_story_id_conflict",
             Self::StaleFrameTopology { .. } => "stale_frame_topology",
@@ -1269,6 +1660,9 @@ impl EditorError {
             Self::MissingReplacementAsset { .. } => "missing_replacement_asset",
             Self::ImageReplacementNoChange { .. } => "image_replacement_no_change",
             Self::StaleImageOperation { .. } => "stale_image_operation",
+            Self::ImageCropUnsupported { .. } => "image_crop_unsupported",
+            Self::ImageCropNoChange { .. } => "image_crop_no_change",
+            Self::StaleImageCrop { .. } => "stale_image_crop",
             Self::CreateTextBoxInvalidNodeId { .. } => "create_text_box_invalid_node_id",
             Self::CreateTextBoxInvalidStoryId { .. } => "create_text_box_invalid_story_id",
             Self::CreateTextBoxPageMissing { .. } => "create_text_box_page_missing",
@@ -1284,12 +1678,32 @@ impl EditorError {
             Self::CreateShapeInvalidPaint { .. } => "create_shape_invalid_paint",
             Self::CreateShapeInvalidProvenance { .. } => "create_shape_invalid_provenance",
             Self::CreateShapeMalformed { .. } => "create_shape_malformed",
+            Self::CreateLineInvalidNodeId { .. } => "create_line_invalid_node_id",
+            Self::CreateLinePageMissing { .. } => "create_line_page_missing",
+            Self::CreateLineIdCollision { .. } => "create_line_id_collision",
+            Self::CreateLineInvalidGeometry { .. } => "create_line_invalid_geometry",
+            Self::CreateLineInvalidStroke { .. } => "create_line_invalid_stroke",
+            Self::CreateLineInvalidProvenance { .. } => "create_line_invalid_provenance",
+            Self::CreateLineMalformed { .. } => "create_line_malformed",
             Self::NodeDeleteUnsupported { .. } => "node_delete_unsupported",
             Self::NodeDeletePageMismatch { .. } => "node_delete_page_mismatch",
             Self::StaleNodeDelete { .. } => "stale_node_delete",
             Self::AuthoredStackReorderUnsupported { .. } => "authored_stack_reorder_unsupported",
             Self::AuthoredStackReorderNoChange { .. } => "authored_stack_reorder_no_change",
             Self::StaleAuthoredStack { .. } => "stale_authored_stack",
+            Self::PageOrderUnsupported { .. } => "page_order_unsupported",
+            Self::PageOrderNoChange => "page_order_no_change",
+            Self::StalePageOrder => "stale_page_order",
+            Self::AuthoredPageIdentityInvalid { .. } => "authored_page_identity_invalid",
+            Self::AuthoredPageIdentityConflict { .. } => "authored_page_identity_conflict",
+            Self::PageAppendUnsupported { .. } => "page_append_unsupported",
+            Self::StalePageAppend => "stale_page_append",
+            Self::PageDeleteUnsupported { .. } => "page_delete_unsupported",
+            Self::StalePageDelete => "stale_page_delete",
+            Self::PageDuplicateUnsupported { .. } => "page_duplicate_unsupported",
+            Self::StalePageDuplicate => "stale_page_duplicate",
+            Self::PageInsertUnsupported { .. } => "page_insert_unsupported",
+            Self::StalePageInsert => "stale_page_insert",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -1310,8 +1724,28 @@ impl EditorError {
             Self::NodeResizeNonPositive { .. } => "node_resize_non_positive",
             Self::NodeResizeOverflow { .. } => "node_resize_overflow",
             Self::StaleNodeResize { .. } => "stale_node_resize",
+            Self::TableTrackResizeUnsupported { .. } => "table_track_resize_unsupported",
+            Self::StaleTableTrackResize { .. } => "stale_table_track_resize",
+            Self::TableRowColUnsupported { .. } => "table_rowcol_unsupported",
+            Self::StaleTableRowCol { .. } => "stale_table_rowcol",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
+            Self::TextFormatUnsupported { .. } => "text_format_unsupported",
+            Self::TextFormatStateInvalid { .. } => "text_format_state_invalid",
+            Self::TextFormatTextMutationConflict { .. } => "text_format_text_mutation_conflict",
+            Self::ParagraphAlignmentTargetsEmpty => "paragraph_alignment_targets_empty",
+            Self::ParagraphAlignmentProjectionUnavailable => {
+                "paragraph_alignment_projection_unavailable"
+            }
+            Self::ParagraphAlignmentParagraphUnavailable { .. } => {
+                "paragraph_alignment_paragraph_unavailable"
+            }
+            Self::ParagraphAlignmentNoChange => "paragraph_alignment_no_change",
+            Self::StaleParagraphAlignmentOverride { .. } => "stale_paragraph_alignment_override",
+            Self::ParagraphAlignmentTransitionInvalid => "paragraph_alignment_transition_invalid",
+            Self::ParagraphAlignmentLifecycleUnsupported { .. } => {
+                "paragraph_alignment_lifecycle_unsupported"
+            }
             Self::NothingToUndo => "nothing_to_undo",
             Self::NothingToRedo => "nothing_to_redo",
         }
@@ -1346,6 +1780,216 @@ impl fmt::Display for EditorOpenError {
 impl std::error::Error for EditorOpenError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorTextFormatBaseErrorV1 {
+    SourceIdentityChanged,
+    MissingStory { story_id: StoryId },
+    StoryChanged { story_id: StoryId },
+    UnsupportedBase { story_id: StoryId, reason: String },
+    Overlay { story_id: StoryId, message: String },
+}
+
+impl fmt::Display for EditorTextFormatBaseErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SourceIdentityChanged => formatter
+                .write_str("editor source identity changed before text-format base projection"),
+            Self::MissingStory { story_id } => write!(
+                formatter,
+                "text-format base Story {} is missing",
+                story_id.as_canonical()
+            ),
+            Self::StoryChanged { story_id } => write!(
+                formatter,
+                "text-format base Story {} no longer matches its immutable source text revision",
+                story_id.as_canonical()
+            ),
+            Self::UnsupportedBase { story_id, reason } => write!(
+                formatter,
+                "text-format base for Story {} is unsupported: {reason}",
+                story_id.as_canonical()
+            ),
+            Self::Overlay { story_id, message } => write!(
+                formatter,
+                "text-format overlay rejected Story {} base: {message}",
+                story_id.as_canonical()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditorTextFormatBaseErrorV1 {}
+
+fn source_font_binding_id_v1(
+    source_hash: Sha256Digest,
+    source_font_index: u32,
+    source_font_name: &str,
+) -> String {
+    let source_object_key = format!("quill-font-index:{source_font_index}:{source_font_name}");
+    let identity = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash: &source_hash,
+        adapter_id: "pub-editor",
+        source_object_key: &source_object_key,
+        semantic_role: "chaptera.text-format.base-font-binding",
+    })
+    .expect("bounded source font binding uses fixed valid identity namespaces");
+    format!("pub-source-font:{identity}")
+}
+
+fn source_text_format_overlay_from_runs_v1(
+    source_hash: Sha256Digest,
+    story_id: StoryId,
+    base_revision_id: &str,
+    story_scalar_len: u32,
+    source_runs: &[PubTypographyRun],
+) -> Result<TextFormatOverlayStateV1, EditorTextFormatBaseErrorV1> {
+    if story_scalar_len == 0 {
+        return build_text_format_overlay_state_v1(
+            story_id.as_canonical().to_string(),
+            base_revision_id,
+            0,
+            Vec::new(),
+            Vec::new(),
+        )
+        .map_err(|error| EditorTextFormatBaseErrorV1::Overlay {
+            story_id,
+            message: error.to_string(),
+        });
+    }
+
+    let mut runs = source_runs
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|run| (run.story_scalar_start, run.story_scalar_end));
+
+    if runs.is_empty() {
+        return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+            story_id,
+            reason: "no source effective typography runs".to_owned(),
+        });
+    }
+
+    let mut cursor = 0_u32;
+    let mut base_runs = Vec::with_capacity(runs.len());
+    for run in runs {
+        if run.story_scalar_start != cursor
+            || run.story_scalar_end <= run.story_scalar_start
+            || run.story_scalar_end > story_scalar_len
+        {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "source effective typography does not form one contiguous scalar partition"
+                    .to_owned(),
+            });
+        }
+        if run.source_font_name.trim().is_empty() || run.text_size_emu == 0 {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "source font binding or effective font size is unavailable".to_owned(),
+            });
+        }
+
+        let bold =
+            run.bold
+                .as_ref()
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective bold is unavailable".to_owned(),
+                })?;
+        let italic =
+            run.italic
+                .as_ref()
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective italic is unavailable".to_owned(),
+                })?;
+        if bold.effective_value != (bold.inherited_value ^ bold.local_toggle)
+            || italic.effective_value != (italic.inherited_value ^ italic.local_toggle)
+        {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Reader boolean projection violates the admitted XOR invariant".to_owned(),
+            });
+        }
+
+        let [red, green, blue] =
+            run.color_rgb
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective direct-RGB text color is unavailable".to_owned(),
+                })?;
+
+        base_runs.push(BaseFormatRunV1 {
+            start_scalar: run.story_scalar_start,
+            end_scalar: run.story_scalar_end,
+            format: BaseCharacterFormatV1 {
+                font_resource_id: source_font_binding_id_v1(
+                    source_hash,
+                    run.source_font_index,
+                    &run.source_font_name,
+                ),
+                font_size_emu: u64::from(run.text_size_emu),
+                bold: bold.effective_value,
+                italic: italic.effective_value,
+                text_color_rgb: format!("#{red:02X}{green:02X}{blue:02X}"),
+            },
+        });
+        cursor = run.story_scalar_end;
+    }
+
+    if cursor != story_scalar_len {
+        return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+            story_id,
+            reason: "source effective typography does not cover the full Story".to_owned(),
+        });
+    }
+
+    build_text_format_overlay_state_v1(
+        story_id.as_canonical().to_string(),
+        base_revision_id,
+        story_scalar_len,
+        base_runs,
+        Vec::new(),
+    )
+    .map_err(|error| EditorTextFormatBaseErrorV1::Overlay {
+        story_id,
+        message: error.to_string(),
+    })
+}
+
+fn text_format_base_error_to_editor_v1(error: EditorTextFormatBaseErrorV1) -> EditorError {
+    match error {
+        EditorTextFormatBaseErrorV1::SourceIdentityChanged => EditorError::SourceIdentityChanged,
+        EditorTextFormatBaseErrorV1::MissingStory { story_id } => {
+            EditorError::MissingStory { story_id }
+        }
+        EditorTextFormatBaseErrorV1::StoryChanged { story_id } => {
+            EditorError::TextFormatTextMutationConflict { story_id }
+        }
+        EditorTextFormatBaseErrorV1::UnsupportedBase { story_id, reason } => {
+            EditorError::TextFormatUnsupported { story_id, reason }
+        }
+        EditorTextFormatBaseErrorV1::Overlay { story_id, message } => {
+            EditorError::TextFormatStateInvalid { story_id, message }
+        }
+    }
+}
+
+fn paragraph_alignment_transition_error_to_editor_v1(
+    error: ParagraphAlignmentTransitionErrorV1,
+) -> EditorError {
+    match error {
+        ParagraphAlignmentTransitionErrorV1::Stale { paragraph_id, .. } => {
+            EditorError::StaleParagraphAlignmentOverride { paragraph_id }
+        }
+        ParagraphAlignmentTransitionErrorV1::NonCanonicalTargets
+        | ParagraphAlignmentTransitionErrorV1::SnapshotShapeMismatch => {
+            EditorError::ParagraphAlignmentTransitionInvalid
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorProjectError {
     UnsupportedSchema {
         found: String,
@@ -1368,6 +2012,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesBreakLinkOperation {
         index: usize,
     },
+    LegacyProjectCarriesLinkTextFrameOperation {
+        index: usize,
+    },
     LegacyProjectCarriesMoveNodesOperation {
         index: usize,
     },
@@ -1377,6 +2024,18 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateShapeOperation {
         index: usize,
     },
+    LegacyProjectCarriesCreateLineOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesCreateTableOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesTableTrackExtentOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesTableRowColOperation {
+        index: usize,
+    },
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
@@ -1384,6 +2043,45 @@ pub enum EditorProjectError {
         index: usize,
     },
     LegacyProjectCarriesReorderAuthoredStackOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesPageOrderOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesAuthoredPageIdentityOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDeleteBlankPageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDuplicateBlankPageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesInsertBlankPageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesTextFormatOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesScopedTextFormatOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesParagraphAlignmentOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesImageCropOperation {
         index: usize,
     },
     LegacyProjectCarriesTableGrids,
@@ -1434,7 +2132,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, or {EDITOR_PROJECT_VERSION_V0_13:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, {EDITOR_PROJECT_VERSION_V0_15:?}, {EDITOR_PROJECT_VERSION_V0_16:?}, {EDITOR_PROJECT_VERSION_V0_17:?}, {EDITOR_PROJECT_VERSION_V0_18:?}, {EDITOR_PROJECT_VERSION_V0_19:?}, {EDITOR_PROJECT_VERSION_V0_20:?}, {EDITOR_PROJECT_VERSION_V0_21:?}, {EDITOR_PROJECT_VERSION_V0_22:?}, {EDITOR_PROJECT_VERSION_V0_23:?}, {EDITOR_PROJECT_VERSION_V0_24:?}, {EDITOR_PROJECT_VERSION_V0_25:?}, {EDITOR_PROJECT_VERSION_V0_26:?}, {EDITOR_PROJECT_VERSION_V0_27:?}, or {EDITOR_PROJECT_VERSION_V0_28:?}, or {EDITOR_PROJECT_VERSION_V0_29:?}, or {EDITOR_PROJECT_VERSION_V0_30:?}, or {EDITOR_PROJECT_VERSION_V0_31:?}, or {EDITOR_PROJECT_VERSION_V0_32:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -1462,6 +2160,10 @@ impl fmt::Display for EditorProjectError {
                 formatter,
                 "editor project operation {index} uses BreakTextFrameForwardLink but the project schema predates pub-editor-v0.7"
             ),
+            Self::LegacyProjectCarriesLinkTextFrameOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses LinkTextFrameTail but the project schema predates pub-editor-v0.22"
+            ),
             Self::LegacyProjectCarriesMoveNodesOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses MoveNodes but the project schema predates pub-editor-v0.8"
@@ -1473,6 +2175,22 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateShapeOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateShape but the project schema predates pub-editor-v0.10"
+            ),
+            Self::LegacyProjectCarriesCreateLineOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses CreateLine but the project schema predates pub-editor-v0.17"
+            ),
+            Self::LegacyProjectCarriesCreateTableOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses CreateTable but the project schema predates pub-editor-v0.18"
+            ),
+            Self::LegacyProjectCarriesTableTrackExtentOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses SetTableTrackExtent but the project schema predates pub-editor-v0.20"
+            ),
+            Self::LegacyProjectCarriesTableRowColOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses table row/column lifecycle but the project schema predates pub-editor-v0.21"
             ),
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
@@ -1486,6 +2204,58 @@ impl fmt::Display for EditorProjectError {
                 formatter,
                 "editor project operation {index} uses ReorderAuthoredStack but the project schema predates pub-editor-v0.13"
             ),
+            Self::LegacyProjectCarriesPageOrderOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses ReorderPagesV1 but the project schema predates pub-editor-v0.23"
+            ),
+            Self::LegacyProjectCarriesDeleteBlankPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DeleteBlankAuthoredPageV1 operation at index {index}"
+            ),
+            Self::LegacyProjectCarriesDuplicateBlankPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DuplicateBlankPageV1 operation at index {index}"
+            ),
+            Self::LegacyProjectCarriesInsertBlankPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry InsertBlankPageAfterV1 operation at index {index}"
+            ),
+            Self::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DeleteAuthoredRectanglePageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DeleteAuthoredRectanglesPageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DuplicateAuthoredRectanglePageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation { index } => write!(
+                formatter,
+                "legacy editor project cannot carry DuplicateAuthoredRectanglesPageV1 at index {index}"
+            ),
+            Self::LegacyProjectCarriesAuthoredPageIdentityOperation { index } => write!(
+                formatter,
+                "editor project operation {index} registers an authored Page identity but the project schema predates pub-editor-v0.24"
+            ),
+            Self::LegacyProjectCarriesTextFormatOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses text-format overrides but the project schema predates pub-editor-v0.14"
+            ),
+            Self::LegacyProjectCarriesScopedTextFormatOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses property-scoped text-format history but the project schema predates pub-editor-v0.16"
+            ),
+            Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses paragraph alignment overrides but the project schema predates pub-editor-v0.15"
+            ),
+            Self::LegacyProjectCarriesImageCropOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses SetImageCrop but the project schema predates pub-editor-v0.19"
+            ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
             ),
@@ -1493,7 +2263,7 @@ impl fmt::Display for EditorProjectError {
                 "editor projects before pub-editor-v0.11 cannot carry durable project identity",
             ),
             Self::MissingProjectIdentity => formatter.write_str(
-                "pub-editor-v0.11 requires durable project identity",
+                "pub-editor-v0.11+ requires durable project identity",
             ),
             Self::TableGridMismatch => formatter.write_str(
                 "editor project EffectiveTableGridV1 state does not match deterministic replay",
@@ -1573,6 +2343,7 @@ pub fn open_mature_0x2c_editor(
     session.source_typography_runs = source.typography_runs;
     session.source_typography_size_runs = source.typography_size_runs;
     session.source_paragraph_alignments = source.paragraph_alignments;
+    session.source_paragraph_flow_runs = source.paragraph_flow_runs;
     if let Some(bundle) = source_images {
         let (assets, nodes) = source_image_context_from_bundle(bundle);
         session.source_image_assets = assets;
@@ -1701,13 +2472,16 @@ pub struct EditorSession {
     project_identity: Option<EditorProjectIdentity>,
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
+    image_crop_overrides: BTreeMap<NodeId, ImageCropStateV1>,
     source_story_state_ids: BTreeMap<StoryId, String>,
     source_typography_runs: Vec<PubTypographyRun>,
     source_typography_size_runs: Vec<PubTypographySizeRun>,
     source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
+    source_paragraph_flow_runs: Vec<PubParagraphFlowRun>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    authored_lines: BTreeMap<NodeId, AuthoredLineRuntimeV1>,
     authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
@@ -1732,13 +2506,16 @@ impl EditorSession {
             project_identity: Some(new_project_identity()),
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
+            image_crop_overrides: BTreeMap::new(),
             source_story_state_ids,
             source_typography_runs: Vec::new(),
             source_typography_size_runs: Vec::new(),
             source_paragraph_alignments: Vec::new(),
+            source_paragraph_flow_runs: Vec::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
+            authored_lines: BTreeMap::new(),
             authored_stacks: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1755,6 +2532,564 @@ impl EditorSession {
 
     pub fn operations(&self) -> &[EditOperation] {
         &self.undo
+    }
+
+    pub fn source_text_format_overlay_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<TextFormatOverlayStateV1, EditorTextFormatBaseErrorV1> {
+        self.validate_source_identity()
+            .map_err(|_| EditorTextFormatBaseErrorV1::SourceIdentityChanged)?;
+        let story = self
+            .graph
+            .stories
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        let source_revision_id = self
+            .source_story_state_ids
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        if story_state_id_v1(story_id, &story.text) != *source_revision_id {
+            return Err(EditorTextFormatBaseErrorV1::StoryChanged { story_id });
+        }
+        let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Story scalar length exceeds u32".to_owned(),
+            }
+        })?;
+
+        source_text_format_overlay_from_runs_v1(
+            self.source_hash,
+            story_id,
+            source_revision_id,
+            story_scalar_len,
+            &self.source_typography_runs,
+        )
+    }
+
+    pub fn source_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorTextFormatBaseErrorV1> {
+        self.validate_source_identity()
+            .map_err(|_| EditorTextFormatBaseErrorV1::SourceIdentityChanged)?;
+        let story = self
+            .graph
+            .stories
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        let source_revision_id = self
+            .source_story_state_ids
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        if story_state_id_v1(story_id, &story.text) != *source_revision_id {
+            return Err(EditorTextFormatBaseErrorV1::StoryChanged { story_id });
+        }
+        let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Story scalar length exceeds u32".to_owned(),
+            }
+        })?;
+
+        build_source_text_format_property_state_v1(
+            story_id,
+            source_revision_id,
+            story_scalar_len,
+            &self.source_typography_runs,
+            property,
+        )
+        .map_err(|reason| EditorTextFormatBaseErrorV1::UnsupportedBase { story_id, reason })
+    }
+
+    pub fn current_text_format_overlay_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<TextFormatOverlayStateV1, EditorError> {
+        let mut state = self
+            .source_text_format_overlay_v1(story_id)
+            .map_err(text_format_base_error_to_editor_v1)?;
+        for operation in &self.undo {
+            if text_format_operation_story_id_v1(operation) != Some(story_id) {
+                continue;
+            }
+            state = if is_scoped_text_format_operation_v1(operation) {
+                apply_text_format_history_operation_semantic_v1(&state, operation)?
+            } else {
+                apply_text_format_history_operation_v1(&state, operation)?
+            };
+        }
+        Ok(state)
+    }
+
+    pub fn current_text_format_state_hash_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<String, EditorError> {
+        let state = self.current_text_format_overlay_v1(story_id)?;
+        state_hash_v1(&state).map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })
+    }
+
+    pub fn current_text_format_property_state_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<TextFormatPropertyStateV1, EditorError> {
+        let state = self
+            .source_text_format_property_state_v1(story_id, property)
+            .map_err(text_format_base_error_to_editor_v1)?;
+        fold_text_format_property_history_v1(state, &self.undo)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
+    }
+
+    pub fn current_text_format_property_state_hash_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+    ) -> Result<String, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
+    }
+
+    pub fn current_text_format_property_segments_v1(
+        &self,
+        story_id: StoryId,
+        property: FormatPropertyV1,
+        start_scalar: u32,
+        end_scalar: u32,
+    ) -> Result<Vec<EffectivePropertySegmentV1>, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        effective_text_format_property_segments_v1(&state, start_scalar, end_scalar)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })
+    }
+
+    pub fn set_text_format_property_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_overlay_v1(story_id)?;
+        let before_state_hash =
+            state_hash_v1(&state).map_err(|error| EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_set_text_format_property_v1(
+            &state,
+            start_scalar,
+            end_scalar,
+            property,
+            value.clone(),
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&state, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical format command did not reproduce its receipt state".to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_text_format_property_override_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_overlay_v1(story_id)?;
+        let before_state_hash =
+            state_hash_v1(&state).map_err(|error| EditorError::TextFormatStateInvalid {
+                story_id,
+                message: error.to_string(),
+            })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let receipt = overlay_clear_text_format_property_override_v1(
+            &state,
+            start_scalar,
+            end_scalar,
+            property,
+            expected_state_hash,
+        )
+        .map_err(|error| EditorError::TextFormatStateInvalid {
+            story_id,
+            message: error.to_string(),
+        })?;
+        if receipt.command.before_state_hash == receipt.command.after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash: receipt.command.before_state_hash,
+            after_state_hash: receipt.command.after_state_hash,
+        };
+        let replayed = apply_text_format_history_operation_v1(&state, &operation)?;
+        if replayed != receipt.after_state {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical clear-format command did not reproduce its receipt state"
+                    .to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn set_text_format_property_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        value: FormatValueV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash = text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after =
+            set_text_format_property_state_v1(&state, start_scalar, end_scalar, value.clone())
+                .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped format command did not reproduce its state".to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_text_format_property_override_scoped_v1(
+        &mut self,
+        story_id: StoryId,
+        start_scalar: u32,
+        end_scalar: u32,
+        property: FormatPropertyV1,
+        expected_state_hash: &str,
+    ) -> Result<EditOperation, EditorError> {
+        let state = self.current_text_format_property_state_v1(story_id, property)?;
+        let before_state_hash = text_format_property_state_hash_v1(&state)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if before_state_hash != expected_state_hash {
+            return Err(EditorError::StaleOperation { story_id });
+        }
+        let after = clear_text_format_property_state_v1(&state, start_scalar, end_scalar)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        let after_state_hash = text_format_property_state_hash_v1(&after)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if before_state_hash == after_state_hash {
+            return Err(EditorError::NoChange { story_id });
+        }
+
+        let operation = EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            after_state_hash,
+        };
+        let replayed = apply_text_format_property_operation_checked_v1(&state, &operation)
+            .map_err(|message| EditorError::TextFormatStateInvalid { story_id, message })?;
+        if replayed != after {
+            return Err(EditorError::TextFormatStateInvalid {
+                story_id,
+                message: "canonical scoped clear-format command did not reproduce its state"
+                    .to_owned(),
+            });
+        }
+
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn current_paragraph_alignment_overrides_v1(
+        &self,
+    ) -> Result<BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>, EditorError> {
+        authored_paragraph_alignment_v1::paragraph_alignment_override_state_from_history_v1(
+            &self.undo,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)
+    }
+
+    fn canonical_paragraph_alignment_target_ids_v1(
+        &self,
+        mut paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<Vec<ParagraphId>, EditorError> {
+        self.validate_source_identity()?;
+        if paragraph_ids.is_empty() {
+            return Err(EditorError::ParagraphAlignmentTargetsEmpty);
+        }
+        paragraph_ids.sort_unstable();
+        paragraph_ids.dedup();
+
+        let available = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<BTreeSet<_>>();
+        for paragraph_id in &paragraph_ids {
+            if !available.contains(paragraph_id) {
+                return Err(EditorError::ParagraphAlignmentParagraphUnavailable {
+                    paragraph_id: *paragraph_id,
+                });
+            }
+        }
+        Ok(paragraph_ids)
+    }
+
+    pub fn authored_paragraph_alignment_override_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Result<Option<AuthoredParagraphAlignmentValueV1>, EditorError> {
+        Ok(self
+            .current_paragraph_alignment_overrides_v1()?
+            .get(&paragraph_id)
+            .copied())
+    }
+
+    pub fn effective_paragraph_alignment_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Result<EffectiveParagraphAlignmentV1, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .find(|paragraph| paragraph.paragraph_id == paragraph_id)
+            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })?;
+        let imported_base = self
+            .imported_paragraph_base_alignment_v1(paragraph_id)
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .map(|item| item.alignment);
+        let authored_override = self
+            .current_paragraph_alignment_overrides_v1()?
+            .get(&paragraph_id)
+            .copied();
+
+        let (effective, authority) = if let Some(value) = authored_override {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+            )
+        } else if let Some(value) = imported_base {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(EffectiveParagraphAlignmentV1 {
+            paragraph_id,
+            story_id: paragraph.story_id,
+            range: paragraph.range,
+            imported_base,
+            authored_override,
+            effective,
+            authority,
+        })
+    }
+
+    pub fn set_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &overrides,
+            &paragraph_ids,
+        );
+        let base_by_id = self
+            .imported_paragraph_base_alignments_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .map(|item| (item.paragraph_id, item.alignment))
+            .collect::<BTreeMap<_, _>>();
+        let after = paragraph_ids
+            .iter()
+            .map(|paragraph_id| ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: authored_paragraph_alignment_v1::normalized_paragraph_alignment_override_v1(
+                    base_by_id.get(paragraph_id).copied(),
+                    value,
+                ),
+            })
+            .collect::<Vec<_>>();
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            before,
+            after,
+        };
+        authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+            &self.undo, &operation,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &overrides,
+            &paragraph_ids,
+        );
+        let after = paragraph_ids
+            .iter()
+            .map(|paragraph_id| ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: None,
+            })
+            .collect::<Vec<_>>();
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids,
+            before,
+            after,
+        };
+        authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+            &self.undo, &operation,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn story_has_paragraph_alignment_history_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<bool, EditorError> {
+        let has_paragraph_history = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        if !has_paragraph_history {
+            return Ok(false);
+        }
+
+        let paragraph_ids = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .filter(|paragraph| paragraph.story_id == story_id)
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<BTreeSet<_>>();
+        if paragraph_ids.is_empty() {
+            return Ok(false);
+        }
+
+        Ok(self.undo.iter().any(|operation| match operation {
+            EditOperation::SetParagraphAlignmentOverride {
+                paragraph_ids: targets,
+                ..
+            }
+            | EditOperation::ClearParagraphAlignmentOverride {
+                paragraph_ids: targets,
+                ..
+            } => targets
+                .iter()
+                .any(|paragraph_id| paragraph_ids.contains(paragraph_id)),
+            _ => false,
+        }))
     }
 
     pub fn prove_author_created_story_v1(
@@ -1823,9 +3158,12 @@ impl EditorSession {
             })
             .collect::<Vec<_>>();
         if owners.as_slice() != [frame_id] {
-            return Err(AuthorCreatedStoryProofError::unproven(
-                "author-created Story must have exactly one current TextFrame owner matching CreateTextBox",
-            ));
+            return self.prove_author_created_linked_story_v1(
+                story_id,
+                frame_id,
+                page_id,
+                text_preset,
+            );
         }
 
         let node = self.graph.nodes.get(&frame_id).ok_or_else(|| {
@@ -1901,6 +3239,16 @@ impl EditorSession {
         self.authored_shapes.get(&node_id)
     }
 
+    pub fn authored_lines(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &AuthoredLineRuntimeV1> + DoubleEndedIterator {
+        self.authored_lines.values()
+    }
+
+    pub fn authored_line(&self, node_id: NodeId) -> Option<&AuthoredLineRuntimeV1> {
+        self.authored_lines.get(&node_id)
+    }
+
     pub fn authored_stack(&self, page_id: PageId) -> Option<AuthoredStackV1> {
         self.graph.pages.contains_key(&page_id).then(|| {
             self.authored_stacks
@@ -1910,53 +3258,46 @@ impl EditorSession {
         })
     }
 
-    pub fn source_image_count(&self) -> usize {
-        self.source_image_nodes
-            .keys()
-            .filter(|node_id| !self.image_replacements.contains_key(node_id))
-            .count()
-    }
-
-    fn externally_projected_image_nodes(&self) -> BTreeSet<NodeId> {
-        self.image_replacements
-            .keys()
-            .chain(self.source_image_nodes.keys())
-            .copied()
-            .collect()
-    }
-
-    pub fn replacement_assets(
+    pub fn can_duplicate_authored_rectangle(
         &self,
-    ) -> impl ExactSizeIterator<Item = &EditorReplacementAsset> + DoubleEndedIterator {
-        self.replacement_assets.values()
-    }
-
-    pub fn image_replacement_for(&self, node_id: NodeId) -> Option<Sha256Digest> {
-        self.image_replacements.get(&node_id).copied()
-    }
-
-    pub fn import_replacement_asset(
-        &mut self,
-        mime: impl Into<String>,
-        bytes: Vec<u8>,
-    ) -> Result<Sha256Digest, EditorAssetError> {
-        let mime = mime.into();
-        let asset = validated_editor_asset(mime, bytes)?;
-
-        if let Some(existing) = self.replacement_assets.get(&asset.sha256) {
-            if existing.mime != asset.mime {
-                return Err(EditorAssetError::MimeConflict {
-                    sha256: asset.sha256,
-                    existing: existing.mime.clone(),
-                    requested: asset.mime,
-                });
-            }
-            return Ok(asset.sha256);
+        source_node_id: NodeId,
+    ) -> Result<(), DuplicateAuthoredRectangleErrorV1> {
+        self.validate_source_identity()
+            .map_err(DuplicateAuthoredRectangleErrorV1::Commit)?;
+        let source = self.authored_shapes.get(&source_node_id).ok_or(
+            DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            },
+        )?;
+        if !self.graph.pages.contains_key(&source.page_id) {
+            return Err(DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            });
         }
+        validate_duplicate_authored_rectangle_source_v1(source)
+    }
 
-        let sha256 = asset.sha256;
-        self.replacement_assets.insert(sha256, asset);
-        Ok(sha256)
+    pub fn duplicate_authored_rectangle(
+        &mut self,
+        source_node_id: NodeId,
+        destination_node_id: NodeId,
+        placement_policy: &str,
+    ) -> Result<EditOperation, DuplicateAuthoredRectangleErrorV1> {
+        self.can_duplicate_authored_rectangle(source_node_id)?;
+        let source = self
+            .authored_shapes
+            .get(&source_node_id)
+            .expect("Duplicate capability verified current authored source")
+            .clone();
+        let plan =
+            plan_duplicate_authored_rectangle_v1(&source, destination_node_id, placement_policy)?;
+        self.create_shape(
+            plan.destination_node_id,
+            plan.page_id,
+            plan.bounds,
+            plan.paint,
+        )
+        .map_err(DuplicateAuthoredRectangleErrorV1::Commit)
     }
 
     pub fn project(&self) -> EditorProject {
@@ -1966,25 +3307,108 @@ impl EditorSession {
     }
 
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
-        let table_grids = effective_table_grids(&self.graph);
+        let table_grids = effective_table_grids_with_history(&self.graph, &self.undo);
         let carries_reorder = self
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
-        if carries_reorder && self.project_identity.is_none() {
+        let carries_page_reorder = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }));
+        let carries_authored_page_identity = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+            )
+        });
+        let carries_text_format = self
+            .undo
+            .iter()
+            .any(|operation| text_format_operation_story_id_v1(operation).is_some());
+        let carries_paragraph_alignment = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        let carries_create_line = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::CreateLine { .. }));
+        let carries_create_table = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::CreateTable { .. }));
+        let carries_crop = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }));
+        let carries_table_track_extent = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }));
+        let carries_table_rowcol = self
+            .undo
+            .iter()
+            .any(|operation| table_rowcol_history_v1(operation).is_some());
+        let carries_link = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }));
+        if (carries_link
+            || carries_table_rowcol
+            || carries_table_track_extent
+            || carries_crop
+            || carries_reorder
+            || carries_page_reorder
+            || carries_authored_page_identity
+            || carries_text_format
+            || carries_paragraph_alignment
+            || carries_create_line
+            || carries_create_table)
+            && self.project_identity.is_none()
+        {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_reorder {
-                    EDITOR_PROJECT_VERSION_V0_13
-                } else {
-                    EDITOR_PROJECT_VERSION_V0_12
-                },
+                minimum_identity_project_schema_v1(&self.undo),
                 Some(identity.clone()),
             )
         } else {
             let legacy_schema = if self
+                .undo
+                .iter()
+                .any(|operation| table_rowcol_history_v1(operation).is_some())
+            {
+                EDITOR_PROJECT_VERSION_V0_21
+            } else if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::SetTableTrackExtent { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_20
+            } else if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_19
+            } else if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_18
+            } else if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_17
+            } else if self
                 .undo
                 .iter()
                 .any(|operation| matches!(operation, EditOperation::CreateShape { .. }))
@@ -2080,14 +3504,43 @@ impl EditorSession {
         self.apply_project_with_assets(project, &BTreeMap::new())
     }
 
-    pub fn apply_project_with_assets(
+    pub fn apply_project_with_admitted_font_resources_v1(
         &mut self,
         project: &EditorProject,
         asset_bytes: &BTreeMap<Sha256Digest, Vec<u8>>,
+        font_grants: &[EditorProjectFontReopenGrantV1<'_>],
     ) -> Result<(), EditorProjectError> {
         self.validate_source_identity()
             .map_err(EditorProjectError::Session)?;
-
+        // v0.28-v0.32 preserve v0.27 admissions; each adds a fenced operation.
+        let legacy_compatible_schema: &str = if project.schema_version
+            == EDITOR_PROJECT_VERSION_V0_28
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_29
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_30
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_31
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_32
+        {
+            EDITOR_PROJECT_VERSION_V0_27
+        } else {
+            &project.schema_version
+        };
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
+            {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesLinkTextFrameOperation { index },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_1
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_2
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_3
@@ -2101,6 +3554,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -2130,6 +3597,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2148,6 +3629,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2165,6 +3660,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -2176,6 +3685,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -2189,6 +3712,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2203,6 +3740,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2216,6 +3767,20 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2225,9 +3790,92 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::CreateLine { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::CreateTable { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(
+                    operation,
+                    EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+                )
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesAuthoredPageIdentityOperation { index },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2241,6 +3889,20 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
         {
             if let Some(index) = project
                 .operations
@@ -2250,7 +3912,22 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
             }) {
@@ -2259,20 +3936,172 @@ impl EditorSession {
                 );
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| text_format_operation_story_id_v1(operation).is_some())
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(is_scoped_text_format_operation_v1)
+            {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesScopedTextFormatOperation { index },
+                );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(
+                    operation,
+                    EditOperation::SetParagraphAlignmentOverride { .. }
+                        | EditOperation::ClearParagraphAlignmentOverride { .. }
+                )
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesParagraphAlignmentOperation { index },
+                );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesImageCropOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::SetTableTrackExtent { .. })
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index },
+                );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| table_rowcol_history_v1(operation).is_some())
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index });
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_23
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
+            && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
         }
         if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_26
+            || legacy_compatible_schema == EDITOR_PROJECT_VERSION_V0_27)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
+        reject_legacy_page_lifecycle_schemas_v032(project, legacy_compatible_schema)?;
         if project.source_hash != self.source_hash {
             return Err(EditorProjectError::SourceHashMismatch {
                 expected: self.source_hash,
@@ -2283,15 +4112,28 @@ impl EditorSession {
             || !self.redo.is_empty()
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
+            || !self.image_crop_overrides.is_empty()
             || !self.authored_shapes.is_empty()
+            || !self.authored_lines.is_empty()
             || !self.authored_stacks.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
-
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -2305,7 +4147,6 @@ impl EditorSession {
                 return Err(EditorProjectError::AssetReachabilityMismatch { expected, found });
             }
         }
-
         let mut candidate = self.clone();
         candidate.project_identity = project.identity.clone();
         for (index, metadata) in project.assets.iter().enumerate() {
@@ -2341,9 +4182,8 @@ impl EditorSession {
         if canonical_editor_asset_metadata(&candidate.replacement_assets) != project.assets {
             return Err(EditorProjectError::AssetMetadataNonCanonical);
         }
-
         for (index, expected) in project.operations.iter().enumerate() {
-            let actual = replay_canonical_operation(&mut candidate, expected, index)?;
+            let actual = replay_font(&mut candidate, expected, index, project, font_grants)?;
             if &actual != expected {
                 return Err(EditorProjectError::OperationMismatch { index });
             }
@@ -2357,8 +4197,21 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_16
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_17
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_18
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_19
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_20
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_21
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_22
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_23
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_24
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_25
         {
-            let actual_grids = effective_table_grids(&candidate.graph);
+            let actual_grids =
+                effective_table_grids_with_history(&candidate.graph, &candidate.undo);
             if actual_grids != project.table_grids {
                 return Err(EditorProjectError::TableGridMismatch);
             }
@@ -2405,6 +4258,26 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let (paragraph_alignments, scoped_paragraph_alignments) = self
+                        .effective_editable_paragraph_alignment_inputs_v1()
+                        .map_err(|message| EditorExportError::Projection { target, message })?;
+                    let scoped_placements = self
+                        .idml_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments)
+                        .map_err(|message| EditorExportError::Projection { target, message })?;
+                    add_paragraph_scoped_alignment_to_idml(&plan, &mut package, &scoped_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        })?;
+                    add_full_story_paragraph_alignment_to_idml(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignments,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                     let rectangles = self.authored_rectangle_exports_v1(target)?;
                     add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
                         |error| EditorExportError::Projection {
@@ -2432,6 +4305,27 @@ impl EditorSession {
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
                         .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                    let (paragraph_alignments, scoped_paragraph_alignments) = self
+                        .effective_editable_paragraph_alignment_inputs_v1()
+                        .map_err(|message| EditorExportError::Projection { target, message })?;
+                    let scoped_placements = self
+                        .odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
+                    add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        })?;
+                    let paragraph_alignment_placements = self
+                        .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                    add_full_story_paragraph_alignment_to_odg(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignment_placements,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
                         target,
                         message: error.to_string(),
                     })?;
@@ -2495,6 +4389,26 @@ impl EditorSession {
                         message: error.to_string(),
                     },
                 )?;
+                let (paragraph_alignments, scoped_paragraph_alignments) = self
+                    .effective_editable_paragraph_alignment_inputs_v1()
+                    .map_err(|message| EditorExportError::Projection { target, message })?;
+                let scoped_placements = self
+                    .idml_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments)
+                    .map_err(|message| EditorExportError::Projection { target, message })?;
+                add_paragraph_scoped_alignment_to_idml(&plan, &mut package, &scoped_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                add_full_story_paragraph_alignment_to_idml(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignments,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 let rectangles = self.authored_rectangle_exports_v1(target)?;
                 add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
                     |error| EditorExportError::Projection {
@@ -2530,6 +4444,27 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
+                let (paragraph_alignments, scoped_paragraph_alignments) = self
+                    .effective_editable_paragraph_alignment_inputs_v1()
+                    .map_err(|message| EditorExportError::Projection { target, message })?;
+                let scoped_placements =
+                    self.odg_paragraph_scoped_alignment_placements_v1(&scoped_paragraph_alignments);
+                add_paragraph_scoped_alignment_to_odg(&plan, &mut package, &scoped_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                let paragraph_alignment_placements =
+                    self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                add_full_story_paragraph_alignment_to_odg(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignment_placements,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 let rectangles = self.authored_rectangle_exports_v1(target)?;
                 add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
                     |error| EditorExportError::Projection {
@@ -2703,6 +4638,330 @@ impl EditorSession {
         result
     }
 
+    fn effective_paragraph_scoped_alignment_v1(
+        &self,
+    ) -> Result<Vec<ParagraphScopedAlignmentV1>, String> {
+        self.validate_source_identity()
+            .map_err(|error| error.to_string())?;
+
+        let overrides = self
+            .current_paragraph_alignment_overrides_v1()
+            .map_err(|error| error.to_string())?;
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|error| error.to_string())?;
+        let mut scoped_story_ids = paragraphs
+            .iter()
+            .filter(|paragraph| overrides.contains_key(&paragraph.paragraph_id))
+            .map(|paragraph| paragraph.story_id)
+            .collect::<BTreeSet<_>>();
+
+        let mut touched_paragraph_ids = BTreeSet::<ParagraphId>::new();
+        for operation in &self.undo {
+            match operation {
+                EditOperation::SetParagraphAlignmentOverride { paragraph_ids, .. }
+                | EditOperation::ClearParagraphAlignmentOverride { paragraph_ids, .. } => {
+                    touched_paragraph_ids.extend(paragraph_ids.iter().copied());
+                }
+                _ => {}
+            }
+        }
+        for paragraph in &paragraphs {
+            if touched_paragraph_ids.contains(&paragraph.paragraph_id) {
+                scoped_story_ids.insert(paragraph.story_id);
+            }
+        }
+
+        if scoped_story_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::new();
+        for paragraph in paragraphs {
+            if !scoped_story_ids.contains(&paragraph.story_id) {
+                continue;
+            }
+
+            let effective = self
+                .effective_paragraph_alignment_v1(paragraph.paragraph_id)
+                .map_err(|error| error.to_string())?;
+            let alignment =
+                match authored_paragraph_alignment_v1::paragraph_scoped_alignment_value_v1(
+                    effective.effective,
+                ) {
+                    Ok(alignment) => alignment,
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::InterWord,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has effective InterWord alignment, which is outside the paragraph-scoped editable writer",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::Distribute,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has effective Distribute alignment, which is outside the paragraph-scoped editable writer",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                    Err(
+                        authored_paragraph_alignment_v1::ParagraphScopedAlignmentProjectionErrorV1::Unknown,
+                    ) => {
+                        return Err(format!(
+                            "Story {} Paragraph {} has unknown effective alignment, so scoped editable export cannot cover the complete canonical Story",
+                            paragraph.story_id.as_canonical(),
+                            paragraph.paragraph_id.as_canonical()
+                        ));
+                    }
+                };
+
+            result.push(ParagraphScopedAlignmentV1 {
+                story_id: paragraph.story_id,
+                paragraph_id: paragraph.paragraph_id,
+                range: paragraph.range,
+                alignment,
+            });
+        }
+
+        result.sort_by_key(|item| {
+            (
+                item.story_id,
+                item.range.start,
+                item.range.end,
+                item.paragraph_id,
+            )
+        });
+        Ok(result)
+    }
+
+    fn idml_paragraph_scoped_alignment_placements_v1(
+        &self,
+        alignments: &[ParagraphScopedAlignmentV1],
+    ) -> Result<Vec<IdmlParagraphScopedAlignmentPlacement>, String> {
+        let mut by_story = BTreeMap::<StoryId, Vec<ParagraphScopedAlignmentV1>>::new();
+        for item in alignments {
+            by_story
+                .entry(item.story_id)
+                .or_default()
+                .push(item.clone());
+        }
+
+        let mut result = Vec::with_capacity(by_story.len());
+        for (story_id, mut paragraphs) in by_story {
+            let story = self.graph.stories.get(&story_id).ok_or_else(|| {
+                format!(
+                    "scoped paragraph alignment Story {} is missing from current graph",
+                    story_id.as_canonical()
+                )
+            })?;
+            paragraphs.sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
+            result.push(IdmlParagraphScopedAlignmentPlacement {
+                story_id,
+                story_text: story.text.clone(),
+                paragraphs,
+            });
+        }
+        Ok(result)
+    }
+
+    fn odg_paragraph_scoped_alignment_placements_v1(
+        &self,
+        alignments: &[ParagraphScopedAlignmentV1],
+    ) -> Vec<OdgParagraphScopedAlignmentPlacement> {
+        let scoped_story_ids = alignments
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut by_story = BTreeMap::<StoryId, Vec<ParagraphScopedAlignmentV1>>::new();
+        for item in alignments {
+            by_story
+                .entry(item.story_id)
+                .or_default()
+                .push(item.clone());
+        }
+
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && scoped_story_ids.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        by_story
+            .into_iter()
+            .filter_map(|(story_id, mut paragraphs)| {
+                let mut frame_ids = roots.get(&story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                paragraphs
+                    .sort_by_key(|item| (item.range.start, item.range.end, item.paragraph_id));
+                (!frame_ids.is_empty()).then_some(OdgParagraphScopedAlignmentPlacement {
+                    story_id,
+                    paragraphs,
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
+    fn effective_editable_paragraph_alignment_inputs_v1(
+        &self,
+    ) -> Result<
+        (
+            Vec<FullStoryParagraphAlignmentV1>,
+            Vec<ParagraphScopedAlignmentV1>,
+        ),
+        String,
+    > {
+        let scoped = self.effective_paragraph_scoped_alignment_v1()?;
+        let scoped_story_ids = scoped
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let full_story = self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|item| !scoped_story_ids.contains(&item.story_id))
+            .collect();
+        Ok((full_story, scoped))
+    }
+
+    pub fn effective_full_story_paragraph_alignment_v1(
+        &self,
+    ) -> Result<Vec<FullStoryParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut paragraphs_by_story = BTreeMap::<StoryId, Vec<ParagraphId>>::new();
+        for paragraph in self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+        {
+            if ordinary_story_ids.contains(&paragraph.story_id) {
+                paragraphs_by_story
+                    .entry(paragraph.story_id)
+                    .or_default()
+                    .push(paragraph.paragraph_id);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut paragraph_ids) in paragraphs_by_story {
+            paragraph_ids.sort_unstable();
+            paragraph_ids.dedup();
+            if paragraph_ids.is_empty() {
+                continue;
+            }
+
+            let mut uniform: Option<ParagraphAlignmentV1> = None;
+            let mut valid = true;
+            for paragraph_id in paragraph_ids {
+                let effective = self.effective_paragraph_alignment_v1(paragraph_id)?;
+                let current = match effective.effective {
+                    Some(EffectiveParagraphAlignmentValueV1::Center) => {
+                        ParagraphAlignmentV1::Center
+                    }
+                    Some(EffectiveParagraphAlignmentValueV1::Right) => ParagraphAlignmentV1::Right,
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                };
+
+                match uniform {
+                    None => uniform = Some(current),
+                    Some(existing) if existing == current => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if valid {
+                if let Some(alignment) = uniform {
+                    result.push(FullStoryParagraphAlignmentV1 {
+                        story_id,
+                        alignment,
+                    });
+                }
+            }
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        Ok(result)
+    }
+
+    fn odg_full_story_paragraph_alignment_placements_v1(
+        &self,
+        alignments: &[FullStoryParagraphAlignmentV1],
+    ) -> Vec<OdgFullStoryParagraphAlignmentPlacement> {
+        let eligible = alignments
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        alignments
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryParagraphAlignmentPlacement {
+                    alignment: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
     fn odg_full_story_typography_placements_v1(
         &self,
         typography: &[FullStoryTypographyV1],
@@ -2800,16 +5059,24 @@ impl EditorSession {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
         let typography = self.full_story_typography_v1();
+        let paragraph_alignments = self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(EditorExportError::Session)?;
+        let image_state = EditableExportImageState {
+            replacements: &self.image_replacements,
+            crop_overrides: &self.image_crop_overrides,
+            source_nodes: &self.source_image_nodes,
+        };
         let plan = editable_export_plan(
             target,
             &self.graph,
-            &self.image_replacements,
-            &self.source_image_nodes,
+            image_state,
             EditableExportTypographyInputs {
                 source_typography_runs: &self.source_typography_runs,
                 source_typography_size_runs: &self.source_typography_size_runs,
                 source_paragraph_alignments: &self.source_paragraph_alignments,
                 full_story_typography: &typography,
+                effective_full_story_paragraph_alignments: &paragraph_alignments,
             },
             &self.authored_shapes,
         )
@@ -3119,309 +5386,6 @@ impl EditorSession {
         Ok(placements)
     }
 
-    pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
-        self.validate_source_identity()?;
-
-        let story = self
-            .graph
-            .stories
-            .get(&story_id)
-            .ok_or(EditorError::MissingStory { story_id })?;
-
-        if !story.paragraphs.is_empty()
-            || !story.runs.is_empty()
-            || !story.fields.is_empty()
-            || !story.hyperlinks.is_empty()
-        {
-            return Err(EditorError::RichStoryUnsupported { story_id });
-        }
-
-        if self.graph.nodes.values().any(|node| {
-            node.payload
-                .table_story
-                .as_ref()
-                .is_some_and(|owner| owner.story_id == Some(story_id))
-                || node
-                    .payload
-                    .table
-                    .as_ref()
-                    .is_some_and(|table| table.story_id == Some(story_id))
-        }) {
-            return Err(EditorError::TableStoryUnsupported { story_id });
-        }
-
-        let frames = self
-            .graph
-            .nodes
-            .iter()
-            .filter_map(|(node_id, node)| {
-                let frame = node.payload.story_frame.as_ref()?;
-                (frame.story_id == Some(story_id)).then_some(StoryFrame {
-                    story_id,
-                    frame_id: *node_id,
-                    ordinal: frame.ordinal,
-                    previous: frame.previous_frame,
-                    next: frame.next_frame,
-                })
-            })
-            .collect::<Vec<StoryFrame<StoryId, NodeId>>>();
-
-        if frames.is_empty() {
-            return Err(EditorError::FrameCountUnsupported { story_id, found: 0 });
-        }
-
-        let topology_errors = validate_story_frames(&frames);
-        if !topology_errors.is_empty() {
-            return Err(EditorError::FrameTopologyUnsupported {
-                story_id,
-                errors: topology_errors.len(),
-            });
-        }
-
-        Ok(())
-    }
-
-    pub fn editable_table_cells_for_story(
-        &self,
-        story_id: StoryId,
-    ) -> Vec<EditorEditableTableCell> {
-        let mut result = Vec::new();
-
-        for (node_id, node) in &self.graph.nodes {
-            let Some(table) = node.payload.table.as_ref() else {
-                continue;
-            };
-            if table.story_id != Some(story_id) {
-                continue;
-            }
-            let Some(story) = self.graph.stories.get(&story_id) else {
-                continue;
-            };
-            let Ok(cells) = materialize_bounded_simple_table_cells(table, story) else {
-                continue;
-            };
-
-            for cell in cells {
-                if self.can_replace_table_cell_text(*node_id, cell.id).is_err() {
-                    continue;
-                }
-                result.push(EditorEditableTableCell {
-                    node_id: *node_id,
-                    story_id,
-                    cell_id: cell.id,
-                    row: cell.address.row,
-                    column: cell.address.column,
-                    text: cell.text,
-                });
-            }
-        }
-
-        result.sort_by_key(|cell| (cell.row, cell.column, cell.cell_id));
-        result
-    }
-
-    pub fn can_replace_table_cell_text(
-        &self,
-        node_id: NodeId,
-        cell_id: TableCellId,
-    ) -> Result<(), EditorError> {
-        self.validate_source_identity()?;
-
-        let node = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        let table = node
-            .payload
-            .table
-            .as_ref()
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        let story_id = table
-            .story_id
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        let story = self
-            .graph
-            .stories
-            .get(&story_id)
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-
-        let simple = table
-            .simple_table
-            .as_ref()
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        if !simple.cells_are_row_major()
-            || !story.paragraphs.is_empty()
-            || !story.runs.is_empty()
-            || !story.fields.is_empty()
-            || !story.hyperlinks.is_empty()
-        {
-            return Err(EditorError::TableEditUnsupported { node_id });
-        }
-        let table_owner_count = self
-            .graph
-            .nodes
-            .values()
-            .filter(|candidate| {
-                candidate
-                    .payload
-                    .table_story
-                    .as_ref()
-                    .is_some_and(|owner| owner.story_id == Some(story_id))
-                    || candidate
-                        .payload
-                        .table
-                        .as_ref()
-                        .is_some_and(|candidate_table| candidate_table.story_id == Some(story_id))
-            })
-            .count();
-        if table_owner_count != 1 {
-            return Err(EditorError::TableEditUnsupported { node_id });
-        }
-
-        let cells = materialize_bounded_simple_table_cells(table, story)
-            .map_err(|_| EditorError::TableEditUnsupported { node_id })?;
-        if !cells.iter().any(|cell| cell.id == cell_id) {
-            return Err(EditorError::MissingTableCell { node_id, cell_id });
-        }
-
-        let (roundtrip_story, roundtrip_ranges) = rebuild_simple_table_story(table, &cells)
-            .map_err(|_| EditorError::TableEditUnsupported { node_id })?;
-        if roundtrip_story != story.text || roundtrip_ranges != snapshot_table_ranges(table) {
-            return Err(EditorError::TableEditUnsupported { node_id });
-        }
-
-        Ok(())
-    }
-
-    pub fn replace_table_cell_text(
-        &mut self,
-        node_id: NodeId,
-        cell_id: TableCellId,
-        replacement: impl Into<String>,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_replace_table_cell_text(node_id, cell_id)?;
-
-        let replacement = replacement.into();
-        let node = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .expect("capability check verified table node");
-        let table = node
-            .payload
-            .table
-            .as_ref()
-            .expect("capability check verified table payload");
-        let story_id = table
-            .story_id
-            .expect("capability check verified table Story");
-        let story = self
-            .graph
-            .stories
-            .get(&story_id)
-            .expect("capability check verified table Story presence");
-        let mut cells = materialize_bounded_simple_table_cells(table, story)
-            .expect("capability check verified table cell materialization");
-
-        let target = cells
-            .iter_mut()
-            .find(|cell| cell.id == cell_id)
-            .expect("capability check verified target cell");
-        if target.text == replacement {
-            return Err(EditorError::TableCellNoChange { node_id, cell_id });
-        }
-        target.text = replacement;
-
-        let before_story = story.text.clone();
-        let before_ranges = snapshot_table_ranges(table);
-        let (after_story, after_ranges) = rebuild_simple_table_story(table, &cells)
-            .map_err(|_| EditorError::TableEditUnsupported { node_id })?;
-
-        let operation = EditOperation::ReplaceTableCellText {
-            node_id,
-            story_id,
-            cell_id,
-            before_story,
-            after_story,
-            before_ranges,
-            after_ranges,
-        };
-
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn can_replace_image(
-        &self,
-        node_id: NodeId,
-        replacement_asset: Sha256Digest,
-    ) -> Result<(), EditorError> {
-        self.validate_source_identity()?;
-
-        if !self.replacement_assets.contains_key(&replacement_asset) {
-            return Err(EditorError::MissingReplacementAsset {
-                sha256: replacement_asset,
-            });
-        }
-
-        let node = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .ok_or(EditorError::ImageReplaceUnsupported { node_id })?;
-        if node.payload.image_slot.is_none() || node.payload.explicit_image_crop.is_some() {
-            return Err(EditorError::ImageReplaceUnsupported { node_id });
-        }
-        if node.header.bounds.width.get() <= 0
-            || node.header.bounds.height.get() <= 0
-            || node.header.bounds.right().is_none()
-            || node.header.bounds.bottom().is_none()
-        {
-            return Err(EditorError::ImageReplaceUnsupported { node_id });
-        }
-        if !self
-            .graph
-            .pages
-            .keys()
-            .any(|page_id| page_id.into_canonical() == node.header.parent_id)
-        {
-            return Err(EditorError::ImageReplaceUnsupported { node_id });
-        }
-
-        Ok(())
-    }
-
-    pub fn replace_image(
-        &mut self,
-        node_id: NodeId,
-        replacement_asset: Sha256Digest,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_replace_image(node_id, replacement_asset)?;
-
-        let before_asset = self.image_replacement_for(node_id);
-        if before_asset == Some(replacement_asset) {
-            return Err(EditorError::ImageReplacementNoChange {
-                node_id,
-                sha256: replacement_asset,
-            });
-        }
-
-        let operation = EditOperation::ReplaceImage {
-            node_id,
-            before_asset,
-            after_asset: replacement_asset,
-        };
-        apply_image_forward(&mut self.image_replacements, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
     pub fn create_text_box(
         &mut self,
         node_id: NodeId,
@@ -3452,21 +5416,6 @@ impl EditorSession {
         self.redo.clear();
         self.validate_source_identity()?;
         Ok(operation)
-    }
-
-    fn current_authored_stack_v1(&self, page_id: PageId) -> AuthoredStackV1 {
-        self.authored_stacks
-            .get(&page_id)
-            .cloned()
-            .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
-    }
-
-    fn install_authored_stack_v1(&mut self, stack: AuthoredStackV1) {
-        if stack.members.is_empty() {
-            self.authored_stacks.remove(&stack.page_id);
-        } else {
-            self.authored_stacks.insert(stack.page_id, stack);
-        }
     }
 
     pub fn create_shape(
@@ -3528,6 +5477,7 @@ impl EditorSession {
         }
         if self.graph.nodes.contains_key(&shape.node_id)
             || self.authored_shapes.contains_key(&shape.node_id)
+            || self.authored_lines.contains_key(&shape.node_id)
         {
             return Err(EditorError::CreateShapeIdCollision {
                 node_id: shape.node_id,
@@ -3563,6 +5513,152 @@ impl EditorSession {
             ) => Err(EditorError::CreateShapeMalformed {
                 node_id: shape.node_id,
             }),
+        }
+    }
+
+    pub fn create_table(
+        &mut self,
+        table: CreateTableRuntimeV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.consume_canonical_create_table(EditOperation::CreateTable { table })
+    }
+
+    fn consume_canonical_create_table(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::CreateTable { table } = &operation else {
+            unreachable!("consume_canonical_create_table receives CreateTable");
+        };
+
+        if self.authored_shapes.contains_key(&table.node_id)
+            || self.authored_lines.contains_key(&table.node_id)
+        {
+            return Err(EditorError::TableEditUnsupported {
+                node_id: table.node_id,
+            });
+        }
+        build_create_table_plan_v1(table).map_err(|_| EditorError::TableEditUnsupported {
+            node_id: table.node_id,
+        })?;
+
+        let before_stack = self.current_authored_stack_v1(table.page_id);
+        let transition = plan_create_table_append_v1(&before_stack, table.node_id, table.page_id)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+            page_id: table.page_id,
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: table.page_id,
+            })?;
+
+        let mut candidate_graph = self.graph.clone();
+        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(|_| {
+            EditorError::TableEditUnsupported {
+                node_id: table.node_id,
+            }
+        })?;
+
+        self.graph = candidate_graph;
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn create_line(
+        &mut self,
+        node_id: NodeId,
+        page_id: PageId,
+        geometry: LineGeometryV1,
+        stroke: AuthoredSolidStrokeV1,
+    ) -> Result<EditOperation, EditorError> {
+        let operation = EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            geometry,
+            stroke,
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        self.consume_canonical_create_line(operation)
+    }
+
+    fn consume_canonical_create_line(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let line = authored_line_from_operation(&operation)
+            .expect("consume_canonical_create_line receives CreateLine");
+        self.validate_create_line_candidate(&line)?;
+
+        let before_stack = self.current_authored_stack_v1(line.page_id);
+        let transition = plan_create_line_append_v1(&before_stack, &line).map_err(|_| {
+            EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            }
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: line.page_id,
+            })?;
+
+        self.authored_lines.insert(line.node_id, line);
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn validate_create_line_candidate(
+        &self,
+        line: &AuthoredLineRuntimeV1,
+    ) -> Result<(), EditorError> {
+        if !self.graph.pages.contains_key(&line.page_id) {
+            return Err(EditorError::CreateLinePageMissing {
+                page_id: line.page_id,
+            });
+        }
+        if self.graph.nodes.contains_key(&line.node_id)
+            || self.authored_shapes.contains_key(&line.node_id)
+            || self.authored_lines.contains_key(&line.node_id)
+        {
+            return Err(EditorError::CreateLineIdCollision {
+                node_id: line.node_id,
+            });
+        }
+        match validate_authored_line_runtime_v1(line) {
+            Ok(()) => Ok(()),
+            Err(CreateLineRuntimeValidationError::NodeIdNotUuidV7) => {
+                Err(EditorError::CreateLineInvalidNodeId {
+                    node_id: line.node_id,
+                })
+            }
+            Err(
+                CreateLineRuntimeValidationError::CoordinateOutOfRange
+                | CreateLineRuntimeValidationError::DerivedBoundsOverflow,
+            ) => Err(EditorError::CreateLineInvalidGeometry {
+                node_id: line.node_id,
+            }),
+            Err(CreateLineRuntimeValidationError::InvalidStroke) => {
+                Err(EditorError::CreateLineInvalidStroke {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::NonAuthorCreatedProvenance) => {
+                Err(EditorError::CreateLineInvalidProvenance {
+                    node_id: line.node_id,
+                })
+            }
+            Err(CreateLineRuntimeValidationError::ParentPageMismatch) => {
+                Err(EditorError::CreateLineMalformed {
+                    node_id: line.node_id,
+                })
+            }
         }
     }
 
@@ -3649,330 +5745,6 @@ impl EditorSession {
         Ok(operation)
     }
 
-    pub fn reorder_authored_stack(
-        &mut self,
-        page_id: PageId,
-        node_id: NodeId,
-        mode: AuthoredStackReorderModeV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        if self.project_identity.is_none() {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-        let shape = self
-            .authored_shapes
-            .get(&node_id)
-            .ok_or(EditorError::AuthoredStackReorderUnsupported { node_id })?;
-        if shape.page_id != page_id
-            || shape.parent_id != page_id
-            || validate_authored_shape_runtime_v1(shape).is_err()
-        {
-            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
-        }
-
-        let before = self.current_authored_stack_v1(page_id);
-        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(
-            |error| match error {
-                AuthoredStackReorderErrorV1::NoChange { .. } => {
-                    EditorError::AuthoredStackReorderNoChange { node_id }
-                }
-                AuthoredStackReorderErrorV1::MissingMember { .. }
-                | AuthoredStackReorderErrorV1::PageMismatch
-                | AuthoredStackReorderErrorV1::InvalidStack => {
-                    EditorError::AuthoredStackReorderUnsupported { node_id }
-                }
-                AuthoredStackReorderErrorV1::BeforeStateMismatch
-                | AuthoredStackReorderErrorV1::AfterStateMismatch
-                | AuthoredStackReorderErrorV1::TransitionMismatch => {
-                    EditorError::StaleAuthoredStack { page_id }
-                }
-            },
-        )?;
-        self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
-            transition,
-        })
-    }
-
-    fn consume_canonical_reorder_authored_stack(
-        &mut self,
-        operation: EditOperation,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        let EditOperation::ReorderAuthoredStack { transition } = &operation else {
-            unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
-        };
-        let shape = self.authored_shapes.get(&transition.node_id).ok_or(
-            EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            },
-        )?;
-        if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
-            return Err(EditorError::AuthoredStackReorderUnsupported {
-                node_id: transition.node_id,
-            });
-        }
-        let current = self.current_authored_stack_v1(transition.page_id);
-        let after =
-            apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                EditorError::StaleAuthoredStack {
-                    page_id: transition.page_id,
-                }
-            })?;
-        self.install_authored_stack_v1(after);
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn can_move_node_to(
-        &self,
-        node_id: NodeId,
-        x: LengthEmu,
-        y: LengthEmu,
-    ) -> Result<(), EditorError> {
-        self.validate_source_identity()?;
-
-        let node = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .ok_or(EditorError::NodeMoveUnsupported { node_id })?;
-        if node.header.bounds.width.get() <= 0
-            || node.header.bounds.height.get() <= 0
-            || node.header.bounds.right().is_none()
-            || node.header.bounds.bottom().is_none()
-            || node.header.transform != pub_model::Affine2D::identity()
-        {
-            return Err(EditorError::NodeMoveUnsupported { node_id });
-        }
-        if !self
-            .graph
-            .pages
-            .keys()
-            .any(|page_id| page_id.into_canonical() == node.header.parent_id)
-        {
-            return Err(EditorError::NodeMoveUnsupported { node_id });
-        }
-
-        let candidate = RectEmu::new(x, y, node.header.bounds.width, node.header.bounds.height);
-        if candidate.right().is_none() || candidate.bottom().is_none() {
-            return Err(EditorError::NodeMoveOverflow { node_id });
-        }
-
-        Ok(())
-    }
-
-    pub fn move_node_to(
-        &mut self,
-        node_id: NodeId,
-        x: LengthEmu,
-        y: LengthEmu,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_move_node_to(node_id, x, y)?;
-
-        let before = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .expect("capability check verified move node")
-            .header
-            .bounds;
-        let after = RectEmu::new(x, y, before.width, before.height);
-        if before == after {
-            return Err(EditorError::NodeMoveNoChange { node_id });
-        }
-
-        let operation = EditOperation::MoveNode {
-            node_id,
-            before,
-            after,
-        };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    /// Consume one already-authorized canonical MoveNodesV1 operation.
-    ///
-    /// Author-created provenance admission belongs to the source-neutral
-    /// canonical authoring layer. This producer-side consumer deliberately
-    /// does not infer provenance from Publisher source refs. It revalidates
-    /// exact page ownership, stale before-state, translation-only geometry,
-    /// canonical ordering/uniqueness and the existing bounded MoveNode
-    /// capability before committing the whole batch as one history unit.
-    fn consume_canonical_move_nodes(
-        &mut self,
-        page_id: PageId,
-        mut entries: Vec<MoveNodeBatchEntry>,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        if entries.is_empty() {
-            return Err(EditorError::MoveNodesEmpty);
-        }
-        if entries.len() > MAX_MOVE_NODES_V1 {
-            return Err(EditorError::MoveNodesTooLarge {
-                found: entries.len(),
-            });
-        }
-
-        entries.sort_by_key(|entry| entry.node_id);
-        for pair in entries.windows(2) {
-            if pair[0].node_id == pair[1].node_id {
-                return Err(EditorError::MoveNodesDuplicate {
-                    node_id: pair[0].node_id,
-                });
-            }
-        }
-
-        let page_parent = page_id.into_canonical();
-        for entry in &entries {
-            let node =
-                self.graph
-                    .nodes
-                    .get(&entry.node_id)
-                    .ok_or(EditorError::NodeMoveUnsupported {
-                        node_id: entry.node_id,
-                    })?;
-            if node.header.parent_id != page_parent {
-                return Err(EditorError::MoveNodesPageMismatch {
-                    node_id: entry.node_id,
-                    page_id,
-                });
-            }
-            if node.header.bounds != entry.before {
-                return Err(EditorError::StaleNodeMove {
-                    node_id: entry.node_id,
-                });
-            }
-            if entry.before.width != entry.after.width || entry.before.height != entry.after.height
-            {
-                return Err(EditorError::MoveNodesSizeChanged {
-                    node_id: entry.node_id,
-                });
-            }
-            if entry.before == entry.after {
-                return Err(EditorError::NodeMoveNoChange {
-                    node_id: entry.node_id,
-                });
-            }
-            self.can_move_node_to(entry.node_id, entry.after.x, entry.after.y)?;
-        }
-
-        let operation = EditOperation::MoveNodes { page_id, entries };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    /// Consume one already-authorized canonical ResizeNodesV1 operation.
-    ///
-    /// Author-created provenance admission belongs to the source-neutral
-    /// canonical authoring layer. The producer runtime revalidates only the
-    /// persisted physical invariants required for atomic replay.
-    fn consume_canonical_resize_nodes(
-        &mut self,
-        page_id: PageId,
-        mut entries: Vec<ResizeNodeBatchEntry>,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-
-        entries.sort_by_key(|entry| entry.node_id);
-        validate_resize_nodes_transition(&self.graph, page_id, &entries, true)?;
-
-        let operation = EditOperation::ResizeNodes { page_id, entries };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn can_resize_node(&self, node_id: NodeId) -> Result<(), EditorError> {
-        self.validate_source_identity()?;
-
-        let node = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .ok_or(EditorError::NodeResizeUnsupported { node_id })?;
-        let before = node.header.bounds;
-        if before.width.get() <= 0
-            || before.height.get() <= 0
-            || before.right().is_none()
-            || before.bottom().is_none()
-            || node.header.transform != pub_model::Affine2D::identity()
-        {
-            return Err(EditorError::NodeResizeUnsupported { node_id });
-        }
-        if !self
-            .graph
-            .pages
-            .keys()
-            .any(|page_id| page_id.into_canonical() == node.header.parent_id)
-        {
-            return Err(EditorError::NodeResizeUnsupported { node_id });
-        }
-
-        Ok(())
-    }
-
-    pub fn can_resize_node_to(&self, node_id: NodeId, bounds: RectEmu) -> Result<(), EditorError> {
-        self.can_resize_node(node_id)?;
-
-        let before = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .expect("target capability check verified resize node")
-            .header
-            .bounds;
-        if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
-            return Err(EditorError::NodeResizeNonPositive { node_id });
-        }
-        if bounds.right().is_none() || bounds.bottom().is_none() {
-            return Err(EditorError::NodeResizeOverflow { node_id });
-        }
-        if before == bounds {
-            return Err(EditorError::NodeResizeNoChange { node_id });
-        }
-        if before.width == bounds.width && before.height == bounds.height {
-            return Err(EditorError::NodeResizeNoSizeChange { node_id });
-        }
-
-        Ok(())
-    }
-
-    pub fn resize_node_to(
-        &mut self,
-        node_id: NodeId,
-        bounds: RectEmu,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_resize_node_to(node_id, bounds)?;
-
-        let before = self
-            .graph
-            .nodes
-            .get(&node_id)
-            .expect("capability check verified resize node")
-            .header
-            .bounds;
-        let operation = EditOperation::ResizeNode {
-            node_id,
-            before,
-            after: bounds,
-        };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
     pub fn can_break_text_frame_forward_link(
         &self,
         upstream_frame_id: NodeId,
@@ -3998,6 +5770,11 @@ impl EditorSession {
             .first()
             .expect("explicit chain must be non-empty")
             .story_id;
+        if self.story_has_paragraph_alignment_history_v1(source_story_id)? {
+            return Err(EditorError::ParagraphAlignmentLifecycleUnsupported {
+                story_id: source_story_id,
+            });
+        }
         if source_story_id == new_story_id {
             return Err(EditorError::NewStoryIdConflict {
                 story_id: new_story_id,
@@ -4075,74 +5852,6 @@ impl EditorSession {
         Ok(operation)
     }
 
-    pub fn replace_story_range(
-        &mut self,
-        story_id: StoryId,
-        start_scalar: u32,
-        end_scalar: u32,
-        expected_before: impl Into<String>,
-        replacement_text: impl Into<String>,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_replace_story_text(story_id)?;
-
-        let expected_before = expected_before.into();
-        let replacement_text = replacement_text.into();
-        let before = self
-            .graph
-            .stories
-            .get(&story_id)
-            .expect("capability check verified story presence")
-            .text
-            .clone();
-
-        let after = replace_scalar_range_text(
-            &before,
-            start_scalar,
-            end_scalar,
-            &expected_before,
-            &replacement_text,
-        )
-        .ok_or(EditorError::StaleOperation { story_id })?;
-
-        if before == after {
-            return Err(EditorError::NoChange { story_id });
-        }
-
-        let operation = EditOperation::ReplaceStoryRange {
-            story_id,
-            start_scalar,
-            end_scalar,
-            expected_before,
-            replacement_text,
-            before_story_state_id: story_state_id_v1(story_id, &before),
-            after_story_state_id: story_state_id_v1(story_id, &after),
-        };
-
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn replace_story_text(
-        &mut self,
-        story_id: StoryId,
-        replacement: impl Into<String>,
-    ) -> Result<EditOperation, EditorError> {
-        self.can_replace_story_text(story_id)?;
-        let before = self
-            .graph
-            .stories
-            .get(&story_id)
-            .expect("capability check verified story presence")
-            .text
-            .clone();
-        let scalar_len = u32::try_from(before.chars().count())
-            .map_err(|_| EditorError::StaleOperation { story_id })?;
-        self.replace_story_range(story_id, 0, scalar_len, before, replacement)
-    }
-
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
         let result = (|| {
@@ -4158,20 +5867,136 @@ impl EditorSession {
                 }
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
+                let mut candidate_graph = self.graph.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
                     }
+                    EditOperation::CreateLine { .. } => {
+                        apply_authored_line_inverse(&mut candidate_lines, &operation)?;
+                    }
+                    EditOperation::CreateTable { table } => {
+                        apply_create_table_inverse_v1(&mut candidate_graph, table).map_err(
+                            |_| EditorError::TableEditUnsupported {
+                                node_id: table.node_id,
+                            },
+                        )?;
+                    }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
+                        self.undo_delete_rectangle_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition,
+                        )?;
+                    }
+                    EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+                        self.undo_delete_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
+                    EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
+                        self.undo_duplicate_rectangle_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
+                    EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+                        self.undo_duplicate_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
                     _ => unreachable!("authored-stack page helper only admits lane operations"),
                 }
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
+                self.graph = candidate_graph;
                 self.authored_stacks = before_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.after.grid.clone(),
+                    history.after.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let before =
+                    apply_table_rowcol_history_inverse_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &before).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
+            } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
+                apply_crop_inverse(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
+            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
+                if is_scoped_text_format_operation_v1(&operation) {
+                    let property = text_format_operation_property_v1(&operation)
+                        .expect("scoped text-format operation carries property");
+                    let before_state =
+                        self.current_text_format_property_state_v1(story_id, property)?;
+                    let _after_state =
+                        apply_text_format_property_operation_checked_v1(&before_state, &operation)
+                            .map_err(|message| EditorError::TextFormatStateInvalid {
+                                story_id,
+                                message,
+                            })?;
+                } else {
+                    let before_state = self.current_text_format_overlay_v1(story_id)?;
+                    let _after_state =
+                        apply_text_format_history_operation_v1(&before_state, &operation)?;
+                }
+            } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
+                &operation,
+            )
+            .is_some()
+            {
+                authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+                    &self.undo,
+                    &operation,
+                )
+                .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
             } else {
                 apply_inverse(&mut self.graph, &operation)?;
             }
@@ -4201,6 +6026,8 @@ impl EditorSession {
                 apply_authored_stack_history_forward_v1(&mut after_stacks, &operation)?;
 
                 let mut candidate_shapes = self.authored_shapes.clone();
+                let mut candidate_lines = self.authored_lines.clone();
+                let mut candidate_graph = self.graph.clone();
                 match &operation {
                     EditOperation::CreateShape { .. } => {
                         let shape = authored_shape_from_operation(&operation)
@@ -4208,17 +6035,134 @@ impl EditorSession {
                         self.validate_create_shape_candidate(&shape)?;
                         candidate_shapes.insert(shape.node_id, shape);
                     }
+                    EditOperation::CreateLine { .. } => {
+                        let line = authored_line_from_operation(&operation)
+                            .expect("CreateLine operation reconstructs authored line");
+                        self.validate_create_line_candidate(&line)?;
+                        candidate_lines.insert(line.node_id, line);
+                    }
+                    EditOperation::CreateTable { table } => {
+                        apply_create_table_forward_v1(&mut candidate_graph, table).map_err(
+                            |_| EditorError::TableEditUnsupported {
+                                node_id: table.node_id,
+                            },
+                        )?;
+                    }
                     EditOperation::DeleteNode { .. } => {
                         apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::DeleteAuthoredRectanglePageV1 { transition } => {
+                        self.redo_delete_rectangle_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition,
+                        )?;
+                    }
+                    EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => {
+                        self.redo_delete_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
+                    EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => {
+                        self.redo_duplicate_rectangle_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
+                    }
+                    EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => {
+                        self.redo_duplicate_rectangles_page_candidate_v1(
+                            &mut candidate_graph,
+                            &mut candidate_shapes,
+                            transition.as_ref(),
+                        )?;
                     }
                     EditOperation::ReorderAuthoredStack { .. } => {}
                     _ => unreachable!("authored-stack page helper only admits lane operations"),
                 }
 
                 self.authored_shapes = candidate_shapes;
+                self.authored_lines = candidate_lines;
+                self.graph = candidate_graph;
                 self.authored_stacks = after_stacks;
+            } else if let Some(history) = table_rowcol_history_v1(&operation) {
+                if !table_rowcol_operation_matches_mutation_v1(&operation) {
+                    return Err(EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    });
+                }
+                let current = table_structure_snapshot_from_graph_v1(
+                    &self.graph,
+                    history.table_id,
+                    history.before.grid.clone(),
+                    history.before.bounds,
+                )
+                .map_err(|_| EditorError::StaleTableRowCol {
+                    node_id: history.table_id,
+                })?;
+                let after =
+                    apply_table_rowcol_history_forward_v1(&current, history).map_err(|_| {
+                        EditorError::StaleTableRowCol {
+                            node_id: history.table_id,
+                        }
+                    })?;
+                let mut candidate_graph = self.graph.clone();
+                apply_table_structure_snapshot_to_graph_v1(&mut candidate_graph, &after).map_err(
+                    |_| EditorError::StaleTableRowCol {
+                        node_id: history.table_id,
+                    },
+                )?;
+                self.graph = candidate_graph;
+            } else if let EditOperation::SetTableTrackExtent { history } = &operation {
+                let grid = effective_table_grids_with_history(&self.graph, &self.undo)
+                    .into_iter()
+                    .find(|grid| grid.table_id == history.table_id)
+                    .ok_or(EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    })?;
+                let bounds =
+                    effective_table_bounds_with_history(&self.graph, &self.undo, history.table_id)
+                        .ok_or(EditorError::StaleTableTrackResize {
+                            node_id: history.table_id,
+                        })?;
+                apply_table_track_extent_history_forward_v1(&grid, bounds, history).map_err(
+                    |_| EditorError::StaleTableTrackResize {
+                        node_id: history.table_id,
+                    },
+                )?;
+            } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
+                apply_crop_forward(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
+            } else if let Some(story_id) = text_format_operation_story_id_v1(&operation) {
+                if is_scoped_text_format_operation_v1(&operation) {
+                    let property = text_format_operation_property_v1(&operation)
+                        .expect("scoped text-format operation carries property");
+                    let before_state =
+                        self.current_text_format_property_state_v1(story_id, property)?;
+                    let _after_state =
+                        apply_text_format_property_operation_checked_v1(&before_state, &operation)
+                            .map_err(|message| EditorError::TextFormatStateInvalid {
+                                story_id,
+                                message,
+                            })?;
+                } else {
+                    let before_state = self.current_text_format_overlay_v1(story_id)?;
+                    let _after_state =
+                        apply_text_format_history_operation_v1(&before_state, &operation)?;
+                }
+            } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
+                &operation,
+            )
+            .is_some()
+            {
+                authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+                    &self.undo,
+                    &operation,
+                )
+                .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
             } else {
                 apply_forward(&mut self.graph, &operation)?;
             }
@@ -4312,6 +6256,9 @@ fn replay_canonical_operation(
     index: usize,
 ) -> Result<EditOperation, EditorProjectError> {
     match expected {
+        EditOperation::LinkTextFrameTail { transition } => session
+            .link_text_frame_tail(transition.source_frame_id, transition.target_frame_id)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::ReplaceStoryRange {
             story_id,
             start_scalar,
@@ -4385,6 +6332,13 @@ fn replay_canonical_operation(
         } => session
             .replace_image(*node_id, *after_asset)
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        } => session
+            .set_image_crop(*node_id, *before, *after)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::MoveNode { node_id, after, .. } => session
             .move_node_to(*node_id, after.x, after.y)
             .map_err(|error| EditorProjectError::Operation { index, error }),
@@ -4409,11 +6363,134 @@ fn replay_canonical_operation(
         EditOperation::CreateShape { .. } => session
             .consume_canonical_create_shape(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::CreateLine { .. } => session
+            .consume_canonical_create_line(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::CreateTable { .. } => session
+            .consume_canonical_create_table(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTableTrackExtent { history } => session
+            .set_table_track_extent_v1(history.table_id, history.target, history.after_extent)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => session
+            .consume_canonical_table_rowcol_operation_v1(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::ReorderAuthoredStack { .. } => session
             .consume_canonical_reorder_authored_stack(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ReorderPagesV1 { transition } => session
+            .reorder_pages_v1(transition.before.clone(), transition.after.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::RegisterAuthoredPageIdentityV1 { identity } => session
+            .register_authored_page_identity_v1(*identity)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::AppendBlankPageV1 { transition } => session
+            .consume_canonical_append_blank_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteBlankAuthoredPageV1 { transition } => session
+            .consume_canonical_delete_blank_authored_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DuplicateBlankPageV1 { transition } => session
+            .consume_canonical_duplicate_blank_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::InsertBlankPageAfterV1 { transition } => session
+            .consume_canonical_insert_blank_page_after_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteAuthoredRectanglePageV1 { transition } => session
+            .consume_canonical_delete_authored_rectangle_page_v1(transition.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteAuthoredRectanglesPageV1 { transition } => session
+            .consume_canonical_delete_authored_rectangles_page_v1(transition.as_ref().clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DuplicateAuthoredRectanglePageV1 { transition } => session
+            .consume_canonical_duplicate_authored_rectangle_page_v1(transition.as_ref().clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DuplicateAuthoredRectanglesPageV1 { transition } => session
+            .consume_canonical_duplicate_authored_rectangles_page_v1(transition.as_ref().clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTextFormatProperty {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            ..
+        } => session
+            .set_text_format_property_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                value.clone(),
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearTextFormatPropertyOverride {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            ..
+        } => session
+            .clear_text_format_property_override_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetTextFormatPropertyScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            value,
+            before_state_hash,
+            ..
+        } => session
+            .set_text_format_property_scoped_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                value.clone(),
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearTextFormatPropertyOverrideScopedV1 {
+            story_id,
+            start_scalar,
+            end_scalar,
+            property,
+            before_state_hash,
+            ..
+        } => session
+            .clear_text_format_property_override_scoped_v1(
+                *story_id,
+                *start_scalar,
+                *end_scalar,
+                *property,
+                before_state_hash,
+            )
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            ..
+        } => session
+            .set_paragraph_alignment_override_v1(paragraph_ids.clone(), *value)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearParagraphAlignmentOverride { paragraph_ids, .. } => session
+            .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
@@ -4794,13 +6871,13 @@ struct EditableExportTypographyInputs<'a> {
     source_typography_size_runs: &'a [PubTypographySizeRun],
     source_paragraph_alignments: &'a [PubParagraphAlignmentRun],
     full_story_typography: &'a [FullStoryTypographyV1],
+    effective_full_story_paragraph_alignments: &'a [FullStoryParagraphAlignmentV1],
 }
 
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
-    image_replacements: &BTreeMap<NodeId, Sha256Digest>,
-    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    image_state: EditableExportImageState<'_>,
     typography: EditableExportTypographyInputs<'_>,
     authored_shapes: &BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
 ) -> Result<ExportPlan, ScopedCapabilityError> {
@@ -4923,6 +7000,12 @@ fn editable_export_plan(
                 .contains_key(&run.story_id)
                 .then_some(run.story_id)
         })
+        .chain(
+            typography
+                .effective_full_story_paragraph_alignments
+                .iter()
+                .map(|item| item.story_id),
+        )
         .collect::<BTreeSet<_>>();
 
     for story_id in font_family_stories {
@@ -4981,7 +7064,7 @@ fn editable_export_plan(
                 property_path: Some("node.story_frame".into()),
                 require_preserved: true,
             });
-        } else if let Some(asset_sha) = image_replacements.get(node_id) {
+        } else if let Some(asset_sha) = image_state.replacements.get(node_id) {
             let resource_id = replacement_asset_resource_id(*asset_sha);
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
@@ -4999,9 +7082,9 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: false,
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
             });
-        } else if let Some(resource_id) = source_image_nodes.get(node_id) {
+        } else if let Some(resource_id) = image_state.source_nodes.get(node_id) {
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
                 origin: Some(resource_id.into_canonical()),
@@ -5018,7 +7101,14 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: false,
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
+            });
+        } else if image_state.crop_overrides.contains_key(node_id) {
+            requests.push(SemanticFeatureRequest {
+                feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("image.content_transform".into()),
+                require_preserved: true,
             });
         } else {
             requests.push(SemanticFeatureRequest {
@@ -5145,161 +7235,14 @@ fn idml_base_projection_plan(
     projection
 }
 
-fn validate_move_nodes_transition(
-    graph: &PubResolvedGraph,
-    page_id: PageId,
-    entries: &[MoveNodeBatchEntry],
-    forward: bool,
-) -> Result<(), EditorError> {
-    if entries.is_empty() {
-        return Err(EditorError::MoveNodesEmpty);
-    }
-    if entries.len() > MAX_MOVE_NODES_V1 {
-        return Err(EditorError::MoveNodesTooLarge {
-            found: entries.len(),
-        });
-    }
-
-    let page_parent = page_id.into_canonical();
-    let mut previous = None;
-    for entry in entries {
-        if previous.is_some_and(|node_id| node_id >= entry.node_id) {
-            return Err(EditorError::MoveNodesDuplicate {
-                node_id: entry.node_id,
-            });
-        }
-        previous = Some(entry.node_id);
-
-        if entry.before.width != entry.after.width || entry.before.height != entry.after.height {
-            return Err(EditorError::MoveNodesSizeChanged {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.before == entry.after {
-            return Err(EditorError::NodeMoveNoChange {
-                node_id: entry.node_id,
-            });
-        }
-        let node = graph
-            .nodes
-            .get(&entry.node_id)
-            .ok_or(EditorError::NodeMoveUnsupported {
-                node_id: entry.node_id,
-            })?;
-        if node.header.parent_id != page_parent {
-            return Err(EditorError::MoveNodesPageMismatch {
-                node_id: entry.node_id,
-                page_id,
-            });
-        }
-        if node.header.transform != pub_model::Affine2D::identity()
-            || entry.before.width.get() <= 0
-            || entry.before.height.get() <= 0
-            || entry.before.right().is_none()
-            || entry.before.bottom().is_none()
-            || entry.after.right().is_none()
-            || entry.after.bottom().is_none()
-        {
-            return Err(EditorError::NodeMoveUnsupported {
-                node_id: entry.node_id,
-            });
-        }
-
-        let expected = if forward { entry.before } else { entry.after };
-        if node.header.bounds != expected {
-            return Err(EditorError::StaleNodeMove {
-                node_id: entry.node_id,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_resize_nodes_transition(
-    graph: &PubResolvedGraph,
-    page_id: PageId,
-    entries: &[ResizeNodeBatchEntry],
-    forward: bool,
-) -> Result<(), EditorError> {
-    if entries.len() < 2 || entries.len() > MAX_RESIZE_NODES_V1 {
-        return Err(EditorError::ResizeNodesInvalidCount {
-            found: entries.len(),
-        });
-    }
-
-    let page_parent = page_id.into_canonical();
-    let mut previous = None;
-    let mut has_size_change = false;
-    for entry in entries {
-        if let Some(previous_id) = previous {
-            if previous_id == entry.node_id {
-                return Err(EditorError::ResizeNodesDuplicate {
-                    node_id: entry.node_id,
-                });
-            }
-            if previous_id > entry.node_id {
-                return Err(EditorError::ResizeNodesNotCanonical {
-                    node_id: entry.node_id,
-                });
-            }
-        }
-        previous = Some(entry.node_id);
-
-        let node = graph
-            .nodes
-            .get(&entry.node_id)
-            .ok_or(EditorError::NodeResizeUnsupported {
-                node_id: entry.node_id,
-            })?;
-        if node.header.parent_id != page_parent {
-            return Err(EditorError::ResizeNodesPageMismatch {
-                node_id: entry.node_id,
-                page_id,
-            });
-        }
-        if node.header.transform != pub_model::Affine2D::identity()
-            || entry.before.width.get() <= 0
-            || entry.before.height.get() <= 0
-            || entry.before.right().is_none()
-            || entry.before.bottom().is_none()
-        {
-            return Err(EditorError::NodeResizeUnsupported {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.after.width.get() <= 0 || entry.after.height.get() <= 0 {
-            return Err(EditorError::NodeResizeNonPositive {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.after.right().is_none() || entry.after.bottom().is_none() {
-            return Err(EditorError::NodeResizeOverflow {
-                node_id: entry.node_id,
-            });
-        }
-        if entry.before.width != entry.after.width || entry.before.height != entry.after.height {
-            has_size_change = true;
-        }
-
-        let expected = if forward { entry.before } else { entry.after };
-        if node.header.bounds != expected {
-            return Err(EditorError::StaleNodeResize {
-                node_id: entry.node_id,
-            });
-        }
-    }
-
-    if !has_size_change {
-        return Err(EditorError::ResizeNodesNoSizeChange);
-    }
-    Ok(())
-}
-
 fn apply_forward(
     graph: &mut PubResolvedGraph,
     operation: &EditOperation,
 ) -> Result<(), EditorError> {
     match operation {
+        EditOperation::LinkTextFrameTail { transition } => {
+            link_text_frame_tail_v1::apply_transition(graph, transition, true)?;
+        }
         EditOperation::ReplaceStoryRange {
             story_id,
             start_scalar,
@@ -5315,27 +7258,19 @@ fn apply_forward(
                 .ok_or(EditorError::MissingStory {
                     story_id: *story_id,
                 })?;
-            if story_state_id_v1(*story_id, &story.text) != *before_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            let after = replace_scalar_range_text(
+            story.text = apply_story_range_forward_v1(
                 &story.text,
+                *story_id,
                 *start_scalar,
                 *end_scalar,
                 expected_before,
                 replacement_text,
+                before_story_state_id,
+                after_story_state_id,
             )
-            .ok_or(EditorError::StaleOperation {
+            .map_err(|_| EditorError::StaleOperation {
                 story_id: *story_id,
             })?;
-            if story_state_id_v1(*story_id, &after) != *after_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            story.text = after;
         }
         EditOperation::ReplaceStoryText {
             story_id,
@@ -5497,14 +7432,56 @@ fn apply_forward(
         EditOperation::ReplaceImage { .. } => {
             unreachable!("image replacements are applied to editor overlay state")
         }
+        EditOperation::SetImageCrop { .. } => {
+            unreachable!("image crop is applied to editor overlay state")
+        }
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
+        }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is applied to the authored overlay state")
+        }
+        EditOperation::CreateTable { .. } => {
+            unreachable!("CreateTable is applied atomically with the authored-stack lane")
+        }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
+        }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
+        }
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_forward_v1(graph, operation);
+        }
+        EditOperation::SetTextFormatProperty { .. }
+        | EditOperation::ClearTextFormatPropertyOverride { .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. } => {
+            unreachable!("text-format operations are derived from editor history")
+        }
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph-alignment operations are derived from editor history")
         }
     }
     Ok(())
@@ -5515,6 +7492,9 @@ fn apply_inverse(
     operation: &EditOperation,
 ) -> Result<(), EditorError> {
     match operation {
+        EditOperation::LinkTextFrameTail { transition } => {
+            link_text_frame_tail_v1::apply_transition(graph, transition, false)?;
+        }
         EditOperation::ReplaceStoryRange {
             story_id,
             start_scalar,
@@ -5530,38 +7510,18 @@ fn apply_inverse(
                 .ok_or(EditorError::MissingStory {
                     story_id: *story_id,
                 })?;
-            if story_state_id_v1(*story_id, &story.text) != *after_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            let replacement_end = start_scalar
-                .checked_add(
-                    u32::try_from(replacement_text.chars().count()).map_err(|_| {
-                        EditorError::StaleOperation {
-                            story_id: *story_id,
-                        }
-                    })?,
-                )
-                .ok_or(EditorError::StaleOperation {
-                    story_id: *story_id,
-                })?;
-            let before = replace_scalar_range_text(
+            story.text = apply_story_range_inverse_v1(
                 &story.text,
+                *story_id,
                 *start_scalar,
-                replacement_end,
-                replacement_text,
                 expected_before,
+                replacement_text,
+                before_story_state_id,
+                after_story_state_id,
             )
-            .ok_or(EditorError::StaleOperation {
+            .map_err(|_| EditorError::StaleOperation {
                 story_id: *story_id,
             })?;
-            if story_state_id_v1(*story_id, &before) != *before_story_state_id {
-                return Err(EditorError::StaleOperation {
-                    story_id: *story_id,
-                });
-            }
-            story.text = before;
         }
         EditOperation::ReplaceStoryText {
             story_id,
@@ -5739,8 +7699,28 @@ fn apply_inverse(
         EditOperation::ReplaceImage { .. } => {
             unreachable!("image replacements are applied to editor overlay state")
         }
+        EditOperation::SetImageCrop { .. } => {
+            unreachable!("image crop is applied to editor overlay state")
+        }
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
+        }
+        EditOperation::CreateLine { .. } => {
+            unreachable!("CreateLine is reverted in the authored overlay state")
+        }
+        EditOperation::CreateTable { .. } => {
+            unreachable!("CreateTable is reverted atomically with the authored-stack lane")
+        }
+        EditOperation::SetTableTrackExtent { .. } => {
+            unreachable!("table track extents are derived from editor history")
+        }
+        EditOperation::InsertTableRow { .. }
+        | EditOperation::DeleteTableRow { .. }
+        | EditOperation::InsertTableColumn { .. }
+        | EditOperation::DeleteTableColumn { .. } => {
+            unreachable!(
+                "table row/column lifecycle is applied through the structural snapshot bridge"
+            )
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
@@ -5748,418 +7728,28 @@ fn apply_inverse(
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
-    }
-    Ok(())
-}
-
-fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. } | EditOperation::DeleteNode { page_id, .. } => {
-            Some(*page_id)
+        EditOperation::RegisterAuthoredPageIdentityV1 { .. }
+        | EditOperation::AppendBlankPageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglePageV1 { .. }
+        | EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
+        | EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
+        | EditOperation::DeleteBlankAuthoredPageV1 { .. }
+        | EditOperation::DuplicateBlankPageV1 { .. }
+        | EditOperation::InsertBlankPageAfterV1 { .. }
+        | EditOperation::ReorderPagesV1 { .. } => {
+            return apply_page_lifecycle_graph_inverse_v1(graph, operation);
         }
-        EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
-        _ => None,
-    }
-}
-
-fn install_authored_stack_in_map_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    stack: AuthoredStackV1,
-) {
-    if stack.members.is_empty() {
-        stacks.remove(&stack.page_id);
-    } else {
-        stacks.insert(stack.page_id, stack);
-    }
-}
-
-fn apply_authored_stack_history_forward_v1(
-    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    match operation {
-        EditOperation::CreateShape { page_id, .. } => {
-            let shape = authored_shape_from_operation(operation)
-                .expect("CreateShape reconstructs authored shape");
-            let before = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_create_shape_append_v1(&before, &shape)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
+        EditOperation::SetTextFormatProperty { .. }
+        | EditOperation::ClearTextFormatPropertyOverride { .. }
+        | EditOperation::SetTextFormatPropertyScopedV1 { .. }
+        | EditOperation::ClearTextFormatPropertyOverrideScopedV1 { .. } => {
+            unreachable!("text-format operations are derived from editor history")
         }
-        EditOperation::DeleteNode {
-            page_id, before, ..
-        } => {
-            let stack = stacks
-                .get(page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
-            let transition = plan_delete_shape_remove_v1(&stack, before)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            let after = apply_authored_stack_transition_forward_v1(&stack, &transition)
-                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        EditOperation::ReorderAuthoredStack { transition } => {
-            let current = stacks
-                .get(&transition.page_id)
-                .cloned()
-                .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
-            let after =
-                apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
-                    EditorError::StaleAuthoredStack {
-                        page_id: transition.page_id,
-                    }
-                })?;
-            install_authored_stack_in_map_v1(stacks, after);
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn derive_authored_stacks_from_operations_v1(
-    operations: &[EditOperation],
-) -> Result<BTreeMap<PageId, AuthoredStackV1>, EditorError> {
-    let mut stacks = BTreeMap::new();
-    for operation in operations {
-        apply_authored_stack_history_forward_v1(&mut stacks, operation)?;
-    }
-    Ok(stacks)
-}
-
-fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
-    match operation {
-        EditOperation::CreateShape {
-            node_id,
-            page_id,
-            parent_id,
-            shape_kind,
-            bounds,
-            transform,
-            paint,
-            provenance,
-        } => Some(AuthoredShapeRuntimeV1 {
-            node_id: *node_id,
-            page_id: *page_id,
-            parent_id: *parent_id,
-            shape_kind: *shape_kind,
-            bounds: *bounds,
-            transform: *transform,
-            paint: paint.clone(),
-            provenance: *provenance,
-        }),
-        _ => None,
-    }
-}
-
-fn apply_authored_shape_inverse(
-    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    let shape = authored_shape_from_operation(operation)
-        .expect("CreateShape inverse receives CreateShape operation");
-    if authored_shapes.get(&shape.node_id) != Some(&shape) {
-        return Err(EditorError::CreateShapeIdCollision {
-            node_id: shape.node_id,
-        });
-    }
-    authored_shapes.remove(&shape.node_id);
-    Ok(())
-}
-
-fn apply_authored_shape_delete_forward(
-    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    let EditOperation::DeleteNode {
-        node_id,
-        page_id,
-        before,
-        before_state_id,
-    } = operation
-    else {
-        unreachable!("DeleteNode forward receives DeleteNode operation")
-    };
-
-    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
-        return Err(EditorError::NodeDeletePageMismatch {
-            node_id: *node_id,
-            page_id: *page_id,
-        });
-    }
-    if authored_shape_state_id_v1(before) != *before_state_id
-        || authored_shapes.get(node_id) != Some(before)
-    {
-        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
-    }
-    authored_shapes.remove(node_id);
-    Ok(())
-}
-
-fn apply_authored_shape_delete_inverse(
-    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    let EditOperation::DeleteNode {
-        node_id,
-        page_id,
-        before,
-        before_state_id,
-    } = operation
-    else {
-        unreachable!("DeleteNode inverse receives DeleteNode operation")
-    };
-
-    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
-        return Err(EditorError::NodeDeletePageMismatch {
-            node_id: *node_id,
-            page_id: *page_id,
-        });
-    }
-    if authored_shape_state_id_v1(before) != *before_state_id
-        || authored_shapes.contains_key(node_id)
-    {
-        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
-    }
-    authored_shapes.insert(*node_id, before.clone());
-    Ok(())
-}
-
-fn apply_image_forward(
-    replacements: &mut BTreeMap<NodeId, Sha256Digest>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    let EditOperation::ReplaceImage {
-        node_id,
-        before_asset,
-        after_asset,
-    } = operation
-    else {
-        unreachable!("only ReplaceImage reaches image overlay apply")
-    };
-
-    if replacements.get(node_id).copied() != *before_asset {
-        return Err(EditorError::StaleImageOperation { node_id: *node_id });
-    }
-    replacements.insert(*node_id, *after_asset);
-    Ok(())
-}
-
-fn apply_image_inverse(
-    replacements: &mut BTreeMap<NodeId, Sha256Digest>,
-    operation: &EditOperation,
-) -> Result<(), EditorError> {
-    let EditOperation::ReplaceImage {
-        node_id,
-        before_asset,
-        after_asset,
-    } = operation
-    else {
-        unreachable!("only ReplaceImage reaches image overlay inverse")
-    };
-
-    if replacements.get(node_id).copied() != Some(*after_asset) {
-        return Err(EditorError::StaleImageOperation { node_id: *node_id });
-    }
-    if let Some(before_asset) = before_asset {
-        replacements.insert(*node_id, *before_asset);
-    } else {
-        replacements.remove(node_id);
-    }
-    Ok(())
-}
-
-fn snapshot_table_ranges(table: &pub_reader::PubTableSource) -> Vec<TableCellRangeSnapshot> {
-    table
-        .cells
-        .iter()
-        .map(|cell| TableCellRangeSnapshot {
-            cell_id: cell.id,
-            utf16_start: cell.utf16_start,
-            utf16_end: cell.utf16_end,
-        })
-        .collect()
-}
-
-fn rebuild_simple_table_story(
-    table: &pub_reader::PubTableSource,
-    cells: &[pub_reader::PubMaterializedTableCell],
-) -> Result<(String, Vec<TableCellRangeSnapshot>), ()> {
-    let simple = table.simple_table.as_ref().ok_or(())?;
-    let mut ordered = simple.cells.clone();
-    ordered.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
-
-    let mut utf16 = Vec::<u16>::new();
-    let mut ranges = Vec::with_capacity(ordered.len());
-
-    for (index, semantic) in ordered.iter().enumerate() {
-        let materialized = cells.iter().find(|cell| cell.id == semantic.id).ok_or(())?;
-        let start = u32::try_from(utf16.len()).map_err(|_| ())?;
-        if index > 0 {
-            utf16.push(0x000D);
-        }
-        utf16.extend(materialized.text.encode_utf16());
-        if index + 1 == ordered.len() {
-            utf16.push(0x000D);
-        }
-        let end = u32::try_from(utf16.len()).map_err(|_| ())?;
-        ranges.push(TableCellRangeSnapshot {
-            cell_id: semantic.id,
-            utf16_start: start,
-            utf16_end: end,
-        });
-    }
-
-    let text = String::from_utf16(&utf16).map_err(|_| ())?;
-    Ok((text, ranges))
-}
-
-fn apply_table_cell_state(
-    graph: &mut PubResolvedGraph,
-    node_id: NodeId,
-    story_id: StoryId,
-    expected_story: &str,
-    replacement_story: &str,
-    expected_ranges: &[TableCellRangeSnapshot],
-    replacement_ranges: &[TableCellRangeSnapshot],
-) -> Result<(), EditorError> {
-    let story = graph
-        .stories
-        .get_mut(&story_id)
-        .ok_or(EditorError::MissingStory { story_id })?;
-    if story.text != expected_story {
-        return Err(EditorError::StaleOperation { story_id });
-    }
-
-    let node = graph
-        .nodes
-        .get_mut(&node_id)
-        .ok_or(EditorError::TableEditUnsupported { node_id })?;
-    let table = node
-        .payload
-        .table
-        .as_mut()
-        .ok_or(EditorError::TableEditUnsupported { node_id })?;
-    if table.story_id != Some(story_id) {
-        return Err(EditorError::StaleOperation { story_id });
-    }
-
-    if snapshot_table_ranges(table) != expected_ranges {
-        return Err(EditorError::StaleOperation { story_id });
-    }
-
-    for range in replacement_ranges {
-        let cell = table
-            .cells
-            .iter_mut()
-            .find(|cell| cell.id == range.cell_id)
-            .ok_or(EditorError::TableEditUnsupported { node_id })?;
-        cell.utf16_start = range.utf16_start;
-        cell.utf16_end = range.utf16_end;
-    }
-    story.text.clear();
-    story.text.push_str(replacement_story);
-    Ok(())
-}
-
-#[cfg(test)]
-mod asset_reachability_tests {
-    use super::*;
-
-    fn digest(byte: u8) -> Sha256Digest {
-        Sha256Digest::from_bytes([byte; 32])
-    }
-
-    fn replace(before_asset: Option<Sha256Digest>, after_asset: Sha256Digest) -> EditOperation {
-        EditOperation::ReplaceImage {
-            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId"),
-            before_asset,
-            after_asset,
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph-alignment operations are derived from editor history")
         }
     }
-
-    #[test]
-    fn operation_asset_refs_are_exact_and_deterministic() {
-        let a = digest(0x11);
-        let b = digest(0x22);
-
-        assert_eq!(replace(None, a).durable_editor_asset_refs_v1(), vec![a]);
-        assert_eq!(
-            replace(Some(a), b).durable_editor_asset_refs_v1(),
-            vec![a, b]
-        );
-
-        let refs = required_editor_asset_refs_v1(&[
-            replace(None, a),
-            replace(Some(a), b),
-            replace(Some(b), a),
-        ])
-        .into_iter()
-        .collect::<Vec<_>>();
-        assert_eq!(refs, vec![a, b]);
-    }
-
-    #[test]
-    fn consumer_proven_typography_override_is_montserrat_only() {
-        let montserrat_story =
-            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
-        let arial_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
-        let typography = vec![
-            FullStoryTypographyV1 {
-                story_id: montserrat_story,
-                font_family: "Montserrat".into(),
-                font_size_emu: LengthEmu::new(304_800),
-            },
-            FullStoryTypographyV1 {
-                story_id: arial_story,
-                font_family: "Arial".into(),
-                font_size_emu: LengthEmu::new(152_400),
-            },
-        ];
-
-        for target in [EditorEditableTarget::Idml, EditorEditableTarget::Odg] {
-            let overrides = consumer_proven_typography_overrides_v1(target, &typography);
-            assert_eq!(overrides.len(), 2);
-            assert!(overrides.iter().all(|item| {
-                item.origin == montserrat_story.into_canonical()
-                    && matches!(
-                        item.feature.as_str(),
-                        STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
-                    )
-                    && item.disposition == CapabilityLevel::Preserved
-            }));
-            assert!(
-                overrides
-                    .iter()
-                    .all(|item| { item.origin != arial_story.into_canonical() })
-            );
-        }
-    }
-
-    #[test]
-    fn non_asset_operations_emit_no_durable_asset_refs() {
-        let operation = EditOperation::MoveNode {
-            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId"),
-            before: RectEmu::new(
-                LengthEmu::ZERO,
-                LengthEmu::ZERO,
-                LengthEmu::new(10),
-                LengthEmu::new(10),
-            ),
-            after: RectEmu::new(
-                LengthEmu::new(1),
-                LengthEmu::new(2),
-                LengthEmu::new(10),
-                LengthEmu::new(10),
-            ),
-        };
-        assert!(operation.durable_editor_asset_refs_v1().is_empty());
-    }
+    Ok(())
 }

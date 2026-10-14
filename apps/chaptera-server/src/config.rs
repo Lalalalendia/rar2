@@ -80,6 +80,8 @@ pub struct StorageConfig {
     pub provider: String,
     pub quarantine_namespace: String,
     pub private_namespace: String,
+    #[serde(default)]
+    pub expected_bucket_owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,9 +145,6 @@ impl UploadAdmissionRuntimeConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceValidationRuntimeConfig {
-    pub clamd_endpoint: SocketAddr,
-    pub clamd_connect_timeout_ms: u64,
-    pub clamd_io_timeout_ms: u64,
     pub isolation_python: PathBuf,
     pub isolation_harness: PathBuf,
     pub worker_binary: PathBuf,
@@ -163,9 +162,6 @@ pub struct SourceValidationRuntimeConfig {
 impl SourceValidationRuntimeConfig {
     pub fn materialize(&self) -> SourceSecurityScannerConfig {
         SourceSecurityScannerConfig {
-            clamd_endpoint: self.clamd_endpoint,
-            clamd_connect_timeout: Duration::from_millis(self.clamd_connect_timeout_ms),
-            clamd_io_timeout: Duration::from_millis(self.clamd_io_timeout_ms),
             isolation_python: self.isolation_python.clone(),
             isolation_harness: self.isolation_harness.clone(),
             worker_binary: self.worker_binary.clone(),
@@ -415,6 +411,7 @@ impl ChapteraConfig {
                 provider: "s3-compatible".to_owned(),
                 quarantine_namespace: "chaptera-dev-quarantine".to_owned(),
                 private_namespace: "chaptera-dev-private".to_owned(),
+                expected_bucket_owner: None,
             },
             limits: LimitsConfig {
                 worker_spool_bytes: 4 * 1024 * 1024 * 1024,
@@ -430,9 +427,6 @@ impl ChapteraConfig {
                 retention_seconds: 7 * 24 * 60 * 60,
             },
             source_validation: SourceValidationRuntimeConfig {
-                clamd_endpoint: "127.0.0.1:3310".parse().expect("static clamd endpoint"),
-                clamd_connect_timeout_ms: 2_000,
-                clamd_io_timeout_ms: 5_000,
                 isolation_python: PathBuf::from("python3"),
                 isolation_harness: PathBuf::from("tools/migration_pdf_worker_isolation.py"),
                 worker_binary: PathBuf::from("target/debug/chaptera-untrusted-pub-worker"),
@@ -554,6 +548,26 @@ impl ChapteraConfig {
                 "quarantine and private storage namespaces must differ",
             ));
         }
+        if !matches!(
+            self.storage.provider.as_str(),
+            "s3-compatible" | "filesystem"
+        ) {
+            return Err(ConfigError::new(
+                "storage_provider_unsupported",
+                "storage.provider must be s3-compatible or filesystem",
+            ));
+        }
+        if self.environment == EnvironmentMode::Prod
+            && self.storage.provider == "filesystem"
+            && (self.auth.is_some()
+                || self.source_ingress.is_some()
+                || self.cloud_reader_guest.is_none())
+        {
+            return Err(ConfigError::new(
+                "filesystem_storage_scope_invalid",
+                "prod filesystem storage is limited to the anonymous Cloud Reader profile",
+            ));
+        }
 
         if self.limits.worker_spool_bytes == 0 || self.limits.min_free_disk_bytes == 0 {
             return Err(ConfigError::new(
@@ -640,10 +654,11 @@ impl ChapteraConfig {
 
         match (&self.auth, self.environment) {
             (Some(auth), mode) => validate_auth(mode, auth)?,
+            (None, EnvironmentMode::Prod) if self.cloud_reader_guest.is_some() => {}
             (None, EnvironmentMode::Prod) => {
                 return Err(ConfigError::new(
                     "prod_auth_required",
-                    "prod configuration requires auth.oidc",
+                    "prod configuration requires auth.oidc unless cloud_reader_guest is configured",
                 ));
             }
             (None, _) => {}
@@ -1193,7 +1208,7 @@ impl SecretResolver {
 
         match reference {
             SecretRef::Env { name } => self.resolve_environment_secret(name),
-            SecretRef::File { path } => read_secret_file(mode, path),
+            SecretRef::File { path } => read_secret_file(mode, path, true),
             SecretRef::Systemd { name } => {
                 let directory = self.credentials_directory.as_ref().ok_or_else(|| {
                     ConfigError::new(
@@ -1201,7 +1216,10 @@ impl SecretResolver {
                         "systemd secret source requires CREDENTIALS_DIRECTORY",
                     )
                 })?;
-                read_secret_file(mode, &directory.join(name))
+                // LoadCredential= copies data into a read-only per-unit credential
+                // directory that systemd restricts to the unit user and root. The
+                // copied file's DAC mode is therefore not the trust boundary.
+                read_secret_file(mode, &directory.join(name), false)
             }
         }
     }
@@ -1243,7 +1261,11 @@ impl SecretResolver {
     }
 }
 
-fn read_secret_file(mode: EnvironmentMode, path: &Path) -> Result<SecretValue, ConfigError> {
+fn read_secret_file(
+    mode: EnvironmentMode,
+    path: &Path,
+    enforce_private_mode: bool,
+) -> Result<SecretValue, ConfigError> {
     let metadata = fs::metadata(path).map_err(|error| {
         ConfigError::new(
             "secret_file_read_failed",
@@ -1262,7 +1284,7 @@ fn read_secret_file(mode: EnvironmentMode, path: &Path) -> Result<SecretValue, C
     }
 
     #[cfg(unix)]
-    if mode == EnvironmentMode::Prod {
+    if mode == EnvironmentMode::Prod && enforce_private_mode {
         use std::os::unix::fs::PermissionsExt;
 
         if metadata.permissions().mode() & 0o077 != 0 {
@@ -1462,9 +1484,6 @@ lease_seconds = 3600
 retention_seconds = 604800
 
 [source_validation]
-clamd_endpoint = "127.0.0.1:3310"
-clamd_connect_timeout_ms = 2000
-clamd_io_timeout_ms = 5000
 isolation_python = "/usr/bin/python3"
 isolation_harness = "/opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
 worker_binary = "/opt/chaptera/current/chaptera"
@@ -1509,6 +1528,56 @@ client_secret = {secret_source}
         config.validate().unwrap();
         assert_eq!(config.environment, EnvironmentMode::Prod);
         assert_eq!(config.runtime_config().listen, DEFAULT_LISTEN);
+    }
+
+    #[test]
+    fn parses_optional_expected_s3_bucket_owner() {
+        let source = prod_toml(r#"{ source = "env", name = "OIDC_SECRET" }"#).replace(
+            "private_namespace = \"chaptera-private\"",
+            "private_namespace = \"chaptera-private\"\nexpected_bucket_owner = \"123456789012\"",
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+
+        config.validate().unwrap();
+        assert_eq!(
+            config.storage.expected_bucket_owner.as_deref(),
+            Some("123456789012")
+        );
+    }
+
+    #[test]
+    fn production_guest_reader_can_run_without_oidc() {
+        let source = prod_toml(r#"{ source = "systemd", name = "oidc_client_secret" }"#);
+        let auth_index = source.find("\n[auth]\n").unwrap();
+        let source = format!(
+            "{}{}",
+            &source[..auth_index],
+            r#"
+[cloud_reader_guest]
+session_ttl_seconds = 600
+max_file_bytes = 8388608
+max_concurrent_uploads = 1
+max_reserved_bytes = 8388608
+
+[cloud_reader_guest.rate_subject_secret]
+source = "systemd"
+name = "reader_rate_subject_secret"
+"#
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+
+        config.validate().unwrap();
+        assert!(config.auth.is_none());
+        assert!(config.cloud_reader_guest.is_some());
+    }
+
+    #[test]
+    fn production_without_auth_or_guest_still_fails_closed() {
+        let source = prod_toml(r#"{ source = "systemd", name = "oidc_client_secret" }"#);
+        let auth_index = source.find("\n[auth]\n").unwrap();
+        let config: ChapteraConfig = toml::from_str(&source[..auth_index]).unwrap();
+
+        assert_eq!(config.validate().unwrap_err().code, "prod_auth_required");
     }
 
     #[test]
@@ -1702,5 +1771,30 @@ secret = { source = "env", name = "GRANT_KEY_OLD" }
 
         assert_eq!(error.code, "secret_file_permissions_too_open");
         let _ = fs::remove_file(file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_systemd_secret_uses_systemd_access_boundary_not_copied_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temp_path("systemd-open-mode");
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("reader_rate_subject_secret");
+        fs::write(&file, b"systemd-secret\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let resolver = SecretResolver::for_test(BTreeMap::new(), Some(directory.clone()));
+        let secret = resolver
+            .resolve(
+                EnvironmentMode::Prod,
+                &SecretRef::Systemd {
+                    name: "reader_rate_subject_secret".to_owned(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(secret.expose(), b"systemd-secret");
+        let _ = fs::remove_dir_all(directory);
     }
 }

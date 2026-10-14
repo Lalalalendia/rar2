@@ -85,6 +85,13 @@ function Resolve-PublisherExecutable {
     return $unique[0]
 }
 
+# Always check the persistent runner-local quarantine before any Publisher
+# preparation, including owner-only native research modes.
+$hyphenationQuarantine = Join-Path $env:USERPROFILE ".chaptera-publisher-hyphenation-quarantine"
+if (Test-Path -LiteralPath $hyphenationQuarantine -PathType Leaf) {
+    throw "publisher_hyphenation_quarantined"
+}
+
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 foreach ($name in @("logs", "analysis", "private")) {

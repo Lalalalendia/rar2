@@ -1,0 +1,73 @@
+name: Font output determinism V1
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/producer-a/crates/pub-output/**'
+      - 'vendor/producer-a/crates/pub-layout/**'
+      - 'vendor/producer-a/Cargo.toml'
+      - '.github/workflows/font-output-determinism-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/producer-a/crates/pub-output/**'
+      - 'vendor/producer-a/crates/pub-layout/**'
+      - 'vendor/producer-a/Cargo.toml'
+      - '.github/workflows/font-output-determinism-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: font-output-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    name: Font plan / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: vendor/producer-a
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test font output policy
+        run: cargo test -p pub-output
+      - name: Emit canonical plan snapshot
+        shell: bash
+        run: cargo run --quiet -p pub-output --example font_plan_snapshot > ../../font-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: font-plan-${{ matrix.os }}-${{ github.run_id }}
+          path: font-plan.json
+          if-no-files-found: error
+          retention-days: 7
+
+  compare:
+    name: Compare cross-OS font plan
+    needs: platform
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: font-plan-*-${{ github.run_id }}
+          path: snapshots
+      - name: Require byte-identical snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          paths = sorted(Path("snapshots").glob("*/font-plan.json"))
+          assert len(paths) == 3, paths
+          payloads = [path.read_bytes() for path in paths]
+          assert payloads[0] == payloads[1] == payloads[2], paths
+          print(payloads[0].decode("utf-8"))
+          PY

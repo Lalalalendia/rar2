@@ -1,0 +1,84 @@
+{
+  "admission": {
+    "clean_visual_golden_count": 0,
+    "comparative_oracle_pdf_count": 31,
+    "note": "All pairs are comparative visual-oracle candidates. Known font-warning pairs remain diagnostic witnesses and are not clean goldens; no-warning status is provisional unless exact native environment warnings were captured."
+  },
+  "authority_rule": "Publisher PDF is visual authority only; hidden PUB semantics require PUB/native evidence.",
+  "batch_id": "publisher-visual-golden-supplemental-2026-10-06",
+  "captured_at": "2026-10-06",
+  "cumulative_with_batch01": {
+    "distinct_pair_count": 86,
+    "pdf_page_count_total": 221
+  },
+  "manual_oracle_bundle": {
+    "bytes": 23407040,
+    "file_name": "publisher-visual-golden-supplemental-2026-10-06-manual-oracle.zip",
+    "layout": "tools/cloud_reader_manual_oracle_bundle_v1.py compatible",
+    "pair_count": 31,
+    "pairs_csv_sha256": "6293b44b98d13c6216cb1a6bcedf5e2be10bdaa04c05b369ebabfdf91e6c560c",
+    "raw_bundle_committed_to_git": false,
+    "reference_page_count": 59,
+    "sha256": "1a4f1fb6682a7761fc74b93dfcdba9d1f622e871dcf292a9402c49bd5cc86da3"
+  },
+  "notable_states": {
+    "excluded_duplicate_exports": [
+      {
+        "duplicate_of": "099",
+        "id": "101",
+        "pub_sha256": "00092479c94bf5ac1bb107173d60fb788b91e2c148453468456f98d0bb300597",
+        "repeat_pdf_sha256": "6404a367bf52a8a66d5183d84dd24c20ea013114838f10d13c8dfe8834c65db0",
+        "visual_repeatability": "2/2 pages, 0.0% pixel diff vs 099 at 144 dpi"
+      }
+    ],
+    "font_substitution_or_degradation_oracle_ids": [
+      "batch02-086",
+      "batch02-090",
+      "batch02-091",
+      "batch02-092",
+      "batch02-093",
+      "batch02-replacement-097"
+    ]
+  },
+  "publisher_runtime": {
+    "build": "12527",
+    "major_version": "16.0",
+    "product": "Microsoft Publisher",
+    "runtime_label": "Publisher 2019"
+  },
+  "schema": "chaptera.publisher-visual-golden-supplemental-summary.v1",
+  "sources": [
+    {
+      "id": "batch02",
+      "note": "IDs 081-095; five known font-substitution outputs.",
+      "page_count": 24,
+      "pair_count": 15
+    },
+    {
+      "id": "batch02-font-replacements",
+      "note": "Distinct sources 096-100 and 102. ID 101 is excluded because its PUB SHA duplicates 099; retain only as repeated-export reproducibility evidence.",
+      "page_count": 8,
+      "pair_count": 6
+    },
+    {
+      "id": "user-01-main",
+      "note": "Story-stress, OfficeArt/WMF, image-heavy.",
+      "page_count": 20,
+      "pair_count": 3
+    },
+    {
+      "id": "manual-reduction-family",
+      "note": "One hierarchical family: 1 original -> 2 aggregate -> 2.1-2.5 isolated residuals.",
+      "page_count": 7,
+      "pair_count": 7
+    }
+  ],
+  "totals": {
+    "distinct_pair_count": 31,
+    "known_font_warning_pair_count": 6,
+    "pdf_bytes_total": 11044257,
+    "pdf_page_count_total": 59,
+    "provisional_no_font_warning_pair_count": 25,
+    "pub_bytes_total": 18114048
+  }
+}

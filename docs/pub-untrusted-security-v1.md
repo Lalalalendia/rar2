@@ -16,9 +16,28 @@ The parent path is `tools/untrusted_pub_batch_v1.py`.
 
 The network deny list in the shared worker harness also includes socket metadata/options and `io_uring_*` bypass syscalls.
 
+## Format-aware firewall
+
+Before the general CFB reader is allowed to walk an uploaded file, the worker performs a bounded raw-header firewall over the exact in-memory bytes. It rejects impossible CFB geometry without allocating from attacker-declared lengths:
+
+- CFB signature, major version, byte order and sector-size pairing;
+- whole-file sector alignment;
+- FAT / MiniFAT / DIFAT sector counts against physical sector count;
+- FAT addressing capacity;
+- directory, MiniFAT and DIFAT start-sector bounds;
+- DIFAT capacity for the declared FAT sector count;
+- duplicate/out-of-range FAT sector IDs named by the header;
+- canonical 4096-byte mini-stream cutoff.
+
+After the maintained CFB reader opens the container, the firewall still enforces bounded entry count, path depth, per-stream physical plausibility and cumulative declared stream bytes.
+
+This gate intentionally checks **impossible or resource-dangerous structure**, not one exact Publisher-build fingerprint. Damaged but bounded PUBs remain eligible for the separately isolated recovery/semantic path.
+
+There is deliberately **no ClamAV/antivirus dependency** in this boundary. Known-signature antivirus would not protect Chaptera from a custom parser bomb. The owned protection is format-aware rejection plus process/resource isolation.
+
 ## Structural limits
 
-The V1 worker uses the maintained workspace `cfb = 0.14` reader over `Cursor<&[u8]>`. It applies:
+The V1 worker uses the maintained workspace `cfb = 0.14` reader over `Cursor<&[u8]>` after the raw firewall. It applies:
 
 - input bytes: 256 MiB default;
 - CFB entries: 8,192 default;

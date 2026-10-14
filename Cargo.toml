@@ -2,6 +2,7 @@
 members = [
   "apps/chaptera-server",
   "apps/chaptera-desktop",
+  "apps/chaptera-pub-cli",
   "crates/pub-model",
   "crates/chaptera-layout-projection",
   "crates/chaptera-scene-instance",
@@ -10,6 +11,7 @@ members = [
   "crates/chaptera-glyph-runtime",
   "crates/chaptera-untrusted-pub-scan",
   "crates/chaptera-failure-intake-protocol",
+  "crates/chaptera-receiver-qualification",
   "crates/chaptera-update-trust",
   "crates/chaptera-update-engine",
   "crates/chaptera-update-orchestrator",
@@ -23,6 +25,7 @@ members = [
 ]
 exclude = [
   "vendor/producer-a",
+  "vendor/third-party/jpeg-decoder-0.3.2",
   "crates/chaptera-suite-handoff",
   "crates/chaptera-viewer-render-plan",
   "crates/chaptera-canvas-creation-interaction",

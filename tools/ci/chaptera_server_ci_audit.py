@@ -25,6 +25,18 @@ EXPECTED_CONCURRENCY = (
     "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
 )
 
+GUEST_READER_RUNTIME_PATH = "apps/chaptera-server/src/guest_reader_runtime.rs"
+GUEST_READER_REQUIRED_WORKFLOWS = (
+    ".github/workflows/chaptera-server-package-integrity-v1.yml",
+    ".github/workflows/cloud-reader-v0.yml",
+)
+GUEST_READER_UNRELATED_WORKFLOWS = (
+    ".github/workflows/cloud-source-ingress-v1.yml",
+    ".github/workflows/cloud-async-runtime-v0.yml",
+    ".github/workflows/cloud-source-baseline-v1.yml",
+    ".github/workflows/local-full-stack-v0.yml",
+)
+
 
 def github_path_match(pattern: str, path: str) -> bool:
     token = "\0DOUBLESTAR\0"
@@ -193,6 +205,27 @@ def main() -> int:
             f"inside the Cloud/server slice; found {sorted(shared_gate_in_slice)}"
         )
 
+    guest_runtime_routing: dict[str, bool] = {}
+    for workflow_name in (
+        *GUEST_READER_REQUIRED_WORKFLOWS,
+        *GUEST_READER_UNRELATED_WORKFLOWS,
+    ):
+        workflow_text = Path(workflow_name).read_text(encoding="utf-8")
+        guest_runtime_routing[workflow_name] = workflow_triggers_for_path(
+            workflow_text, GUEST_READER_RUNTIME_PATH
+        )
+
+    for workflow_name in GUEST_READER_REQUIRED_WORKFLOWS:
+        if not guest_runtime_routing[workflow_name]:
+            violations.append(
+                f"{workflow_name}: must admit {GUEST_READER_RUNTIME_PATH}"
+            )
+    for workflow_name in GUEST_READER_UNRELATED_WORKFLOWS:
+        if guest_runtime_routing[workflow_name]:
+            violations.append(
+                f"{workflow_name}: must not admit guest-runtime-only changes"
+            )
+
     receipt = {
         "schema_version": "chaptera.ci.chaptera-server-routing-receipt.v1",
         "representative_changed_path": representative_path,
@@ -206,6 +239,8 @@ def main() -> int:
             "feature_package_command_counts": after_feature_commands,
             "after_measured_runner_minutes": None,
             "measurement_state": "pending_live_representative_lib_rs_change_after_merge",
+            "guest_reader_runtime_path": GUEST_READER_RUNTIME_PATH,
+            "guest_reader_runtime_routing": guest_runtime_routing,
         },
         "violations": violations,
     }

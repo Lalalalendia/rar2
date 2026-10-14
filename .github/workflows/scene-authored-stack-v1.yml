@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "crates/chaptera-viewer-render-plan/src/lib.rs"
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/authored_stack.rs"
       - ".github/workflows/scene-authored-stack-v1.yml"
   push:
     branches:

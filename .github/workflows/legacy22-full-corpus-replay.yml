@@ -9,7 +9,9 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs"
+      - "vendor/producer-a/crates/pub-reader/src/legacy22_page_role.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0022_companion_profile.rs"
+      - "crates/pub-presentation-profile/src/lib.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
   workflow_dispatch:
 
@@ -597,18 +599,19 @@ jobs:
           assert companion["candidate_count"] == 307, companion["candidate_count"]
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
-          assert len(existing_with_scene) == 224, len(existing_with_scene)
-          # Current-main replay supersedes the older run 36641738977 image-depth pin:
-          # geometry/text totals remain unchanged, while later bounded legacy-image support
-          # adds 68 resources/placements across 7 existing files with zero per-file losses.
-          # preview_raster_unsupported correspondingly falls from 8 files to 1.
-          assert existing_scene_nodes == 2831, existing_scene_nodes
-          assert existing_image_resources == 430, existing_image_resources
-          assert existing_image_placements == 430, existing_image_placements
-          assert existing_files_with_images == 114, existing_files_with_images
+          # #955 intentionally changed only Viewer presentation membership for
+          # bounded legacy22 customer pages while preserving the lossless
+          # SourceGraph. The permanent depth receipt must therefore pin the
+          # post-#955 visible scene/resource totals rather than the older
+          # all-materialized-page presentation baseline.
+          assert len(existing_with_scene) == 216, len(existing_with_scene)
+          assert existing_scene_nodes == 2656, existing_scene_nodes
+          assert existing_image_resources == 314, existing_image_resources
+          assert existing_image_placements == 314, existing_image_placements
+          assert existing_files_with_images == 106, existing_files_with_images
           assert legacy_image_raster_unsupported_files == 1, legacy_image_raster_unsupported_files
-          assert existing_story_frames == 1430, existing_story_frames
-          assert existing_text_fragments == 1383, existing_text_fragments
+          assert existing_story_frames == 1423, existing_story_frames
+          assert existing_text_fragments == 1376, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
 
           legacy_with_scene = [
@@ -617,9 +620,9 @@ jobs:
           legacy_scene_nodes = sum(
               int(row.get("scene_node_count") or 0) for row in legacy_open
           )
-          # PERLOST contributes six unchanged scene nodes on top of the 2,831-node
-          # legacy_existing authority above.
-          assert legacy_scene_nodes == 2837, legacy_scene_nodes
+          # PERLOST contributes six unchanged scene nodes on top of the
+          # post-#955 2,656-node legacy_existing presentation authority.
+          assert legacy_scene_nodes == 2662, legacy_scene_nodes
           legacy_story_frames = sum(
               int(row.get("story_frame_count") or 0) for row in legacy_open
           )

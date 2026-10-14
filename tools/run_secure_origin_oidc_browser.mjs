@@ -107,6 +107,69 @@ async function main() {
       throw new Error("authenticated session bootstrap lacks principal/CSRF");
     }
 
+    // Real OIDC (not a synthetic API) authorizes personal workspace admission.
+    // The document/tenant scope is server-derived and is never forged by UI.
+    const workspaceReceipt = await page.evaluate(async (csrf) => {
+      async function call(path, method = "GET", extraHeaders = {}) {
+        const response = await fetch(path, {
+          method,
+          credentials: "same-origin",
+          headers: extraHeaders,
+        });
+        let body;
+        try { body = await response.json(); } catch { body = null; }
+        return { status: response.status, body };
+      }
+      const initial = await call("/v1/workspaces");
+      const denied = await call("/v1/workspaces/personal", "POST");
+      const create = await call("/v1/workspaces/personal", "POST", {
+        "x-csrf-token": csrf,
+      });
+      const forged = await call("/v1/workspaces/personal", "POST", {
+        "x-csrf-token": csrf,
+        "x-chaptera-principal-id": "principal:forged-browser-header",
+      });
+      const listed = await call("/v1/workspaces");
+      return { initial, denied, create, forged, listed };
+    }, initialSession.body.csrf_token);
+
+    requireStatus(workspaceReceipt.initial.status, 200, "initial personal workspace list");
+    if (workspaceReceipt.initial.body?.workspaces?.length !== 0) {
+      throw new Error("new OIDC principal unexpectedly owns an existing workspace");
+    }
+    requireStatus(workspaceReceipt.denied.status, 403, "personal workspace without CSRF");
+    requireStatus(workspaceReceipt.create.status, 200, "authenticated personal workspace admission");
+    requireStatus(workspaceReceipt.forged.status, 200, "forged principal is ignored");
+    requireStatus(workspaceReceipt.listed.status, 200, "personal workspace list after admission");
+    const personalId = workspaceReceipt.create.body?.workspace_id;
+    if (!/^workspace:personal:[0-9a-f]{64}$/.test(personalId ?? "") ||
+        personalId !== workspaceReceipt.forged.body?.workspace_id ||
+        workspaceReceipt.listed.body?.workspaces?.length !== 1 ||
+        workspaceReceipt.listed.body.workspaces[0].workspace_id !== personalId ||
+        workspaceReceipt.listed.body.workspaces[0].role !== "owner") {
+      throw new Error("workspace authority diverged under authenticated OIDC session");
+    }
+    if ("tenant_id" in workspaceReceipt.create.body ||
+        "tenant_id" in workspaceReceipt.listed.body.workspaces[0]) {
+      throw new Error("browser workspace receipts leaked authoritative tenant id");
+    }
+
+    // The browser UI itself must now work on the same real Chaptera origin.
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("#status")?.textContent ===
+        "Готов к загрузке файла Publisher",
+      { timeout: 15000 },
+    );
+    if (pageErrors.length) {
+      throw new Error("real OIDC project entry JavaScript failed: " + pageErrors.join("; "));
+    }
+    if (page.url() !== origin + "/editor/new") {
+      throw new Error("real OIDC project entry unexpectedly left secure origin");
+    }
+
     const missingCsrf = await page.evaluate(async () => {
       const response = await fetch("/v1/auth/logout", {
         method: "POST",
@@ -229,6 +292,13 @@ async function main() {
       },
       browser_session_bootstrap_status: initialSession.status,
       principal_present: Boolean(initialSession.body.principal_id),
+      real_oidc_personal_workspace_admitted: workspaceReceipt.create.status === 200,
+      real_oidc_personal_workspace_csrf_denied: workspaceReceipt.denied.status === 403,
+      real_oidc_personal_workspace_forged_principal_ignored:
+        workspaceReceipt.forged.body.workspace_id === personalId,
+      real_oidc_new_project_page_ready: pageErrors.length === 0,
+      personal_workspace_id_format: "workspace:personal:sha256",
+      source_pub_uploaded: false,
       csrf_present: Boolean(initialSession.body.csrf_token),
       missing_csrf_rejected_status: missingCsrf.status,
       cross_origin_mutation_rejected:

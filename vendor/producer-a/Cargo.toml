@@ -1,22 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/pub-core",
-  "crates/pub-cfb",
-  "crates/pub-contents",
-  "crates/pub-quill",
-  "crates/pub-escher",
-  "crates/pub-model",
-  "crates/pub-layout",
-  "crates/pub-format-registry",
-  "crates/pub-reader",
-  "crates/pub-viewer",
-  "crates/pub-interaction",
-  "crates/pub-export",
-  "crates/pub-idml",
-  "crates/pub-odg",
-  "crates/pub-writer",
-  "crates/pub-editor",
+  "crates/*",
   "producer",
 ]
 
@@ -28,9 +13,11 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
+md4 = "=0.11.0"
 cfb = "0.14"
 clap = { version = "4", features = ["derive"] }
 harfrust = "=0.13.3"
+read-fonts = "=0.43.3"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

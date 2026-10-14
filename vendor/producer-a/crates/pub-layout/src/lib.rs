@@ -16,6 +16,8 @@ use pub_model::{
 use serde::{Deserialize, Serialize};
 
 mod break_policy;
+mod effective_table_layout;
+mod internal_caret;
 mod resolve;
 mod shaped_flow;
 mod shaping;
@@ -26,20 +28,30 @@ pub use break_policy::{
     BOUNDED_BREAK_POLICY_REVISION, BoundedBreakCandidate, BoundedBreakKind, BoundedBreakPolicy,
     BoundedBreakPolicyError, break_policy_for_shaped_text,
 };
+pub use effective_table_layout::{
+    BoundedEffectiveTableResolveError, EffectiveTableLayoutInputV1,
+    resolve_bounded_effective_table_cells,
+};
+pub use internal_caret::{
+    GDEF_FORMAT1_AUTHORITY_SOURCE, INTERNAL_CARET_AUTHORITY_REVISION, InternalCaretAuthorityError,
+    InternalCaretAuthorityResultV1, InternalCaretStopAuthorityV1, UnsupportedInternalCaretV1,
+    resolve_internal_carets_ltr,
+};
 pub use resolve::{
     BoundedLayoutEnvironment, BoundedResolvedScene, ResolveBlocked, ResolveDiagnostic,
     ResolveSeverity, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
     resolve_bounded_geometry,
 };
 pub use shaped_flow::{
-    BoundedShapedFlowDescriptor, BoundedShapedFlowError, BoundedShapedFlowRuntime,
-    BoundedShapedFlowScene, BoundedShapedLine, ShapedLineOriginMapping,
-    resolve_bounded_shaped_flow,
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedShapedFlowDescriptor,
+    BoundedShapedFlowError, BoundedShapedFlowRuntime, BoundedShapedFlowScene, BoundedShapedLine,
+    ShapedLineOriginMapping, resolve_bounded_shaped_flow,
+    resolve_bounded_shaped_flow_with_paragraph_flow,
 };
 pub use shaping::{
     BOUNDED_SHAPER_REVISION, BoundedShapeError, BoundedShapedGlyph, BoundedShapedText,
-    BoundedShapingDescriptor, BoundedShapingRuntime, font_fingerprint_sha256, shape_bounded_ltr,
-    shape_bounded_ltr_segment,
+    BoundedShapingDescriptor, BoundedShapingRuntime, compatible_natural_line_height_emu_v1,
+    font_fingerprint_sha256, shape_bounded_ltr, shape_bounded_ltr_segment,
 };
 pub use table_layout::{
     BoundedResolvedTableCells, BoundedTableResolveError, BoundedUniformTableMetrics,
@@ -48,6 +60,7 @@ pub use table_layout::{
 pub use text_flow::{
     BoundedTextFlowEnvironment, BoundedTextFlowScene, BoundedTextMetrics, ResolvedTextFragment,
     TextFragmentOriginMapping, resolve_bounded_text_flow,
+    resolve_bounded_text_flow_with_paragraph_flow, validated_projected_story_frame_chain_v1,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

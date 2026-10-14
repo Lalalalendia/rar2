@@ -47,8 +47,10 @@ FIXTURE_URL = (
 FIXTURE_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 # Keep the packaged launcher pinned to the same canonical graph identity as
 # LAYOUT-RESOLVED-SCENE and the current same-head Viewer receipt.
-GRAPH_SHA = "818049a1d8599ab9ef68e3da2174bbfe876afbfa6711fad9f6a9efabc7d81c40"
-GRAPH_BYTES = 280249
+# Exact source-backed Newsletter PAGE381 LINE 405: Windows clean-extracted
+# smoke produced these bytes after the bounded single-node admission.
+GRAPH_SHA = "12c594f1be824c0272cf28ebbc03f949a437a4d49db1b508fe2d73f66ff1c12f"
+GRAPH_BYTES = 301962
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -223,7 +225,76 @@ def json_request(path: str, *, method: str = "GET", body=None):
         return json.load(response)
 
 
-def interactive_smoke() -> None:
+def interactive_smoke(*, pinned_abel_demo: bool = False) -> None:
+    baseline_scene = json_request("/v1/scenes/current")
+    font_environment = json_request("/v1/editor/font-environment")
+    font_admission = json_request("/v1/editor/font-authoring-admission")
+    for label, descriptor in (("environment", font_environment), ("admission", font_admission)):
+        if (descriptor.get("revision_id") != baseline_scene["revision_id"]
+                or descriptor.get("scene_snapshot_id") != baseline_scene["snapshot_id"]
+                or descriptor.get("font_set_fingerprint")
+                != baseline_scene["layout_environment"]["font_set_fingerprint"]):
+            raise RuntimeError(f"stale {label} font scope in actual PUB Editor")
+    if pinned_abel_demo:
+        if (len(font_environment["fonts"]) != 1
+                or font_environment["fonts"][0]["delivery"] != "deliver_exact"
+                or len(font_admission["resources"]) != 1):
+            raise RuntimeError("real pinned full-font admission is missing")
+        descriptor = font_environment["fonts"][0]
+        if descriptor["resource_id"] != font_admission["resources"][0]["resource_id"]:
+            raise RuntimeError("font delivery and admission identities differ")
+        with urllib.request.urlopen(urllib.request.Request(
+            API + "/v1/editor/font-resource/" + descriptor["fetch_handle"],
+            headers={"x-chaptera-principal-id": "synthetic-editor"},
+        ), timeout=5) as response:
+            if (response.status != 200 or response.headers.get("content-type") != "font/ttf"
+                    or hashlib.sha256(response.read()).hexdigest() != descriptor["content_hash"]):
+                raise RuntimeError("actual PUB Editor did not deliver exact OpenType bytes")
+        print(json.dumps({"real_pub_admitted_font": descriptor["resource_id"],
+                          "content_hash": descriptor["content_hash"]}, sort_keys=True))
+    elif font_environment["fonts"] or font_admission["resources"]:
+        raise RuntimeError("implicit font authoring grant in default-disabled service")
+
+    capabilities = json_request("/v1/editor/capabilities")
+    editable_story_ids = capabilities.get("editable_story_ids")
+    if (
+        capabilities.get("protocol_version") != "chaptera.editor-capabilities.v1"
+        or capabilities.get("source_hash") != FIXTURE_SHA
+        or capabilities.get("revision_id") != baseline_scene.get("revision_id")
+        or not isinstance(editable_story_ids, list)
+        or editable_story_ids != sorted(set(editable_story_ids))
+        or any(not isinstance(story_id, str) for story_id in editable_story_ids)
+    ):
+        raise RuntimeError(f"invalid editor capabilities response: {capabilities}")
+
+    pub_preview = json_request("/v1/pub-save/preview")
+    if (
+        pub_preview.get("protocol_version") != "chaptera.native-pub-save-preview.v1"
+        or pub_preview.get("source_hash") != FIXTURE_SHA
+        or pub_preview.get("revision_id") != baseline_scene.get("revision_id")
+        or pub_preview.get("can_serialize") is not False
+        or pub_preview.get("blocker_code") != "editor_pub_story_mutation_count"
+        or pub_preview.get("chaptera_reopen_verified") is not False
+        or pub_preview.get("can_download") is not False
+        or pub_preview.get("native_publisher_authorized") is not False
+    ):
+        raise RuntimeError(f"invalid baseline native PUB preview: {pub_preview}")
+    # The HTTP server must enforce download admission independently of the UI.
+    # Even an export-capable principal cannot download a Reader-only candidate.
+    try:
+        json_request("/v1/pub-save/download")
+    except urllib.error.HTTPError as error:
+        body = json.load(error)
+        if error.code != 409 or body.get("error") != "native_pub_download_not_authorized":
+            raise RuntimeError(f"wrong native PUB download denial: {error.code} {body}")
+    else:
+        raise RuntimeError("unproven native PUB unexpectedly downloadable")
+
+    print(json.dumps({
+        "local_editor_text_capability_count": len(editable_story_ids),
+        "baseline_native_pub_save": "blocked_no_effective_story_mutation",
+    }, sort_keys=True))
+
     receipt = json.loads(
         (
             ROOT
@@ -239,6 +310,16 @@ def interactive_smoke() -> None:
         receipt["accepted"]["canonical_operation"]["before"]["y"] + 50800
     )
     accepted = json_request("/v1/commit", method="POST", body=request)
+    if pinned_abel_demo:
+        # Any old exact font handle must be rejected immediately when the
+        # accepted Editor Scene advances, regardless of resource byte identity.
+        try:
+            json_request("/v1/editor/font-resource/" + font_environment["fonts"][0]["fetch_handle"])
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise RuntimeError("stale font handle returned wrong status")
+        else:
+            raise RuntimeError("stale font handle survived current revision")
     if accepted.get("protocol_version") != "chaptera.commit-accepted.v1":
         raise RuntimeError(f"interactive MoveNode was not accepted: {accepted}")
 
@@ -269,7 +350,13 @@ def interactive_smoke() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--pinned-abel-demo", action="store_true",
+                        help="enable one exact developer-only OFL font in real PUB Editor")
+    parser.add_argument("--browser-smoke", action="store_true",
+                        help="prove exact resource selection in real Chromium")
     args = parser.parse_args()
+    if args.browser_smoke and (not args.smoke or not args.pinned_abel_demo):
+        parser.error("--browser-smoke requires --smoke --pinned-abel-demo")
 
     STATE.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
@@ -281,6 +368,7 @@ def main() -> int:
             str(python),
             "services/editor-api/web_real_acceptance_service.py",
             "--interactive",
+            *(["--pinned-abel-demo"] if args.pinned_abel_demo else []),
             "--port",
             str(API_PORT),
             "--fixture",
@@ -322,7 +410,12 @@ def main() -> int:
         )
         print(f"LOCAL_EDITOR_READY {EDITOR_URL}", flush=True)
         if args.smoke:
-            interactive_smoke()
+            interactive_smoke(pinned_abel_demo=args.pinned_abel_demo)
+            if args.browser_smoke:
+                subprocess.run(
+                    ["node", "tools/verify_live_font_ui_browser.mjs", EDITOR_URL],
+                    cwd=ROOT, check=True, timeout=120,
+                )
             return 0
         while True:
             if service.poll() is not None:

@@ -79,9 +79,17 @@ function Get-PubSafeValue {
 
 function New-PubPublisherApplication {
     param(
-        [switch]$Visible
+        [switch]$Visible,
+        [switch]$AllowHyphenationRecovery
     )
 
+    # Persist across runner jobs: an interrupted application-wide Publisher
+    # preference transaction must block ordinary native COM work.
+    $quarantine = Join-Path $env:USERPROFILE ".chaptera-publisher-hyphenation-quarantine"
+    if ((Test-Path -LiteralPath $quarantine -PathType Leaf) -and
+        -not $AllowHyphenationRecovery) {
+        throw "publisher_hyphenation_quarantined"
+    }
     $application = New-Object -ComObject Publisher.Application
     if ($Visible) {
         try {

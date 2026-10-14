@@ -1,0 +1,47 @@
+name: Pub Editor selective fanout contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-editor-selective-fanout-contract.yml"
+      - ".github/workflows/chaptera-editor-windows-binary.yml"
+      - ".github/workflows/editor-build-once-pr.yml"
+      - "tools/ci/validate_editor_binary_artifact.py"
+      - "tools/ci/test_validate_editor_binary_artifact.py"
+      - "tools/ci/test_editor_build_once_wiring.py"
+      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
+      - ".github/workflows/editor-desktop-textbox-restore-v1.yml"
+      - ".github/workflows/editor-fixed-pdf-current-revision.yml"
+      - ".github/workflows/w2-longform-fixed-pdf-current-revision.yml"
+      - ".github/workflows/editor-duplicate-rectangle-v1.yml"
+      - ".github/workflows/authoring-authored-stack-runtime-v1.yml"
+      - ".github/workflows/authoring-authored-stack-lifecycle-v1.yml"
+      - ".github/workflows/editor-fixed-output-current-image-resources.yml"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_testonly_fanout.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-editor-selective-fanout-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compile classifier
+        run: python -m py_compile tools/ci/pub_editor_pr_fanout.py tools/ci/test_pub_editor_pr_fanout.py
+
+      - name: Test conservative pub-editor scope classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+      - name: Guard Editor build-once wiring
+        run: python tools/ci/test_editor_build_once_wiring.py
+
+      - name: Guard classifier-test-only fanout
+        run: python tools/ci/test_pub_editor_testonly_fanout.py

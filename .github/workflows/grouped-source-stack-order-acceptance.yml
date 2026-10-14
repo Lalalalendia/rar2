@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/grouped_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
       - ".github/workflows/grouped-source-stack-order-acceptance.yml"
   workflow_dispatch:
 
@@ -57,9 +60,18 @@ jobs:
           CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "14,16"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
 
+      - name: Verify exact PAGE LOGO shape and effective paint evidence
+        env:
+          CHAPTERA_LOGO_GROUP_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test logo_group_source_probe -- --ignored --exact exact_public_newsletter_logo_0x31_baseline --nocapture
       - name: Newsletter admits grouped materialized visuals
         env:
           CHAPTERA_SOURCE_STACK_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
           CHAPTERA_SOURCE_STACK_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
-          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,12"
+          CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS: "21,20,20,19"
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib -- --ignored --exact tests::exact_public_source_stack_order_covers_materialized_grouped_nodes --nocapture
+
+      - name: Verify PAGE381 physical magenta line 405 color and horizontal geometry
+        env:
+          CHAPTERA_NEWSLETTER_BAND_FIXTURE: ${{ runner.temp }}/group-stack-controls/SampleNewsletter.pub
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test newsletter_banner_source_probe -- --ignored --exact exact_newsletter_top_band_source_attribution --nocapture

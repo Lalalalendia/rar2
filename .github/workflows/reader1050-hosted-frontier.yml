@@ -6,6 +6,8 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
+      - "tools/research-runner/reader1050_source_binding.py"
+      - "tools/research-runner/tests/test_reader1050_source_binding.py"
       - "vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json"
       - "vendor/producer-a/crates/pub-reader/src/salvage.rs"
       - "vendor/producer-a/crates/pub-reader/src/salvage_authority.rs"
@@ -25,6 +27,10 @@ on:
       reader_run_id:
         description: Successful Reader-1050 workflow run ID
         required: true
+        type: string
+      reader_source_sha:
+        description: Optional exact 40-char baseline SHA for historical dispatch; receipt must match
+        required: false
         type: string
 
 permissions:
@@ -64,7 +70,8 @@ jobs:
             tools/research-runner/reader1050_offline_discriminator.py
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
-            tools/research-runner/tests/test_reader1050_offline_discriminator.py
+            tools/research-runner/tests/test_reader1050_offline_discriminator.py \
+            tools/research-runner/tests/test_reader1050_source_binding.py
 
       - name: Validate Reader salvage authority product seam
         run: |
@@ -97,11 +104,11 @@ jobs:
     timeout-minutes: 20
     env:
       READER_RUN_ID: ${{ github.event.workflow_run.id || inputs.reader_run_id }}
-      READER_SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      READER_SOURCE_SHA: ${{ github.event.workflow_run.head_sha || inputs.reader_source_sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha || inputs.reader_source_sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -119,6 +126,13 @@ jobs:
           github-token: ${{ github.token }}
           repository: Lalalalendia/rar2
           run-id: ${{ env.READER_RUN_ID }}
+
+      - name: Bind downloaded Reader receipt to checked-out exact source
+        run: |
+          set -euo pipefail
+          python tools/research-runner/reader1050_source_binding.py \
+            --reader-root input/reader \
+            --source-sha "$READER_SOURCE_SHA"
 
       - name: Download pinned exact 1050 corpus materialization
         uses: actions/download-artifact@v4

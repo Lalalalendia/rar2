@@ -4,11 +4,18 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-layout/**"
+      - "tools/perf/contracts.json"
+      - "tools/perf/rust_perf_contract_router.py"
+      - "tools/perf/test_rust_perf_contract_router.py"
       - ".github/workflows/layout-projection-index-v1.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   layout-projection-index:
@@ -29,10 +36,16 @@ jobs:
         run: cargo clippy -p pub-layout --all-targets -- -D warnings
       - name: Test exact projection semantics
         run: cargo test -p pub-layout
-      - name: Run 1k 10k 50k projection-index benchmark
-        env:
-          LAYOUT_PROJECTION_INDEX_RECEIPT: ${{ github.workspace }}/vendor/producer-a/target/layout-projection-index/benchmark.json
-        run: cargo test -p pub-layout --test projection_index_benchmark -- --ignored --nocapture
+      - name: Test central performance contract router
+        working-directory: ${{ github.workspace }}
+        run: PYTHONPATH=tools/perf python -m unittest tools/perf/test_rust_perf_contract_router.py
+      - name: Enforce deterministic projection work contract
+        working-directory: ${{ github.workspace }}
+        run: |
+          python tools/perf/rust_perf_contract_router.py \
+            --changed-file vendor/producer-a/crates/pub-layout/src/lib.rs \
+            --require-selection \
+            --run
       - uses: actions/upload-artifact@v4
         with:
           name: layout-projection-index-v1

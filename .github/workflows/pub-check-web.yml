@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/pub-check-web/**"
       - "tools/pub-check-cli/**"
+      - "tools/pub-check-cloud-bridge/**"
       - ".github/workflows/pub-check-web.yml"
       - ".github/workflows/pub-check-worker.yml"
   workflow_dispatch:
@@ -31,6 +32,10 @@ jobs:
         run: npm install
       - name: Typecheck
         run: npm run typecheck
+      - name: Canonical Cloud Reader result and email source-safety tests
+        run: node --experimental-strip-types --test tests/*.test.mjs
+      - name: Python guest-session protocol tests
+        run: python3 -m unittest discover -s ../../tools/pub-check-cloud-bridge -p "test_*.py" -v
       - name: Build
         run: npm run build
         env:

@@ -12,6 +12,12 @@ on:
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/page_projection.rs"
+      - "vendor/producer-a/crates/pub-reader/src/source_paint_order.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_materialization.rs"
+      - "vendor/producer-a/crates/pub-reader/src/quill_admission.rs"
+      - "vendor/producer-a/crates/pub-reader/src/publication_document.rs"
+      - "vendor/producer-a/crates/pub-reader/src/node_materialization.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
       - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
@@ -98,11 +104,27 @@ jobs:
           test -n "$MANIFEST_HASH"
           echo "key=cloud-reader-reference-rust-v2-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
 
-      - name: Restore/save Cloud reference Cargo build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Report Cloud reference cache access context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cloud_reference_cache_mode=${ACTIONS_CACHE_MODE:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "cloud_reference_cache_event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Restore-only in ALL contexts: a PR must never upload a 1.56-GB private copy.
+      - name: Restore Cloud reference Cargo build cache
+        id: cloud-reference-cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/cloud-reader-reference-rust
           key: ${{ steps.cloud-reference-cache-key.outputs.key }}
+
+      - name: Report Cloud reference Cargo restore result
+        shell: bash
+        env:
+          CLOUD_CACHE_HIT: ${{ steps.cloud-reference-cargo-cache.outputs.cache-hit }}
+        run: |
+          echo "cloud_reference_cargo_cache_hit=${CLOUD_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Census exact Carlton fill state
         run: |
@@ -135,15 +157,24 @@ jobs:
           node-version: "22"
 
       - name: Restore/save pinned Playwright Chromium cache
+        id: playwright-chromium-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: cloud-reader-playwright-v1-${{ runner.os }}-1.55.0-chromium
 
       - name: Install pinned browser acceptance runtime
+        env:
+          PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-chromium-cache.outputs.cache-hit }}
         run: |
+          set -euo pipefail
+          start="$(date +%s)"
           npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+          node -e 'const { chromium } = require("playwright"); (async()=>{const b=await chromium.launch({headless:true}); const p=await b.newPage(); await p.setContent("<title>chaptera-playwright-smoke</title>"); if((await p.title())!=="chaptera-playwright-smoke") throw new Error("smoke title mismatch"); await b.close();})().catch(e=>{console.error(e);process.exit(1)})'
+          elapsed="$(($(date +%s) - start))"
+          echo "playwright_cache_hit=${PLAYWRIGHT_CACHE_HIT:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "playwright_setup_seconds=$elapsed" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build canonical guest Scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
@@ -283,6 +314,16 @@ jobs:
           )
           print(json.dumps(rows, indent=2, sort_keys=True))
           PY
+
+      # Save the shared cache only AFTER trusted-main product acceptance succeeds.
+      # The PR caller is capped at read-only; explicit save gating is independent
+      # of runner ACTIONS_CACHE_MODE availability.
+      - name: Save trusted main Cloud reference Cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cloud-reference-cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/cloud-reader-reference-rust
+          key: ${{ steps.cloud-reference-cache-key.outputs.key }}
 
       - name: Copy sanitized acquisition receipts
         run: |

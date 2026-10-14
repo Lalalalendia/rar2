@@ -73,6 +73,33 @@ jobs:
       - name: Test Reader PR fanout classifier
         run: python tools/ci/test_reader_pr_fanout.py
 
+      - name: Guard Reader paint projection routing
+        run: python tools/ci/test_pub_reader_paint_projection_routing.py
+      - name: Guard Reader page projection routing
+        run: python tools/ci/test_pub_reader_page_projection_routing.py
+      - name: Guard Reader source paint order routing
+        run: python tools/ci/test_pub_reader_source_paint_order_routing.py
+      - name: Guard Reader story frame analysis routing
+        run: python tools/ci/test_pub_reader_story_frame_analysis_routing.py
+      - name: Guard Reader typography projection routing
+        run: python tools/ci/test_pub_reader_typography_projection_routing.py
+      - name: Guard Reader direct transform routing
+        run: python tools/ci/test_pub_reader_direct_transform_routing.py
+      - name: Guard Reader grouped projection routing
+        run: python tools/ci/test_pub_reader_grouped_projection_routing.py
+      - name: Guard Reader source graph model routing
+        run: python tools/ci/test_pub_reader_source_graph_model_routing.py
+      - name: Guard Reader anchor geometry routing
+        run: python tools/ci/test_pub_reader_anchor_geometry_routing.py
+      - name: Guard Reader Story materialization routing
+        run: python tools/ci/test_pub_reader_story_materialization_routing.py
+      - name: Guard Reader Quill admission routing
+        run: python tools/ci/test_pub_reader_quill_admission_routing.py
+      - name: Guard Reader publication document routing
+        run: python tools/ci/test_pub_reader_publication_document_routing.py
+      - name: Guard Reader Contents access routing
+        run: python tools/ci/test_pub_reader_contents_access_routing.py
+
       - name: Enforce active-content inertness
         run: |
           python tools/reader_active_content_guard.py --self-test

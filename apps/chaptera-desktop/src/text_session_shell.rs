@@ -1,0 +1,1025 @@
+//! Desktop canvas text entry, input, focus, caret and widget integration.
+//! The existing text_session module remains the Story/session semantic authority.
+
+use super::{SceneHitEntry, ViewerApp, text_session};
+use eframe::egui;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[path = "paragraph_alignment_ui.rs"]
+mod paragraph_alignment_ui;
+
+fn paragraph_alignment_shortcut_v1(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<pub_editor::AuthoredParagraphAlignmentValueV1> {
+    if !(modifiers.ctrl || modifiers.command) || modifiers.alt || modifiers.shift {
+        return None;
+    }
+    match key {
+        egui::Key::L => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left),
+        egui::Key::E => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center),
+        egui::Key::R => Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right),
+        _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CanvasTextMutationFinalization {
+    NoChange,
+    Rejected(String),
+    Committed { status: String, rebind_failed: bool },
+}
+
+/// The canonical EditOperation is already in EditorSession by the time
+/// text-session rebind can fail. Never classify that failure as a rejected edit.
+fn invalidate_text_page_frame_cache<T>(
+    cache: &mut BTreeMap<usize, T>,
+    affected_pages: Option<&BTreeSet<usize>>,
+    text_projection_succeeded: bool,
+) {
+    if text_projection_succeeded && let Some(affected_pages) = affected_pages {
+        cache.retain(|page_index, _| !affected_pages.contains(page_index));
+        return;
+    }
+    cache.clear();
+}
+
+fn classify_canvas_text_mutation(
+    before_operations: usize,
+    after_operations: usize,
+    outcome: Result<(), String>,
+    committed_status: &str,
+    rejected_context: &str,
+) -> CanvasTextMutationFinalization {
+    if after_operations > before_operations {
+        let (status, rebind_failed) = match outcome {
+            Ok(()) => (committed_status.to_owned(), false),
+            Err(error) => (
+                format!(
+                    "{committed_status} Post-commit caret/layout rebind failed: {error}. Re-enter Edit Text to continue."
+                ),
+                true,
+            ),
+        };
+        CanvasTextMutationFinalization::Committed {
+            status,
+            rebind_failed,
+        }
+    } else {
+        match outcome {
+            Ok(()) => CanvasTextMutationFinalization::NoChange,
+            Err(error) => {
+                CanvasTextMutationFinalization::Rejected(format!("{rejected_context}: {error}"))
+            }
+        }
+    }
+}
+
+impl ViewerApp {
+    pub(super) fn enter_canvas_text_mode(
+        &mut self,
+        story_id: pub_editor::StoryId,
+        frame_id: pub_editor::NodeId,
+    ) {
+        let outcome = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())
+            .and_then(|editor| text_session::enter_explicit_text_mode(editor, story_id, frame_id));
+        match outcome {
+            Ok(mode) => {
+                self.text_mode = Some(mode);
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                self.edit_status = Some(
+                    "Text editing active on the canvas. Typing is committed through canonical Story range operations."
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Edit Text unavailable: {error}"));
+            }
+        }
+    }
+
+    pub(super) fn enter_canvas_text_mode_at_pointer(
+        &mut self,
+        story_id: pub_editor::StoryId,
+        frame_id: pub_editor::NodeId,
+        page_id: &str,
+        point: pub_interaction::DocumentPoint,
+    ) {
+        let outcome = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())
+            .and_then(|editor| {
+                text_session::enter_pointer_text_mode(
+                    editor,
+                    story_id,
+                    frame_id,
+                    page_id,
+                    point.x.get(),
+                    point.y.get(),
+                )
+            });
+        match outcome {
+            Ok(mode) => {
+                self.text_mode = Some(mode);
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                self.edit_status = Some(
+                    "Text editing activated from the TextFrame interior. Typing is committed through canonical Story range operations."
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Text activation unavailable: {error}"));
+            }
+        }
+    }
+
+    pub(super) fn exit_canvas_text_mode(&mut self, trigger: &str) {
+        let Some(mode) = self.text_mode.as_ref() else {
+            return;
+        };
+        match text_session::exit_text_mode(mode, trigger) {
+            Ok(()) => {
+                self.text_mode = None;
+                self.edit_status =
+                    Some("Exited canvas text editing without creating an edit.".to_owned());
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Could not exit canvas text editing: {error}"));
+            }
+        }
+    }
+
+    fn active_text_story_page_cache_indices(&self) -> Option<BTreeSet<usize>> {
+        let story_id = self.text_mode.as_ref()?.story_id;
+        let visual = self.visual.as_ref()?;
+
+        let mut affected_pages = BTreeSet::new();
+        let mut saw_frame = false;
+        for frame in visual
+            .story_frames
+            .iter()
+            .filter(|frame| frame.story_id == story_id)
+        {
+            saw_frame = true;
+            let scene_node = visual
+                .scene
+                .nodes
+                .iter()
+                .find(|node| node.origin == frame.frame_id)?;
+            let page_index = visual
+                .document
+                .pages
+                .iter()
+                .position(|page| scene_node.parent_origin == page.id.into_canonical())?;
+            affected_pages.insert(page_index);
+        }
+
+        (saw_frame && !affected_pages.is_empty()).then_some(affected_pages)
+    }
+
+    /// Finalize canvas text/text-format changes without paying unrelated
+    /// created-node or object-geometry synchronization.
+    fn finish_text_authoring_change(&mut self, status: &str) {
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        let affected_pages = self.active_text_story_page_cache_indices();
+        let text_projection_refresh = self.sync_visual_stories_from_editor();
+        invalidate_text_page_frame_cache(
+            &mut self.page_frame_cache,
+            affected_pages.as_ref(),
+            text_projection_refresh.is_ok(),
+        );
+        self.refresh_search();
+        self.export_preview = None;
+        self.project_status = Some("Editor project has unsaved changes.".to_owned());
+        self.edit_status = Some(match text_projection_refresh {
+            Ok(()) => status.to_owned(),
+            Err(text_error) => {
+                format!("{status} Viewer text projection refresh failed closed: {text_error}")
+            }
+        });
+    }
+
+    /// One committed canvas text mutation has one finish-owned Viewer refresh.
+    /// In particular, do not refresh Viewer here before finish_text_authoring_change.
+    fn finish_canvas_text_mutation(
+        &mut self,
+        before_operations: usize,
+        outcome: Result<(), String>,
+        committed_status: &str,
+        rejected_context: &str,
+    ) {
+        let after_operations = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(before_operations);
+        match classify_canvas_text_mutation(
+            before_operations,
+            after_operations,
+            outcome,
+            committed_status,
+            rejected_context,
+        ) {
+            CanvasTextMutationFinalization::NoChange => {}
+            CanvasTextMutationFinalization::Rejected(error) => {
+                self.edit_status = Some(error);
+            }
+            CanvasTextMutationFinalization::Committed {
+                status,
+                rebind_failed,
+            } => {
+                if rebind_failed {
+                    // The old caret/session revision is no longer authoritative.
+                    self.text_mode = None;
+                }
+                // This owns dirty-state, export/cache invalidation and one
+                // fail-closed Viewer text projection, including search-buffer sync.
+                self.finish_text_authoring_change(&status);
+            }
+        }
+    }
+
+    fn apply_canvas_text_input(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let before_operations = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => text_session::replace_external_text(editor, mode, text),
+            _ => return,
+        };
+        self.finish_canvas_text_mutation(
+            before_operations,
+            outcome,
+            "Typed on the canvas through one canonical ReplaceStoryRange operation.",
+            "Canvas text input rejected",
+        );
+    }
+
+    pub(super) fn canvas_boolean_format_state_v1(
+        &self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) -> Result<text_session::DesktopBooleanSelectionStateV1, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let mode = self
+            .text_mode
+            .as_ref()
+            .ok_or_else(|| "Text editing is not active.".to_owned())?;
+        text_session::boolean_format_selection_state_v1(editor, mode, property)
+    }
+
+    pub(super) fn apply_canvas_boolean_format_toggle_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::apply_boolean_format_toggle_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_text_authoring_change(&format!(
+                "{} formatting committed through one canonical scoped text-format operation.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status =
+                    Some(format!("{} formatting rejected: {error}", property.label()));
+            }
+        }
+    }
+
+    pub(super) fn clear_canvas_boolean_format_override_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::clear_boolean_format_override_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_text_authoring_change(&format!(
+                "{} Chaptera override cleared; source/base formatting is effective again.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status = Some(format!(
+                    "{} override clear rejected: {error}",
+                    property.label()
+                ));
+            }
+        }
+    }
+
+    pub(super) fn canvas_paragraph_alignment_state_v1(
+        &self,
+    ) -> Result<paragraph_alignment_ui::DesktopParagraphAlignmentSelectionStateV1, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let mode = self
+            .text_mode
+            .as_ref()
+            .ok_or_else(|| "Text editing is not active.".to_owned())?;
+        paragraph_alignment_ui::paragraph_alignment_selection_state_v1(editor, mode)
+    }
+
+    pub(super) fn apply_canvas_paragraph_alignment_v1(
+        &mut self,
+        value: pub_editor::AuthoredParagraphAlignmentValueV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                paragraph_alignment_ui::apply_paragraph_alignment_v1(editor, mode, value)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(Some(_)) => self.finish_text_authoring_change(
+                "Paragraph alignment committed through one canonical ParagraphId operation.",
+            ),
+            Ok(None) => {
+                self.edit_status =
+                    Some("Selected paragraphs already have that effective alignment.".to_owned());
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Paragraph alignment rejected: {error}"));
+            }
+        }
+    }
+
+    pub(super) fn clear_canvas_paragraph_alignment_override_v1(&mut self) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                paragraph_alignment_ui::clear_paragraph_alignment_override_v1(editor, mode)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_text_authoring_change(
+                "Paragraph alignment Chaptera override cleared; source/base alignment is effective again.",
+            ),
+            Err(error) => {
+                self.edit_status =
+                    Some(format!("Paragraph alignment override clear rejected: {error}"));
+            }
+        }
+    }
+
+    fn apply_canvas_text_keyboard(
+        &mut self,
+        command: chaptera_text_input_adapter::keyboard::KeyboardCommandV1,
+    ) {
+        let before_operations = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::apply_keyboard_command(editor, mode, command)
+            }
+            _ => return,
+        };
+        self.finish_canvas_text_mutation(
+            before_operations,
+            outcome,
+            "Canvas text keyboard edit committed through canonical Story range authority.",
+            "Canvas text keyboard input rejected",
+        );
+    }
+
+    pub(super) fn reposition_canvas_text_caret(
+        &mut self,
+        page_id: &str,
+        point: pub_interaction::DocumentPoint,
+    ) {
+        let Some(mode) = self.text_mode.as_mut() else {
+            return;
+        };
+        if let Err(error) =
+            text_session::reposition_pointer(mode, page_id, point.x.get(), point.y.get())
+        {
+            self.edit_status = Some(format!("Canvas caret move rejected: {error}"));
+        }
+    }
+
+    pub(super) fn process_canvas_text_input(&mut self, ctx: &egui::Context) -> bool {
+        if self.text_mode.is_none() {
+            return false;
+        }
+        if ctx.wants_keyboard_input() {
+            self.exit_canvas_text_mode("focus_transfer");
+            return true;
+        }
+
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            if self.text_mode.is_none() {
+                break;
+            }
+            match event {
+                egui::Event::Text(text) => self.apply_canvas_text_input(&text),
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    if key == egui::Key::Escape {
+                        self.exit_canvas_text_mode("escape");
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::A
+                    {
+                        if let Some(mode) = self.text_mode.as_mut() {
+                            text_session::select_all(mode);
+                        }
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::B
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Bold,
+                        );
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::I
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Italic,
+                        );
+                        continue;
+                    }
+
+                    if let Some(alignment) = paragraph_alignment_shortcut_v1(key, modifiers) {
+                        self.apply_canvas_paragraph_alignment_v1(alignment);
+                        continue;
+                    }
+
+                    if self.process_story_object_keyboard(key, modifiers) {
+                        continue;
+                    }
+
+                    if modifiers.ctrl || modifiers.command || modifiers.alt {
+                        continue;
+                    }
+                    use chaptera_text_input_adapter::keyboard::KeyboardCommandV1;
+                    let command = match (key, modifiers.shift) {
+                        (egui::Key::ArrowLeft, false) => Some(KeyboardCommandV1::MovePrevious),
+                        (egui::Key::ArrowRight, false) => Some(KeyboardCommandV1::MoveNext),
+                        (egui::Key::ArrowLeft, true) => Some(KeyboardCommandV1::ExtendPrevious),
+                        (egui::Key::ArrowRight, true) => Some(KeyboardCommandV1::ExtendNext),
+                        (egui::Key::Backspace, _) => Some(KeyboardCommandV1::DeleteBackward),
+                        (egui::Key::Delete, _) => Some(KeyboardCommandV1::DeleteForward),
+                        _ => None,
+                    };
+                    if let Some(command) = command {
+                        self.apply_canvas_text_keyboard(command);
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    fn show_canvas_text_format_controls_v1(&mut self, ctx: &egui::Context) {
+        if self.text_mode.is_none() {
+            return;
+        }
+
+        let bold = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Bold)
+            .ok();
+        let italic = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Italic)
+            .ok();
+        let paragraph = self.canvas_paragraph_alignment_state_v1().ok();
+
+        let label = |letter: &str, state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            let Some(state) = state else {
+                return letter.to_owned();
+            };
+            if matches!(
+                state.effective,
+                text_session::DesktopBooleanEffectiveStateV1::Mixed
+            ) || matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Mixed
+            ) {
+                format!("{letter}±")
+            } else if matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Base
+            ) {
+                format!("{letter}·")
+            } else {
+                letter.to_owned()
+            }
+        };
+        let active = |state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            state.is_some_and(|state| {
+                matches!(
+                    state.effective,
+                    text_session::DesktopBooleanEffectiveStateV1::Uniform(true)
+                )
+            })
+        };
+
+        egui::Area::new(egui::Id::new("canvas-text-format-toolbar-v1"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 56.0))
+            .movable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Text");
+
+                        let bold_response = ui
+                            .add_enabled_ui(bold.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(bold),
+                                    egui::RichText::new(label("B", bold)).strong(),
+                                )
+                            })
+                            .inner;
+                        bold_response.clone().on_hover_text(
+                            "Bold. · = source/base; ± = mixed. Ctrl+B uses this same scoped operation.",
+                        );
+                        if bold_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Bold,
+                            );
+                        }
+
+                        let italic_response = ui
+                            .add_enabled_ui(italic.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(italic),
+                                    egui::RichText::new(label("I", italic)).italics(),
+                                )
+                            })
+                            .inner;
+                        italic_response.clone().on_hover_text(
+                            "Italic. · = source/base; ± = mixed. Ctrl+I uses this same scoped operation.",
+                        );
+                        if italic_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Italic,
+                            );
+                        }
+
+                        ui.separator();
+                        ui.strong("Paragraph");
+
+                        let paragraph_editable =
+                            paragraph.as_ref().is_some_and(|state| state.is_editable());
+                        for (label, value, shortcut) in [
+                            (
+                                "Left",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Left,
+                                "Ctrl/Cmd+L",
+                            ),
+                            (
+                                "Center",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Center,
+                                "Ctrl/Cmd+E",
+                            ),
+                            (
+                                "Right",
+                                pub_editor::AuthoredParagraphAlignmentValueV1::Right,
+                                "Ctrl/Cmd+R",
+                            ),
+                        ] {
+                            let selected =
+                                paragraph.as_ref().is_some_and(|state| state.is_uniform(value));
+                            let response = ui
+                                .add_enabled_ui(paragraph_editable, |ui| {
+                                    ui.selectable_label(selected, label)
+                                })
+                                .inner;
+                            response.clone().on_hover_text(format!(
+                                "{label} paragraph alignment. {shortcut}. Commands target canonical ParagraphIds, never visual lines."
+                            ));
+                            if response.clicked() {
+                                self.apply_canvas_paragraph_alignment_v1(value);
+                            }
+                        }
+
+                        if let Some(state) = paragraph.as_ref() {
+                            let status = if !state.is_editable() {
+                                "unsupported/read-only"
+                            } else {
+                                match state.provenance {
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Base => {
+                                        "source/base"
+                                    }
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::ChapteraOverride => {
+                                        "Chaptera override"
+                                    }
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Mixed => {
+                                        "mixed provenance"
+                                    }
+                                    paragraph_alignment_ui::DesktopParagraphAlignmentProvenanceStateV1::Unsupported => {
+                                        "unsupported/read-only"
+                                    }
+                                }
+                            };
+                            ui.small(format!("paragraph: {status}"));
+                        } else {
+                            ui.weak("paragraph unavailable");
+                        }
+
+                        ui.menu_button("Revert", |ui| {
+                            let paragraph_enabled = paragraph
+                                .as_ref()
+                                .is_some_and(|state| state.has_chaptera_override);
+                            if ui
+                                .add_enabled(
+                                    paragraph_enabled,
+                                    egui::Button::new("Paragraph alignment to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_paragraph_alignment_override_v1();
+                                ui.close_menu();
+                            }
+
+                            let bold_enabled =
+                                bold.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(bold_enabled, egui::Button::new("Bold to source/base"))
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Bold,
+                                );
+                                ui.close_menu();
+                            }
+
+                            let italic_enabled =
+                                italic.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(
+                                    italic_enabled,
+                                    egui::Button::new("Italic to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Italic,
+                                );
+                                ui.close_menu();
+                            }
+                        });
+
+                        if bold.is_none() && italic.is_none() {
+                            ui.weak("Select a non-empty Story range for Bold/Italic.");
+                        }
+                    });
+                });
+            });
+    }
+
+    pub(super) fn finish_canvas_text_frame(&mut self, ctx: &egui::Context) {
+        self.show_canvas_text_format_controls_v1(ctx);
+        if self.text_mode.is_some() && ctx.wants_keyboard_input() {
+            self.exit_canvas_text_mode("explicit_exit");
+        }
+    }
+}
+
+pub(super) struct CanvasTextPointerRequest {
+    pub(super) canvas_hit: Option<String>,
+    pub(super) text_pointer_request: Option<(String, pub_interaction::DocumentPoint)>,
+    pub(super) text_activation_request: Option<(
+        pub_editor::StoryId,
+        pub_editor::NodeId,
+        String,
+        pub_interaction::DocumentPoint,
+    )>,
+    pub(super) text_exit_request: bool,
+}
+
+pub(super) fn canvas_text_pointer_request(
+    mode: Option<&text_session::DesktopTextMode>,
+    topmost: Option<&SceneHitEntry>,
+    visual: &super::ViewerGeometryDocument,
+    editor: Option<&pub_editor::EditorSession>,
+    page_id_text: &str,
+    point: pub_interaction::DocumentPoint,
+) -> CanvasTextPointerRequest {
+    let mut request = CanvasTextPointerRequest {
+        canvas_hit: None,
+        text_pointer_request: None,
+        text_activation_request: None,
+        text_exit_request: false,
+    };
+    if let Some(mode) = mode {
+        match topmost {
+            Some(hit) if hit.node_id == mode.frame_id => {
+                request.canvas_hit = Some(hit.instance_id.clone());
+                request.text_pointer_request = Some((page_id_text.to_owned(), point));
+            }
+            Some(hit) => {
+                request.text_exit_request = true;
+                request.canvas_hit = Some(hit.instance_id.clone());
+            }
+            None => {
+                request.text_exit_request = true;
+                request.canvas_hit = None;
+            }
+        }
+    } else if let Some(hit) = topmost {
+        request.canvas_hit = Some(hit.instance_id.clone());
+        if strict_document_rect_interior(&hit.bounds, point)
+            && let Some(fragment) = visual
+                .text_fragments
+                .iter()
+                .find(|fragment| fragment.frame_id == hit.node_id)
+            && editor.is_some_and(|editor| {
+                text_session::can_enter_text_mode(editor, fragment.story_id).is_ok()
+            })
+        {
+            request.text_activation_request = Some((
+                fragment.story_id,
+                fragment.frame_id,
+                page_id_text.to_owned(),
+                point,
+            ));
+        }
+    } else {
+        request.canvas_hit = None;
+    }
+    request
+}
+
+pub(super) fn paint_canvas_text_caret(
+    mode: Option<&text_session::DesktopTextMode>,
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    page_id_text: &str,
+) {
+    if let Some(mode) = mode
+        && let Some(stop) = text_session::focus_caret(mode)
+        && stop.page_id == page_id_text
+    {
+        let x = page_rect.left() + stop.page_x_emu as f32 * scene_scale;
+        let y_top = page_rect.top() + stop.page_y_top_emu as f32 * scene_scale;
+        let y_bottom = page_rect.top() + stop.page_y_bottom_emu as f32 * scene_scale;
+        painter.line_segment(
+            [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(232, 126, 36)),
+        );
+    }
+}
+
+pub(super) fn show_canvas_edit_text_button(
+    ui: &mut egui::Ui,
+    text_mode_active: bool,
+    visual: &super::ViewerGeometryDocument,
+    editor: Option<&pub_editor::EditorSession>,
+    selected_node_id: pub_editor::NodeId,
+    selected_rect: egui::Rect,
+    page_rect: egui::Rect,
+) -> Option<(pub_editor::StoryId, pub_editor::NodeId)> {
+    if !text_mode_active
+        && let Some(fragment) = visual
+            .text_fragments
+            .iter()
+            .find(|fragment| fragment.frame_id == selected_node_id)
+        && editor.is_some_and(|editor| {
+            text_session::can_enter_text_mode(editor, fragment.story_id).is_ok()
+        })
+    {
+        let button_width = 76.0_f32;
+        let button_height = 22.0_f32;
+        let button_min = egui::pos2(
+            selected_rect.left(),
+            (selected_rect.top() - button_height - 4.0_f32).max(page_rect.top() + 2.0_f32),
+        );
+        let button_rect =
+            egui::Rect::from_min_size(button_min, egui::vec2(button_width, button_height));
+        if ui
+            .put(button_rect, egui::Button::new("Edit Text"))
+            .clicked()
+        {
+            return Some((fragment.story_id, selected_node_id));
+        }
+    }
+    None
+}
+
+pub(super) fn strict_document_rect_interior(
+    bounds: &pub_editor::RectEmu,
+    point: pub_interaction::DocumentPoint,
+) -> bool {
+    let x = i128::from(point.x.get());
+    let y = i128::from(point.y.get());
+    let left = i128::from(bounds.x.get());
+    let top = i128::from(bounds.y.get());
+    let right = left + i128::from(bounds.width.get());
+    let bottom = top + i128::from(bounds.height.get());
+    x > left && x < right && y > top && y < bottom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CanvasTextMutationFinalization, classify_canvas_text_mutation,
+        invalidate_text_page_frame_cache, paragraph_alignment_shortcut_v1,
+        strict_document_rect_interior,
+    };
+    use crate::egui;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn text_page_cache_invalidation_is_scoped_only_when_projection_and_mapping_are_proven() {
+        let mut cache = BTreeMap::from([(0, "zero"), (1, "one"), (2, "two"), (3, "three")]);
+        let affected = BTreeSet::from([1, 3]);
+
+        invalidate_text_page_frame_cache(&mut cache, Some(&affected), true);
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![0, 2]);
+
+        let mut unknown_scope = BTreeMap::from([(0, "zero"), (1, "one")]);
+        invalidate_text_page_frame_cache(&mut unknown_scope, None, true);
+        assert!(unknown_scope.is_empty());
+
+        let mut failed_projection = BTreeMap::from([(0, "zero"), (1, "one")]);
+        invalidate_text_page_frame_cache(&mut failed_projection, Some(&affected), false);
+        assert!(failed_projection.is_empty());
+    }
+
+    #[test]
+    fn accepted_canvas_text_commits_have_one_finish_owned_refresh_route() {
+        let result =
+            classify_canvas_text_mutation(7, 8, Ok(()), "Text committed.", "Text rejected");
+        assert_eq!(
+            result,
+            CanvasTextMutationFinalization::Committed {
+                status: "Text committed.".to_owned(),
+                rebind_failed: false,
+            }
+        );
+
+        // Caret navigation creates no Editor operation and must not repaint.
+        assert_eq!(
+            classify_canvas_text_mutation(8, 8, Ok(()), "Text committed.", "Text rejected"),
+            CanvasTextMutationFinalization::NoChange
+        );
+    }
+
+    #[test]
+    fn accepted_edit_with_failed_rebind_is_not_misreported_as_rejected() {
+        let outcome = classify_canvas_text_mutation(
+            7,
+            8,
+            Err("caret projection failed".to_owned()),
+            "Text committed.",
+            "Text rejected",
+        );
+        let CanvasTextMutationFinalization::Committed {
+            status,
+            rebind_failed,
+        } = outcome
+        else {
+            panic!("a committed Editor operation must be finalized exactly once");
+        };
+        assert!(rebind_failed);
+        assert!(status.contains("Post-commit caret/layout rebind failed"));
+        assert!(status.contains("Re-enter Edit Text"));
+        assert_ne!(status, "Text rejected: caret projection failed");
+
+        assert_eq!(
+            classify_canvas_text_mutation(
+                8,
+                8,
+                Err("stale selection".to_owned()),
+                "Text committed.",
+                "Text rejected"
+            ),
+            CanvasTextMutationFinalization::Rejected("Text rejected: stale selection".to_owned())
+        );
+    }
+
+    #[test]
+    fn canvas_text_shell_has_no_second_viewer_reprojection_path() {
+        // Source-level fanout guard complements real Desktop GUI visual tests.
+        let source = include_str!("text_session_shell.rs");
+        let old_helper = ["refresh_visual_text", "_projection_from_editor"].concat();
+        let direct_refresh = [".refresh_text_projection", "_from_resolved("].concat();
+        let canonical_finish = ["self.", "finish_text_authoring_change(&status)"].concat();
+        assert!(!source.contains(&old_helper));
+        assert!(!source.contains(&direct_refresh));
+        assert_eq!(source.matches(&canonical_finish).count(), 1);
+
+        let start = source
+            .find("fn finish_text_authoring_change")
+            .expect("text-only finisher exists");
+        let end = source[start..]
+            .find("fn finish_canvas_text_mutation")
+            .map(|offset| start + offset)
+            .expect("text-only finisher has a bounded source section");
+        let text_only_finish = &source[start..end];
+        assert!(text_only_finish.contains("active_text_story_page_cache_indices"));
+        assert!(text_only_finish.contains("invalidate_text_page_frame_cache"));
+        assert!(text_only_finish.contains("sync_visual_stories_from_editor"));
+        assert!(!text_only_finish.contains("page_frame_cache.clear()"));
+        assert!(!text_only_finish.contains("sync_visual_created_text_boxes_from_editor"));
+        assert!(!text_only_finish.contains("sync_visual_geometry_from_editor"));
+    }
+
+    #[test]
+    fn paragraph_alignment_shortcuts_are_text_session_scoped_and_exact() {
+        let command = egui::Modifiers::CTRL;
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::L, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Left)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::E, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::R, command),
+            Some(pub_editor::AuthoredParagraphAlignmentValueV1::Right)
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(egui::Key::R, egui::Modifiers::NONE),
+            None
+        );
+        assert_eq!(
+            paragraph_alignment_shortcut_v1(
+                egui::Key::L,
+                egui::Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Default::default()
+                },
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_text_activation_interior_excludes_exact_frame_boundary() {
+        let bounds = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(200),
+            pub_editor::LengthEmu::new(300),
+            pub_editor::LengthEmu::new(400),
+        );
+        assert!(strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(250),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(100),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(400),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+    }
+}

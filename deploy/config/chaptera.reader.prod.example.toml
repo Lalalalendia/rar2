@@ -1,0 +1,70 @@
+# Guest-only production profile for the public Cloud Reader.
+environment = "prod"
+listen = "127.0.0.1:8080"
+public_origin = "https://reader.chaptera.online"
+
+[sqlite]
+path = "/var/lib/chaptera/chaptera.sqlite"
+journal_mode = "wal"
+synchronous = "full"
+busy_timeout_ms = 5000
+pool_max = 4
+
+[worker]
+heavy_concurrency = 1
+light_concurrency = 2
+quota_shared_capacity = 2
+quota_semantic_headroom = 1
+quota_export_cap = 1
+quota_background_cap = 1
+
+[storage]
+provider = "filesystem"
+quarantine_namespace = "chaptera-reader-quarantine"
+private_namespace = "chaptera-reader-private"
+
+[limits]
+worker_spool_bytes = 4294967296
+min_free_disk_bytes = 1073741824
+
+# The general upload/scanner limits stay aligned even though the guest Reader
+# itself admits only 8 MiB below.
+[upload_admission]
+principal_concurrent_cap = 2
+tenant_concurrent_cap = 8
+principal_bytes_cap = 536870912
+tenant_bytes_cap = 2147483648
+max_single_upload_bytes = 268435456
+lease_seconds = 3600
+retention_seconds = 604800
+
+[source_validation]
+isolation_python = "/usr/bin/python3"
+isolation_harness = "/opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
+worker_binary = "/opt/chaptera/current/chaptera"
+worker_wall_timeout_ms = 15000
+worker_address_space_mb = 512
+worker_cpu_seconds = 10
+worker_open_files = 64
+worker_output_file_mb = 32
+max_file_bytes = 268435456
+max_cfb_entries = 8192
+max_declared_stream_bytes = 536870912
+temp_root = "/var/lib/chaptera/source-scan-tmp"
+
+[edge]
+trusted_proxy_ips = ["127.0.0.1", "::1"]
+max_header_bytes = 32768
+max_api_body_bytes = 8388608
+max_upload_body_bytes = 268435456
+request_timeout_ms = 30000
+
+[cloud_reader_guest]
+session_ttl_seconds = 600
+max_file_bytes = 8388608
+max_concurrent_uploads = 1
+max_reserved_bytes = 8388608
+
+[cloud_reader_guest.rate_subject_secret]
+source = "systemd"
+name = "reader_rate_subject_secret"

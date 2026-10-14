@@ -14,6 +14,7 @@ on:
       - "apps/chaptera-desktop/src/agent.rs"
       - "tools/chaptera-resize-producer/**"
       - "tools/run_local_resize_node_receipt.ps1"
+      - "vendor/producer-a/crates/pub-editor/src/session_geometry.rs"
       - ".github/workflows/editor-resize-node.yml"
   workflow_dispatch:
 

@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-    AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_12,
-    EDITOR_PROJECT_VERSION_V0_13, EditOperation, EditorError, EditorProjectError, EditorSession,
-    LengthEmu, RectEmu, Srgb8V1,
+    AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_10,
+    EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_17,
+    EDITOR_PROJECT_VERSION_V0_22, EDITOR_PROJECT_VERSION_V0_23, EditOperation,
+    EditorEditableTarget, EditorError, EditorProjectError, EditorSession, LengthEmu,
+    LineGeometryV1, PointEmuV1, RectEmu, Srgb8V1,
 };
 use pub_model::{
     Document, DocumentId, NodeId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D,
@@ -26,12 +28,28 @@ fn page_id() -> PageId {
     canonical_id("11000000-0000-4000-8000-000000000001")
 }
 
+fn service_page_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000002")
+}
+
+fn page_b_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000003")
+}
+
+fn page_c_id() -> PageId {
+    canonical_id("11000000-0000-4000-8000-000000000004")
+}
+
 fn node_a() -> NodeId {
     canonical_id("01890f47-0d00-7abc-8def-0123456789ab")
 }
 
 fn node_b() -> NodeId {
     canonical_id("01890f47-0d01-7abc-8def-0123456789ab")
+}
+
+fn line_node() -> NodeId {
+    canonical_id("01890f47-0d02-7abc-8def-0123456789ab")
 }
 
 fn rect(x: i64) -> RectEmu {
@@ -43,21 +61,22 @@ fn rect(x: i64) -> RectEmu {
     )
 }
 
+fn test_page(id: PageId) -> Page {
+    Page {
+        id,
+        size: Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
+        bleed: None,
+        margins: None,
+        children: Vec::new(),
+        extensions: Vec::new(),
+    }
+}
+
 fn graph() -> PubResolvedGraph {
     let page_id = page_id();
     let source_hash = source_hash();
     let mut pages = BTreeMap::new();
-    pages.insert(
-        page_id,
-        Page {
-            id: page_id,
-            size: Size2D::new(LengthEmu::new(8_000_000), LengthEmu::new(10_000_000)),
-            bleed: None,
-            margins: None,
-            children: Vec::new(),
-            extensions: Vec::new(),
-        },
-    );
+    pages.insert(page_id, test_page(page_id));
 
     ResolvedGraph {
         cdm_version: "0.1".into(),
@@ -73,6 +92,45 @@ fn graph() -> PubResolvedGraph {
             format_origin: "pub".into(),
             source_hash,
             pages: vec![page_id],
+            resources: Vec::new(),
+            styles: Vec::new(),
+        },
+        pages,
+        nodes: BTreeMap::new(),
+        stories: BTreeMap::new(),
+        paragraphs: BTreeMap::new(),
+        text_runs: BTreeMap::new(),
+        resources: BTreeMap::new(),
+        styles: BTreeMap::new(),
+        extensions: BTreeMap::new(),
+    }
+}
+
+fn page_order_graph() -> PubResolvedGraph {
+    let source_hash = source_hash();
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let mut pages = BTreeMap::new();
+    for page_id in [customer_a, service, customer_b, customer_c] {
+        pages.insert(page_id, test_page(page_id));
+    }
+
+    ResolvedGraph {
+        cdm_version: "0.1".into(),
+        resolver_version: "page-order-runtime-test".into(),
+        source: SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x2c".into()),
+            adapter_version: "pub-rs/test".into(),
+            source_hash,
+        },
+        document: Document {
+            id: canonical_id::<DocumentId>("33000000-0000-4000-8000-000000000001"),
+            format_origin: "pub".into(),
+            source_hash,
+            pages: vec![customer_a, service, customer_b, customer_c],
             resources: Vec::new(),
             styles: Vec::new(),
         },
@@ -112,8 +170,112 @@ fn create_two(session: &mut EditorSession) {
 }
 
 #[test]
-fn create_delete_history_remains_v0_12_while_current_schema_advances_to_v0_13() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_13);
+fn create_line_is_one_v0_17_history_unit_with_exact_undo_redo_and_replay() {
+    let geometry = LineGeometryV1 {
+        begin: PointEmuV1 {
+            x: 400_000,
+            y: 800_000,
+        },
+        end: PointEmuV1 {
+            x: 100_000,
+            y: 200_000,
+        },
+    };
+    let stroke = paint().stroke;
+
+    let mut session = EditorSession::new(graph()).expect("session");
+    let operation = session
+        .create_line(line_node(), page_id(), geometry, stroke.clone())
+        .expect("create line");
+
+    assert!(matches!(operation, EditOperation::CreateLine { .. }));
+    let line = session.authored_line(line_node()).expect("current line");
+    assert_eq!(line.geometry, geometry);
+    assert_eq!(line.stroke, stroke);
+    assert_eq!(line.page_id, page_id());
+    assert_eq!(line.parent_id, page_id());
+    assert_eq!(
+        session.authored_stack(page_id()).expect("stack").members,
+        vec![line_node()]
+    );
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_17);
+    assert_eq!(project.operations, vec![operation.clone()]);
+
+    session.undo().expect("undo line");
+    assert!(session.authored_line(line_node()).is_none());
+    assert!(
+        session
+            .authored_stack(page_id())
+            .expect("stack after undo")
+            .members
+            .is_empty()
+    );
+
+    session.redo().expect("redo line");
+    let redone = session.authored_line(line_node()).expect("redone line");
+    assert_eq!(redone.geometry, geometry);
+    assert_eq!(redone.stroke, stroke);
+    assert_eq!(
+        session
+            .authored_stack(page_id())
+            .expect("redone stack")
+            .members,
+        vec![line_node()]
+    );
+
+    let mut fresh = EditorSession::new(graph()).expect("fresh session");
+    fresh.apply_project(&project).expect("fresh project replay");
+    let reopened = fresh.authored_line(line_node()).expect("replayed line");
+    assert_eq!(reopened.geometry, geometry);
+    assert_eq!(reopened.stroke, stroke);
+    assert_eq!(
+        fresh
+            .authored_stack(page_id())
+            .expect("replayed stack")
+            .members,
+        vec![line_node()]
+    );
+    assert_eq!(fresh.project(), project);
+    assert_eq!(fresh.source_hash(), source_hash());
+}
+
+#[test]
+fn identity_less_legacy_session_cannot_emit_v0_17_create_line_project() {
+    let mut legacy_project = EditorSession::new(graph())
+        .expect("legacy producer")
+        .project();
+    legacy_project.schema_version = EDITOR_PROJECT_VERSION_V0_10.to_owned();
+    legacy_project.identity = None;
+
+    let mut session = EditorSession::new(graph()).expect("legacy target");
+    session
+        .apply_project(&legacy_project)
+        .expect("empty legacy project remains readable");
+    assert!(session.operations().is_empty());
+
+    session
+        .create_line(
+            line_node(),
+            page_id(),
+            LineGeometryV1 {
+                begin: PointEmuV1 { x: 100, y: 200 },
+                end: PointEmuV1 { x: 300, y: 400 },
+            },
+            paint().stroke,
+        )
+        .expect("runtime Line edit remains admissible");
+
+    assert!(matches!(
+        session.try_project(),
+        Err(EditorProjectError::MissingProjectIdentity)
+    ));
+}
+
+#[test]
+fn create_delete_history_remains_v0_12_while_current_schema_advances() {
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_23);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);
@@ -184,6 +346,166 @@ fn reorder_is_one_v0_13_history_unit_with_exact_undo_redo_and_replay() {
         reopened.authored_stack(page_id()).expect("stack").members,
         vec![node_b(), node_a()]
     );
+}
+
+#[test]
+fn page_reorder_is_one_v0_23_history_unit_with_service_slot_preserved_and_exact_replay() {
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let admitted = vec![customer_a, customer_b, customer_c];
+    let reordered = vec![customer_c, customer_a, customer_b];
+
+    let mut session = EditorSession::new(page_order_graph()).expect("session");
+    assert_eq!(
+        session
+            .current_qualified_page_order_v1(&admitted)
+            .expect("qualified source order"),
+        admitted
+    );
+
+    let operation = session
+        .reorder_pages_v1(admitted.clone(), reordered.clone())
+        .expect("reorder customer pages");
+    assert!(matches!(operation, EditOperation::ReorderPagesV1 { .. }));
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+    assert_eq!(
+        session
+            .current_qualified_page_order_v1(&admitted)
+            .expect("qualified reordered state"),
+        reordered
+    );
+
+    let project = session.project();
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_23);
+    assert_eq!(project.operations, vec![operation.clone()]);
+
+    session.undo().expect("undo page reorder");
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_a, service, customer_b, customer_c]
+    );
+    session.redo().expect("redo page reorder");
+    assert_eq!(
+        session.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+
+    let mut reopened = EditorSession::new(page_order_graph()).expect("fresh session");
+    reopened
+        .apply_project(&project)
+        .expect("replay page reorder");
+    assert_eq!(
+        reopened.graph().document.pages,
+        vec![customer_c, service, customer_a, customer_b]
+    );
+    assert_eq!(
+        reopened
+            .current_qualified_page_order_v1(&admitted)
+            .expect("reopened qualified order"),
+        reordered
+    );
+    assert_eq!(reopened.project(), project);
+    assert_eq!(reopened.source_hash(), source_hash());
+}
+
+#[test]
+fn page_reorder_reaches_physical_idml_and_odg_page_order() {
+    use std::io::{Cursor, Read};
+
+    fn stable_page_token(prefix: &str, page_id: PageId) -> String {
+        let mut out = String::from(prefix);
+        for byte in page_id.as_canonical().into_bytes() {
+            use std::fmt::Write as _;
+            write!(&mut out, "{byte:02x}").expect("hex");
+        }
+        out
+    }
+
+    let customer_a = page_id();
+    let service = service_page_id();
+    let customer_b = page_b_id();
+    let customer_c = page_c_id();
+    let admitted = vec![customer_a, customer_b, customer_c];
+    let reordered = vec![customer_c, customer_a, customer_b];
+
+    let mut session = EditorSession::new(page_order_graph()).expect("session");
+    session
+        .reorder_pages_v1(admitted, reordered)
+        .expect("reorder customer pages");
+
+    let idml = session
+        .export_editable(EditorEditableTarget::Idml, "page-order.idml")
+        .expect("IDML export");
+    let mut idml_zip = zip::ZipArchive::new(Cursor::new(idml.bytes)).expect("IDML zip");
+    let mut designmap = String::new();
+    idml_zip
+        .by_name("designmap.xml")
+        .expect("IDML designmap")
+        .read_to_string(&mut designmap)
+        .expect("read designmap");
+    let idml_tokens =
+        [customer_c, service, customer_a, customer_b].map(|id| stable_page_token("usp", id));
+    let idml_positions = idml_tokens
+        .iter()
+        .map(|token| designmap.find(token).expect("page token in designmap"))
+        .collect::<Vec<_>>();
+    assert!(idml_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let odg = session
+        .export_editable(EditorEditableTarget::Odg, "page-order.odg")
+        .expect("ODG export");
+    let mut odg_zip = zip::ZipArchive::new(Cursor::new(odg.bytes)).expect("ODG zip");
+    let mut content = String::new();
+    odg_zip
+        .by_name("content.xml")
+        .expect("ODG content")
+        .read_to_string(&mut content)
+        .expect("read ODG content");
+    let odg_tokens =
+        [customer_c, service, customer_a, customer_b].map(|id| stable_page_token("Page_", id));
+    let odg_positions = odg_tokens
+        .iter()
+        .map(|token| content.find(token).expect("page token in ODG content"))
+        .collect::<Vec<_>>();
+    assert!(odg_positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn pre_v0_23_or_stale_page_reorder_project_fails_transactionally() {
+    let admitted = vec![page_id(), page_b_id(), page_c_id()];
+    let reordered = vec![page_c_id(), page_id(), page_b_id()];
+
+    let mut producer = EditorSession::new(page_order_graph()).expect("producer");
+    producer
+        .reorder_pages_v1(admitted.clone(), reordered)
+        .expect("reorder");
+    let project = producer.project();
+
+    let mut legacy = project.clone();
+    legacy.schema_version = EDITOR_PROJECT_VERSION_V0_22.to_owned();
+    let mut target = EditorSession::new(page_order_graph()).expect("legacy target");
+    assert!(matches!(
+        target.apply_project(&legacy),
+        Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index: 0 })
+    ));
+    assert!(target.operations().is_empty());
+
+    let mut stale_source = page_order_graph();
+    stale_source.document.pages = vec![page_b_id(), service_page_id(), page_id(), page_c_id()];
+    let mut stale_target = EditorSession::new(stale_source).expect("stale target");
+    assert!(matches!(
+        stale_target.apply_project(&project),
+        Err(EditorProjectError::Operation {
+            index: 0,
+            error: EditorError::StalePageOrder
+        })
+    ));
+    assert!(stale_target.operations().is_empty());
 }
 
 #[test]

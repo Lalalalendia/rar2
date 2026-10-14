@@ -1,9 +1,7 @@
 use pub_editor::{EditorSession, StoryId};
-use pub_model::{AuthorityClass, ReadConfidence, SourceRole};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::fmt;
 
 pub const STORY_EDIT_DOMAIN_VERSION_V1: &str = "chaptera.story-edit-domain.v1";
@@ -244,26 +242,6 @@ pub fn to_interaction_domain_v1(
     }
 }
 
-fn is_exact_primary_story_ref(
-    session: &EditorSession,
-    reference: &pub_model::SourceRef,
-    role: SourceRole,
-    path: &str,
-) -> bool {
-    reference
-        .validate_primary_source(&session.graph().source)
-        .is_ok()
-        && reference.carrier == pub_reader::QUILL_STREAM_PATH
-        && reference.path.as_deref() == Some(path)
-        && reference.role == role
-        && reference.authority == AuthorityClass::Authoritative
-        && reference.confidence == Some(ReadConfidence::Exact)
-        && reference
-            .object_key
-            .as_deref()
-            .is_some_and(|key| key.starts_with("quill/syid/"))
-}
-
 pub fn derive_editor_story_provenance_v1(
     session: &EditorSession,
     story_id: StoryId,
@@ -291,32 +269,10 @@ pub fn derive_editor_story_provenance_v1(
         return Ok(StoryProvenanceV1::ChapteraCreated);
     }
 
-    let source = &session.graph().source;
-    let profile_is_mature_0x2c = source.format == "pub"
-        && source.format_version.as_deref() == Some("0x2c")
-        && source.adapter_version.starts_with("pub-rs/");
+    let confirmed_persisted_quill_story =
+        pub_reader::has_exact_mature_quill_story_identity_v1(&session.graph().source, story);
 
-    let exact_syid_keys = story
-        .source_refs
-        .iter()
-        .filter(|reference| {
-            is_exact_primary_story_ref(session, reference, SourceRole::Relation, "SYID")
-        })
-        .filter_map(|reference| reference.object_key.clone())
-        .collect::<BTreeSet<_>>();
-    let exact_text_keys = story
-        .source_refs
-        .iter()
-        .filter(|reference| {
-            is_exact_primary_story_ref(session, reference, SourceRole::Semantic, "TEXT")
-        })
-        .filter_map(|reference| reference.object_key.clone())
-        .collect::<BTreeSet<_>>();
-    let confirmed_persisted_quill_story = exact_syid_keys
-        .iter()
-        .any(|key| exact_text_keys.contains(key));
-
-    if profile_is_mature_0x2c && confirmed_persisted_quill_story && story.text.ends_with('\r') {
+    if confirmed_persisted_quill_story && story.text.ends_with('\r') {
         Ok(StoryProvenanceV1::ImportedMatureQuillTerminalCr)
     } else {
         Ok(StoryProvenanceV1::ImportedUnknown)

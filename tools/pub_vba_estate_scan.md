@@ -38,15 +38,18 @@ These are scanner evidence states, not claims that Publisher would execute a pro
 
 ## Current call-family taxonomy
 
-The receipt exposes `call_classifier_version`. Classifier `v2.1` is calibrated against the pinned public Publisher VBA tutorial source estate measured in PUB-T-900. It separates document access from page access and avoids treating unrelated `.Rows` / `.Columns` members such as `LayoutGuides.Rows` as table evidence.
+The receipt exposes `call_classifier_version`. Classifier `v2.2` keeps the pinned public tutorial calibration from PUB-T-900 and adds a second real-world calibration surface: the 2016 Stack Overflow Publisher bookmark/page-reference macro project. It separates document access from page access, avoids treating unrelated `.Rows` / `.Columns` members such as `LayoutGuides.Rows` as table evidence, and now records page identity, scratch-area, selection and richer hyperlink/text-frame usage that v2.1 under-counted.
 
 Current families:
 
 - `application_lifecycle`
 - `documents`
 - `pages`
+- `page_identity`
 - `page_lifecycle`
+- `scratch_area`
 - `shapes`
+- `selection`
 - `text`
 - `picture`
 - `tables`
@@ -58,7 +61,7 @@ Current families:
 - `metadata_selectors`
 - `ole_links`
 
-Notable v2/v2.1 corrections/additions:
+Notable v2.2 corrections/additions:
 
 - `ActiveDocument` / `ThisDocument` belong to `documents`, not `pages`;
 - `Documents.Add` and `Documents.Open` are document-family evidence without also incrementing the generic `Documents` symbol;
@@ -66,7 +69,12 @@ Notable v2/v2.1 corrections/additions:
 - both `CreateObject("Publisher.Application")` and `GetObject(, "Publisher.Application")` are recognized as application lifecycle calls;
 - `LayoutGuides`, `RulerGuides`, `Align` and `Distribute` populate `layout`;
 - `SaveAs`, `ExportEmailHTML` and `WebPagePreview` extend `output`;
-- `UpdateOLEObjects` extends `ole_links`.
+- `UpdateOLEObjects` extends `ole_links`;
+- `MasterPages` extends `pages`;
+- `PageID` and `PageNumber` populate the new `page_identity` family;
+- `ScratchArea` and `Selection` receive dedicated families rather than disappearing from the histogram;
+- `HasTextFrame` extends `text`;
+- `TargetType` and `TextToDisplay` extend `hyperlinks`.
 
 The scanner masks comments and ordinary string literals before classification. The deliberate exceptions are the Publisher application identity strings inside `CreateObject` and `GetObject`, because those API identities necessarily live in string literals.
 
@@ -86,7 +94,7 @@ python tools/test_pub_vba_estate_scan.py
 python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py
 ```
 
-The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, CopyToken decoding including the power-of-two `difference=16` boundary, and classifier-v2.1 regressions for document-vs-page separation, non-overlapping document collection calls, context-aware table members, late-bound Publisher acquisition, layout, output and OLE update calls.
+The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, CopyToken decoding including the power-of-two `difference=16` boundary, and classifier-v2.2 regressions for document-vs-page separation, non-overlapping document collection calls, context-aware table members, late-bound Publisher acquisition, layout, output, OLE update calls, plus the real-world bookmark/reference families (`MasterPages`, `ScratchArea`, `Selection`, page identity, `HasTextFrame`, and hyperlink target/display members).
 
 ## Corpus integration
 

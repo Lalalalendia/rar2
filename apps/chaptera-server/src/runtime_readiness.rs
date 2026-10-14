@@ -109,6 +109,36 @@ pub fn ports_with_revision_stream(revision_stream: SqliteRevisionStore) -> Revis
     }
 }
 
+pub struct GuestReaderPorts {
+    pub ports: RuntimePorts,
+    pub revision_readiness: ReadinessHandle,
+    pub blob_store_readiness: ReadinessHandle,
+}
+
+pub fn ports_with_guest_reader(
+    revision_stream: SqliteRevisionStore,
+    blob_store: BlobStoreRuntime,
+) -> GuestReaderPorts {
+    assemble_guest_reader(
+        revision_stream_dependency(revision_stream),
+        blob_store_dependency(blob_store),
+    )
+}
+
+fn assemble_guest_reader(
+    revision: RuntimeDependencyBinding,
+    blob_store: RuntimeDependencyBinding,
+) -> GuestReaderPorts {
+    let mut ports = RuntimePorts::unconfigured();
+    ports.revision_stream = revision.dependency;
+    ports.blob_store = blob_store.dependency;
+    GuestReaderPorts {
+        ports,
+        revision_readiness: revision.readiness,
+        blob_store_readiness: blob_store.readiness,
+    }
+}
+
 pub struct RevisionAndAuthnPorts {
     pub ports: RuntimePorts,
     pub revision_readiness: ReadinessHandle,
@@ -223,7 +253,7 @@ mod tests {
         time::Duration,
     };
 
-    use crate::schema_migration::SqliteMigrationRuntime;
+    use crate::{schema_migration::SqliteMigrationRuntime, state::AppState};
 
     use super::*;
 
@@ -319,6 +349,33 @@ mod tests {
 
         drop(assembled);
         cleanup(&path);
+    }
+
+    #[test]
+    fn guest_reader_profile_requires_only_revision_and_blob_store() {
+        let assembled = assemble_guest_reader(bind(()), bind(()));
+        let state = AppState::new_guest_reader(assembled.ports.clone());
+        let report = state.readiness_report();
+
+        assert!(report.ready);
+        assert!(report.components["revision_stream"].required);
+        assert!(report.components["revision_stream"].ready);
+        assert!(report.components["blob_store"].required);
+        assert!(report.components["blob_store"].ready);
+        for component in ["authn", "authz", "jobs", "observability"] {
+            assert!(!report.components[component].required);
+        }
+
+        assembled
+            .blob_store_readiness
+            .fail("blob_store_unavailable", "synthetic guest storage failure")
+            .unwrap();
+        let degraded = state.readiness_report();
+        assert!(!degraded.ready);
+        assert_eq!(
+            degraded.components["blob_store"].code.as_deref(),
+            Some("blob_store_unavailable")
+        );
     }
 
     #[test]

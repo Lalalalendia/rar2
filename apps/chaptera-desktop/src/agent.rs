@@ -1,7 +1,9 @@
+mod operation_summary;
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, ObjectMutationKindV1, SceneInstanceV1, admit_object_mutation_v1,
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
+use operation_summary::operation_summary;
 use pub_editor::{
     EditOperation, EditorEditableTarget, EditorProject, EditorSession, LengthEmu, NodeId, RectEmu,
     StoryId,
@@ -9,10 +11,11 @@ use pub_editor::{
 use pub_viewer::{ViewerFidelityStatus, ViewerGeometryDocument};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
-
+use std::{
+    fs,
+    io::{self, BufRead, Write},
+    path::{Path, PathBuf},
+};
 const PROTOCOL_VERSION: &str = "chaptera.agent-control.v1";
 const AGENT_CONTROL_CATALOG_JSON: &str =
     include_str!("../../../packages/protocol/editor-agent-control/v1.catalog.json");
@@ -2062,163 +2065,6 @@ fn operation_id(operation: &EditOperation) -> String {
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
-fn operation_summary(operation: &EditOperation) -> Value {
-    match operation {
-        EditOperation::ReplaceStoryRange {
-            story_id,
-            start_scalar,
-            end_scalar,
-            before_story_state_id,
-            after_story_state_id,
-            ..
-        } => json!({
-            "kind":"replace_story_range",
-            "story_id":story_id.as_canonical().to_string(),
-            "start_scalar":start_scalar,
-            "end_scalar":end_scalar,
-            "before_story_state_id":before_story_state_id,
-            "after_story_state_id":after_story_state_id
-        }),
-        EditOperation::ReplaceStoryText {
-            story_id,
-            before,
-            after,
-        } => json!({
-            "kind":"replace_story_text",
-            "story_id":story_id.as_canonical().to_string(),
-            "before_text_sha256":sha256_hex(before.as_bytes()),
-            "after_text_sha256":sha256_hex(after.as_bytes())
-        }),
-        EditOperation::BreakTextFrameForwardLink {
-            story_id,
-            upstream_frame_id,
-            downstream_frame_id,
-            new_story_id,
-            ..
-        } => json!({
-            "kind":"break_text_frame_forward_link",
-            "story_id":story_id.as_canonical().to_string(),
-            "upstream_frame_id":upstream_frame_id.as_canonical().to_string(),
-            "downstream_frame_id":downstream_frame_id.as_canonical().to_string(),
-            "new_story_id":new_story_id.as_canonical().to_string()
-        }),
-        EditOperation::ReplaceTableCellText {
-            node_id,
-            story_id,
-            cell_id,
-            ..
-        } => json!({
-            "kind":"replace_table_cell_text",
-            "node_id":node_id.as_canonical().to_string(),
-            "story_id":story_id.as_canonical().to_string(),
-            "cell_id":cell_id.as_canonical().to_string()
-        }),
-        EditOperation::ReplaceImage {
-            node_id,
-            before_asset,
-            after_asset,
-        } => json!({
-            "kind":"replace_image",
-            "node_id":node_id.as_canonical().to_string(),
-            "before_asset":before_asset.as_ref().map(|value| value.to_string()),
-            "after_asset":after_asset.to_string()
-        }),
-        EditOperation::MoveNode {
-            node_id,
-            before,
-            after,
-        } => json!({
-            "kind":"move_node",
-            "node_id":node_id.as_canonical().to_string(),
-            "before":rect_json(*before),
-            "after":rect_json(*after)
-        }),
-        EditOperation::MoveNodes { page_id, entries } => json!({
-            "kind":"move_nodes",
-            "page_id":page_id.as_canonical().to_string(),
-            "entries":entries.iter().map(|entry| json!({
-                "node_id":entry.node_id.as_canonical().to_string(),
-                "before":rect_json(entry.before),
-                "after":rect_json(entry.after)
-            })).collect::<Vec<_>>()
-        }),
-        EditOperation::ResizeNode {
-            node_id,
-            before,
-            after,
-        } => json!({
-            "kind":"resize_node",
-            "node_id":node_id.as_canonical().to_string(),
-            "before":rect_json(*before),
-            "after":rect_json(*after)
-        }),
-        EditOperation::ResizeNodes { page_id, entries } => json!({
-            "kind":"resize_nodes",
-            "page_id":page_id.as_canonical().to_string(),
-            "entries":entries.iter().map(|entry| json!({
-                "node_id":entry.node_id.as_canonical().to_string(),
-                "before":rect_json(entry.before),
-                "after":rect_json(entry.after)
-            })).collect::<Vec<_>>()
-        }),
-        EditOperation::CreateTextBox {
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            text_preset,
-        } => json!({
-            "kind":"create_text_box",
-            "node_id":node_id.as_canonical().to_string(),
-            "story_id":story_id.as_canonical().to_string(),
-            "page_id":page_id.as_canonical().to_string(),
-            "bounds":rect_json(*bounds),
-            "text_preset":text_preset
-        }),
-        EditOperation::CreateShape {
-            node_id,
-            page_id,
-            parent_id,
-            shape_kind,
-            bounds,
-            transform,
-            paint,
-            provenance,
-        } => json!({
-            "kind":"create_shape",
-            "node_id":node_id.as_canonical().to_string(),
-            "page_id":page_id.as_canonical().to_string(),
-            "parent_id":parent_id.as_canonical().to_string(),
-            "shape_kind":shape_kind,
-            "bounds":rect_json(*bounds),
-            "transform":transform,
-            "paint":paint,
-            "provenance":provenance
-        }),
-        EditOperation::DeleteNode {
-            node_id,
-            page_id,
-            before_state_id,
-            ..
-        } => json!({
-            "kind":"delete_node",
-            "node_id":node_id.as_canonical().to_string(),
-            "page_id":page_id.as_canonical().to_string(),
-            "before_state_id":before_state_id
-        }),
-        EditOperation::ReorderAuthoredStack { transition } => json!({
-            "kind":"reorder_authored_stack",
-            "node_id":transition.node_id.as_canonical().to_string(),
-            "page_id":transition.page_id.as_canonical().to_string(),
-            "mode":transition.mode,
-            "before_index":transition.before_index,
-            "after_index":transition.after_index,
-            "before_state_id":transition.before_state_id,
-            "after_state_id":transition.after_state_id
-        }),
-    }
-}
-
 fn rect_json(rect: RectEmu) -> Value {
     json!({
         "x":rect.x.get(),
@@ -2399,6 +2245,101 @@ mod tests {
             summary["text_preset"]["resource_id"],
             "chaptera.desktop.fallback-font.ubuntu-light.v1"
         );
+    }
+
+    #[test]
+    fn create_line_operation_summary_is_explicit_and_stable() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"01890f47-0c00-7abc-8def-0123456789ab\"").unwrap();
+        let page_id: pub_editor::PageId =
+            serde_json::from_str("\"33333333-3333-3333-3333-333333333333\"").unwrap();
+        let operation = EditOperation::CreateLine {
+            node_id,
+            page_id,
+            parent_id: page_id,
+            geometry: pub_editor::LineGeometryV1 {
+                begin: pub_editor::PointEmuV1 { x: 10, y: 20 },
+                end: pub_editor::PointEmuV1 { x: 300, y: 400 },
+            },
+            stroke: pub_editor::AuthoredSolidStrokeV1 {
+                visible: true,
+                color: pub_editor::Srgb8V1 { r: 4, g: 5, b: 6 },
+                width_emu: 25_400,
+            },
+            provenance: pub_editor::AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "create_line");
+        assert_eq!(summary["node_id"], node_id.as_canonical().to_string());
+        assert_eq!(summary["page_id"], page_id.as_canonical().to_string());
+        assert_eq!(summary["parent_id"], page_id.as_canonical().to_string());
+        assert_eq!(summary["geometry"]["begin"]["x"], 10);
+        assert_eq!(summary["geometry"]["end"]["y"], 400);
+        assert_eq!(summary["stroke"]["width_emu"], 25_400);
+        assert_eq!(summary["provenance"]["kind"], "author_created");
+    }
+
+    #[test]
+    fn paragraph_alignment_operation_summary_is_explicit_and_source_safe() {
+        let paragraph_id: pub_editor::ParagraphId =
+            serde_json::from_str("\"44444444-4444-4444-8444-444444444444\"").unwrap();
+        let operation = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids: vec![paragraph_id],
+            value: pub_editor::AuthoredParagraphAlignmentValueV1::Center,
+            before: vec![pub_editor::ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id,
+                value: None,
+            }],
+            after: vec![pub_editor::ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id,
+                value: Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center),
+            }],
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "set_paragraph_alignment_override");
+        assert_eq!(
+            summary["paragraph_ids"][0],
+            paragraph_id.as_canonical().to_string()
+        );
+        assert_eq!(summary["value"], "center");
+        assert!(summary.get("story_text").is_none());
+    }
+
+    #[test]
+    fn image_crop_operation_summary_hashes_state_without_raw_crop_values() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"11111111-1111-1111-1111-111111111111\"").unwrap();
+        let before = pub_editor::ImageCropStateV1 {
+            top_raw: Some(10),
+            bottom_raw: Some(20),
+            left_raw: Some(30),
+            right_raw: Some(40),
+        };
+        let after = pub_editor::ImageCropStateV1 {
+            top_raw: Some(11),
+            bottom_raw: Some(22),
+            left_raw: Some(33),
+            right_raw: Some(44),
+        };
+        let operation = EditOperation::SetImageCrop {
+            node_id,
+            before,
+            after,
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "set_image_crop");
+        assert_eq!(summary["node_id"], node_id.as_canonical().to_string());
+        assert!(summary["before_crop_state_sha256"].is_string());
+        assert!(summary["after_crop_state_sha256"].is_string());
+        assert!(summary.get("before").is_none());
+        assert!(summary.get("after").is_none());
+        let encoded = summary.to_string();
+        for raw in ["top_raw", "bottom_raw", "left_raw", "right_raw"] {
+            assert!(!encoded.contains(raw));
+        }
     }
 
     #[test]

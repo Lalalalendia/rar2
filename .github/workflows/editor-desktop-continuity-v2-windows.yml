@@ -1,30 +1,97 @@
 name: Editor Desktop Continuity V2 Windows
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
-      - "apps/chaptera-desktop/src/acceptance.rs"
-      - "apps/chaptera-desktop/src/acceptance_v2.rs"
-      - "apps/chaptera-desktop/src/main.rs"
-      - "packages/product/editor-desktop-continuity/v2/**"
-      - "tools/run_editor_desktop_continuity_v2.py"
-      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
-      - "tools/verify_editable_export_geometry.py"
-      - "vendor/producer-a/crates/pub-editor/**"
-      - "vendor/producer-a/crates/pub-odg/**"
-      - "crates/chaptera-scene-instance/**"
+  workflow_call:
+    inputs:
+      editor_binary_artifact_name:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Reusable workflows inherit the caller's github.workflow name. Use a static
+  # child prefix so cancel-in-progress cannot cancel the parent admission DAG.
+  group: editor-desktop-continuity-v2-windows-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify pub-editor Continuity V2 scope
+    runs-on: ubuntu-latest
+    outputs:
+      continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        if: inputs.editor_binary_artifact_name == ''
+        with:
+          # Trust only the base-branch classifier. The PR head is fetched as
+          # diff input and cannot teach this job to skip its own Windows proof.
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        if: inputs.editor_binary_artifact_name == ''
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ inputs.editor_binary_artifact_name == '' && github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        if: inputs.editor_binary_artifact_name == ''
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify Continuity V2 Windows ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ARTIFACT_NAME: ${{ inputs.editor_binary_artifact_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ -n "$ARTIFACT_NAME" ]]; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "reason=parent_artifact_authoritative" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","continuity_v2_windows":true,"reason":"parent_artifact_authoritative"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","continuity_v2_windows":true,"reason":"workflow_dispatch_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-continuity-v2-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
   real-continuity-v2:
+    needs: classify
+    # Parent-supplied exact artifact means the parent already admitted this consumer.
+    # Direct/manual fallback still uses the child classifier, fail-closed on classifier failure.
+    if: ${{ !cancelled() && always() && (inputs.editor_binary_artifact_name != '' || needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +103,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Download exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.editor_binary_artifact_name }}
+          path: ${{ runner.temp }}/chaptera-editor-prebuilt
+
+      - name: Validate exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        run: python tools/ci/validate_editor_binary_artifact.py --artifact-dir "${{ runner.temp }}/chaptera-editor-prebuilt" --expected-candidate-sha "${{ github.sha }}"
+
+      - name: Stage exact-candidate Editor binary
+        if: inputs.editor_binary_artifact_name != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "target/release" | Out-Null
+          Copy-Item "${{ runner.temp }}/chaptera-editor-prebuilt/chaptera-editor.exe" "target/release/chaptera-editor.exe" -Force
 
       - name: Install receipt validator
         run: python -m pip install "jsonschema==4.23.0"
@@ -91,6 +176,7 @@ jobs:
           "CHAPTERA_CONTINUITY_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build current Chaptera desktop
+        if: inputs.editor_binary_artifact_name == ''
         run: cargo build -p chaptera-desktop --release
 
       - name: Run real imported-PUB continuity V2

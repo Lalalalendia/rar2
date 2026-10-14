@@ -1,0 +1,10 @@
+{
+  "schema": "chaptera.source-fanout-budget.v2",
+  "new_leaf_max_conditional_workflows": 6,
+  "tracked_roots": [
+    "vendor/producer-a/crates/",
+    "crates/",
+    "apps/chaptera-desktop/src/",
+    "apps/chaptera-server/src/"
+  ]
+}

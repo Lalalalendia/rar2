@@ -8,7 +8,26 @@
 //!
 //! Здесь реализуются только первые два. Третье остаётся отдельным native-validation gate.
 
+mod bootstrap_new_doc;
 mod seeded;
+mod structural_replay;
+
+pub use bootstrap_new_doc::{
+    BootstrapNewDocBlocked, BootstrapNewDocCandidate, BootstrapNewDocReport,
+    BootstrapNewDocStreamDelta, BootstrapNewDocTemplate, PUB_BOOTSTRAP_NEW_DOC_SCHEMA_V0_1,
+    PUB_BOOTSTRAP_NEW_DOC_TASK, PUB_BOOTSTRAP_RECTANGLE_SEQ_NUM, PUB_BOOTSTRAP_TEXTBOX_SEQ_NUM,
+    bootstrap_new_doc_report_json, materialize_bounded_bootstrap_new_doc_candidate,
+};
+
+pub use structural_replay::{
+    OrdinaryShapeReplayGeometry, OrdinaryShapeReplayPlan, OrdinaryShapeReplayRequest,
+    OrdinaryShapeReplayTemplate, STRUCT_WRITER_REPLAY_SCHEMA_V0_1, StructuralReplayDeleteCandidate,
+    StructuralReplayMaterializationBlocked, StructuralReplayObservedBase,
+    StructuralReplayPlanBlocked, StructuralReplayPubCandidate, StructuralReplayStreamDelta,
+    inspect_t370_ordinary_shape_replay_base, materialize_bounded_t406_create_pub_candidate,
+    materialize_bounded_t406_delete_pub_candidate, plan_bounded_t406_ordinary_shape_replay,
+    plan_bounded_t406_ordinary_shape_replay_from_pub,
+};
 
 pub use seeded::{
     PUB_SEEDED_BOOTSTRAP_REPORT_SCHEMA_V0_1, PUB_SEEDED_NEW_DOCUMENT_STRUCTURAL_GATE,
@@ -587,6 +606,66 @@ mod tests {
                 .expect("output Quill stream"),
             candidate.quill_plan.output_stream
         );
+
+        // Preservation-first CFB acceptance: logical stream inventory and all
+        // non-Quill stream bytes must survive the whole-file materialization.
+        // The CFB allocator may rearrange sectors; compare streams, not offsets.
+        let before_entries = pub_cfb::inspect_reader(Cursor::new(&source))
+            .expect("source CFB inventory")
+            .entries;
+        let after_entries = pub_cfb::inspect_reader(Cursor::new(&candidate.bytes))
+            .expect("candidate CFB inventory")
+            .entries;
+        assert_eq!(before_entries.len(), after_entries.len());
+        for (before_entry, after_entry) in before_entries.iter().zip(after_entries.iter()) {
+            assert_eq!(before_entry.path, after_entry.path);
+            assert_eq!(before_entry.name, after_entry.name);
+            assert_eq!(before_entry.kind, after_entry.kind);
+            if before_entry.kind != pub_cfb::EntryKind::Stream
+                || before_entry.path == QUILL_STREAM_PATH
+            {
+                continue;
+            }
+            assert_eq!(before_entry.len, after_entry.len);
+            assert_eq!(
+                pub_cfb::read_stream_reader(Cursor::new(&source), &before_entry.path)
+                    .expect("source sibling stream"),
+                pub_cfb::read_stream_reader(Cursor::new(&candidate.bytes), &after_entry.path)
+                    .expect("candidate sibling stream"),
+                "non-Quill CFB stream changed: {}",
+                before_entry.path
+            );
+        }
+
+        // Quill itself is shared by several Story identities. A valid target
+        // Story edit must not silently rewrite text belonging to another Story.
+        let after_quill =
+            pub_cfb::read_stream_reader(Cursor::new(&candidate.bytes), QUILL_STREAM_PATH)
+                .expect("candidate Quill");
+        let after_catalog =
+            parse_confirmed_story_catalog(StreamPath(QUILL_STREAM_PATH.into()), &after_quill)
+                .expect("candidate Story catalog");
+        assert_eq!(catalog.stories.len(), after_catalog.stories.len());
+        for before_story in &catalog.stories {
+            let matches = after_catalog
+                .stories
+                .iter()
+                .filter(|story| story.syid == before_story.syid)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                1,
+                "Story SYID multiplicity must be unchanged"
+            );
+            if before_story.syid.0 == 4 {
+                assert_ne!(before_story.utf16le, matches[0].utf16le);
+            } else {
+                assert_eq!(
+                    before_story.utf16le, matches[0].utf16le,
+                    "non-target Story text must survive the Quill rewrite"
+                );
+            }
+        }
 
         let reopened =
             build_mature_0x2c_source_graph(Cursor::new(&candidate.bytes), candidate.output_hash)

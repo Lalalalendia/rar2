@@ -1,8 +1,9 @@
 name: Cancel obsolete PR head runs
 
 on:
+  # fanout: global-pr-required
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
 
 permissions:
@@ -31,12 +32,35 @@ jobs:
 
           preserve_file="$(mktemp)"
           runs_file="$(mktemp)"
-          trap 'rm -f "$preserve_file" "$runs_file"' EXIT
+          status_file="$(mktemp)"
+          trap 'rm -f "$preserve_file" "$runs_file" "$status_file" "$preserve_file.partial" "$status_file.partial"' EXIT
 
-          gh api --paginate --method GET "repos/$GH_REPO/pulls" \
-            -f state=open -f per_page=100 \
-            --jq '.[].head.sha' \
-            | sort -u >"$preserve_file"
+          # GitHub sometimes returns transient 5xx halfway through a paginated
+          # inventory. Never consume a partial response: replay the FULL query
+          # into a temporary file, and cancel nothing if all retries fail.
+          fetch_complete_inventory() {
+            local output="$1"
+            shift
+            local attempt backoff=2
+            for attempt in 1 2 3 4; do
+              if gh api --paginate --method GET "$@" >"${output}.partial"; then
+                mv "${output}.partial" "$output"
+                return 0
+              fi
+              rm -f "${output}.partial"
+              if [[ "$attempt" -eq 4 ]]; then
+                echo "::error::GitHub API inventory incomplete after 4 attempts; no run cancellations were attempted." >&2
+                return 1
+              fi
+              echo "::warning::GitHub API inventory unavailable (attempt ${attempt}/4); retrying in ${backoff}s." >&2
+              sleep "$backoff"
+              backoff=$((backoff * 2))
+            done
+          }
+
+          fetch_complete_inventory "$preserve_file" "repos/$GH_REPO/pulls" \
+            -f state=open -f per_page=100 --jq '.[].head.sha'
+          sort -u -o "$preserve_file" "$preserve_file"
 
           # On opened/synchronize/reopened, preserve this event's head even if the
           # open-PR listing is momentarily behind the webhook. A closed PR is
@@ -51,10 +75,10 @@ jobs:
 
           : >"$runs_file"
           for status in queued in_progress; do
-            gh api --paginate --method GET "repos/$GH_REPO/actions/runs" \
+            fetch_complete_inventory "$status_file" "repos/$GH_REPO/actions/runs" \
               -f status="$status" -f event=pull_request -f per_page=100 \
-              --jq '.workflow_runs[] | [.id, (.head_branch // ""), .head_sha, .name] | @tsv' \
-              >>"$runs_file"
+              --jq '.workflow_runs[] | [.id, (.head_branch // ""), .head_sha, .name] | @tsv'
+            cat "$status_file" >>"$runs_file"
           done
 
           cancelled=0
@@ -92,3 +116,136 @@ jobs:
           echo "Cancelled obsolete PR-head runs: $cancelled"
           echo "Force-cancelled obsolete PR-head runs: $forced"
           echo "Preserved current-head/self runs: $preserved"
+
+      - name: Audit old closed-PR caches (DRY RUN; never delete)
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cache_json="$RUNNER_TEMP/closed-pr-cache-gc.json"
+          if ! gh api -X GET "repos/$GH_REPO/actions/caches?per_page=100" > "$cache_json"; then
+            echo "::warning::closed_pr_cache_gc=unavailable: Actions cache listing denied"
+            echo "closed_pr_cache_gc_status=unavailable" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - "$cache_json" <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              response = json.load(source)
+          caches = response.get("actions_caches", [])
+          total = response.get("total_count")
+          if not isinstance(total, int) or total != len(caches):
+              print("::warning::closed_pr_cache_gc=skipped: cache inventory incomplete")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+                  print("closed_pr_cache_gc_status=incomplete (no deletion)", file=out)
+              sys.exit(0)
+
+          now = dt.datetime.now(dt.timezone.utc)
+          grace = dt.timedelta(minutes=30)
+          statuses = {}
+          candidates = []
+          protected_main = 0
+          protected_open = 0
+          protected_other = 0
+          protected_grace = 0
+          unknown = 0
+          for cache in caches:
+              ref = cache.get("ref", "")
+              if ref == "refs/heads/main":
+                  protected_main += 1
+                  continue
+              match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", ref)
+              if not match:
+                  protected_other += 1
+                  continue
+              number = int(match.group(1))
+              if number not in statuses:
+                  lookup = subprocess.run(
+                      ["gh", "api", "-X", "GET",
+                       f"repos/{os.environ['GH_REPO']}/pulls/{number}"],
+                      capture_output=True, text=True, timeout=20,
+                  )
+                  if lookup.returncode:
+                      statuses[number] = None
+                      print(f"PR_LOOKUP_UNAVAILABLE number={number}")
+                  else:
+                      statuses[number] = json.loads(lookup.stdout)
+              pr = statuses[number]
+              if pr is None:
+                  unknown += 1
+                  continue
+              if pr.get("state") != "closed":
+                  protected_open += 1
+                  continue
+              closed_at = pr.get("closed_at")
+              try:
+                  closed = dt.datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+                  if closed.tzinfo is None:
+                      raise ValueError("naive date")
+              except (AttributeError, ValueError):
+                  unknown += 1
+                  continue
+              if now - closed < grace:
+                  protected_grace += 1
+                  continue
+              ident = cache.get("id")
+              size = cache.get("size_in_bytes")
+              if not isinstance(ident, int) or ident <= 0 or not isinstance(size, int) or size < 0:
+                  unknown += 1
+                  continue
+              candidates.append((number, ident, size, ref))
+          bytes_total = sum(size for _, _, size, _ in candidates)
+          print(f"closed_pr_cache_gc_mode=DRY_RUN")
+          print(f"closed_pr_cache_gc_cache_entries={total}")
+          print(f"closed_pr_cache_gc_candidate_count={len(candidates)}")
+          print(f"closed_pr_cache_gc_candidate_bytes={bytes_total}")
+          print(f"closed_pr_cache_gc_protected_main={protected_main}")
+          print(f"closed_pr_cache_gc_protected_open={protected_open}")
+          print(f"closed_pr_cache_gc_protected_other={protected_other}")
+          print(f"closed_pr_cache_gc_protected_recent={protected_grace}")
+          print(f"closed_pr_cache_gc_unknown={unknown}")
+          for number, ident, size, ref in sorted(candidates):
+              print(f"DRY_RUN_CANDIDATE pr={number} cache_id={ident} bytes={size} ref={ref}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              print("Closed-PR Actions cache cleanup: DRY RUN (no deletion)", file=out)
+              print(f"Eligible entries: {len(candidates)}, bytes: {bytes_total}", file=out)
+              print(f"Protected main: {protected_main}; open PR: {protected_open}; "
+                    f"other: {protected_other}; grace: {protected_grace}; unknown: {unknown}", file=out)
+          PY
+
+      - name: Dispatch ChatGPT PR event controller
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OPENAI_WIF_AUDIENCE: ${{ vars.OPENAI_WIF_AUDIENCE }}
+          OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.OPENAI_IDENTITY_PROVIDER_ID }}
+          OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.OPENAI_SERVICE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$OPENAI_WIF_AUDIENCE" || -z "$OPENAI_IDENTITY_PROVIDER_ID" || -z "$OPENAI_SERVICE_ACCOUNT_ID" ]]; then
+            echo "::notice::ChatGPT GitHub event controller is not armed: configure OPENAI_WIF_AUDIENCE, OPENAI_IDENTITY_PROVIDER_ID and OPENAI_SERVICE_ACCOUNT_ID repository variables."
+            exit 0
+          fi
+
+          gh workflow run chatgpt-github-event-controller.yml \
+            --repo "$GH_REPO" \
+            --ref "$DEFAULT_BRANCH" \
+            -f pr_number="$PR_NUMBER" \
+            -f event_action="$EVENT_ACTION" \
+            -f head_sha="$HEAD_SHA"

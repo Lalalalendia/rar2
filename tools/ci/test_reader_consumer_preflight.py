@@ -25,6 +25,12 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
             "2024",
         )
         self.assertEqual(
+            MODULE.edition_for(
+                "vendor/producer-a/crates/pub-quill/src/typography/paragraph.rs"
+            ),
+            "2024",
+        )
+        self.assertEqual(
             MODULE.edition_for("crates/chaptera-viewer-render-plan/src/lib.rs"),
             "2024",
         )
@@ -70,6 +76,190 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         vendor_clippy = next(command for command in plan["commands"] if command["id"] == "vendor-clippy")
         self.assertIn("--all-targets", vendor_clippy["argv"])
         self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
+
+    def test_pub_viewer_images_leaf_uses_exact_micro_target_only(self) -> None:
+        image_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-viewer/src/images.rs"],
+            "BASE",
+            "HEAD",
+        )
+        image_ids = {command["id"] for command in image_plan["commands"]}
+        self.assertIn("pub-viewer-images-tests", image_ids)
+        self.assertNotIn("vendor-source-free-tests", image_ids)
+        self.assertNotIn("pub-viewer-cmo-slot-compose", image_ids)
+        image_tests = next(
+            command
+            for command in image_plan["commands"]
+            if command["id"] == "pub-viewer-images-tests"
+        )
+        self.assertEqual(
+            image_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-viewer",
+                "--test",
+                "image_placement_v1",
+            ],
+        )
+
+        shared_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
+            "BASE",
+            "HEAD",
+        )
+        shared_ids = {command["id"] for command in shared_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", shared_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", shared_ids)
+        self.assertNotIn("pub-viewer-images-tests", shared_ids)
+
+    def test_pub_quill_paragraph_leaf_uses_exact_lib_filter(self) -> None:
+        paragraph_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography/paragraph.rs"],
+            "BASE",
+            "HEAD",
+        )
+        paragraph_ids = {command["id"] for command in paragraph_plan["commands"]}
+        self.assertIn("pub-quill-paragraph-tests", paragraph_ids)
+        self.assertNotIn("vendor-source-free-tests", paragraph_ids)
+        self.assertIn("vendor-clippy", paragraph_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", paragraph_ids)
+
+        paragraph_tests = next(
+            command
+            for command in paragraph_plan["commands"]
+            if command["id"] == "pub-quill-paragraph-tests"
+        )
+        self.assertEqual(
+            paragraph_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-quill",
+                "--lib",
+                "paragraph",
+            ],
+        )
+
+        root_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+            "BASE",
+            "HEAD",
+        )
+        root_ids = {command["id"] for command in root_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", root_ids)
+        self.assertNotIn("pub-quill-paragraph-tests", root_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", root_ids)
+
+    def test_pub_quill_color_leaf_uses_exact_lib_filter(self) -> None:
+        color_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography/color.rs"],
+            "BASE",
+            "HEAD",
+        )
+        color_ids = {command["id"] for command in color_plan["commands"]}
+        self.assertIn("pub-quill-color-tests", color_ids)
+        self.assertNotIn("vendor-source-free-tests", color_ids)
+        self.assertIn("vendor-clippy", color_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", color_ids)
+
+        color_tests = next(
+            command
+            for command in color_plan["commands"]
+            if command["id"] == "pub-quill-color-tests"
+        )
+        self.assertEqual(
+            color_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-quill",
+                "--lib",
+                "typography::color",
+            ],
+        )
+
+        root_plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+            "BASE",
+            "HEAD",
+        )
+        root_ids = {command["id"] for command in root_plan["commands"]}
+        self.assertIn("vendor-source-free-tests", root_ids)
+        self.assertNotIn("pub-quill-color-tests", root_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", root_ids)
+
+    def test_pub_quill_font_leaf_uses_exact_lib_filter(self) -> None:
+        font_plan = MODULE.build_plan(
+            [MODULE.PUB_QUILL_FONT],
+            "BASE",
+            "HEAD",
+        )
+        font_ids = {command["id"] for command in font_plan["commands"]}
+        self.assertIn("pub-quill-font-tests", font_ids)
+        self.assertNotIn("vendor-source-free-tests", font_ids)
+        self.assertIn("vendor-clippy", font_ids)
+        self.assertIn("pub-viewer-cmo-slot-compose", font_ids)
+        self.assertIn("desktop-reader-check", font_ids)
+
+        font_tests = next(
+            command
+            for command in font_plan["commands"]
+            if command["id"] == "pub-quill-font-tests"
+        )
+        self.assertEqual(
+            font_tests["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-quill",
+                "--lib",
+                "typography::font",
+            ],
+        )
+
+        for paths in (
+            ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+            [MODULE.PUB_QUILL_FONT, MODULE.PUB_QUILL_COLOR],
+            [MODULE.PUB_QUILL_FONT, "vendor/producer-a/crates/pub-reader/src/lib.rs"],
+        ):
+            mixed_plan = MODULE.build_plan(paths, "BASE", "HEAD")
+            mixed_ids = {command["id"] for command in mixed_plan["commands"]}
+            self.assertIn("vendor-source-free-tests", mixed_ids)
+            self.assertNotIn("pub-quill-font-tests", mixed_ids)
+
+    def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
+        plan = MODULE.build_plan(
+            ["vendor/producer-a/Cargo.toml"],
+            "BASE",
+            "HEAD",
+        )
+        clippy = next(
+            command for command in plan["commands"] if command["id"] == "vendor-clippy"
+        )
+        source_free = next(
+            command
+            for command in plan["commands"]
+            if command["id"] == "vendor-source-free-tests"
+        )
+        self.assertIn("pub-model@0.1.0-donor", clippy["argv"])
+        self.assertIn("pub-model@0.1.0-donor", source_free["argv"])
+        self.assertNotIn(
+            ["-p", "pub-model"],
+            [clippy["argv"][index : index + 2] for index in range(len(clippy["argv"]) - 1)],
+        )
 
     def test_pub_editor_change_runs_one_shared_core_gate(self) -> None:
         plan = MODULE.build_plan(

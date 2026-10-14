@@ -1,0 +1,104 @@
+{
+  "receipt_version": "chaptera.experiment-receipt.v1",
+  "task_id": "PUB-T-846",
+  "run_id": "synthetic-complete-001",
+  "producer": {
+    "name": "chaptera.synthetic-experiment-producer",
+    "version": "v1"
+  },
+  "system": {
+    "name": "chaptera-authoring-core",
+    "version": "v0.1"
+  },
+  "build": {
+    "repository": "Lalalalendia/rar2",
+    "revision": "85db0eb7890a6be8f3806b1f33f30a2a67786c39"
+  },
+  "environment": {
+    "os": "ubuntu-24.04",
+    "architecture": "x86_64",
+    "runtime": "python-3.12",
+    "fingerprint_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "source_identity": {
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 2048,
+    "logical_fixture_id": "synthetic-aspect-lock-v1"
+  },
+  "output_identity": {
+    "status": "known",
+    "value": {
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size_bytes": 2064,
+      "logical_fixture_id": "synthetic-aspect-lock-v1-output"
+    }
+  },
+  "operation": {
+    "kind": "ResizeWidth",
+    "parameters": {
+      "width": 150
+    }
+  },
+  "semantic_observations": {
+    "before": {
+      "status": "known",
+      "value": {
+        "geometry": {
+          "height": 200,
+          "width": 100
+        }
+      }
+    },
+    "after": {
+      "status": "known",
+      "value": {
+        "geometry": {
+          "height": 300,
+          "width": 150
+        }
+      }
+    },
+    "reopen": {
+      "status": "known",
+      "value": {
+        "geometry": {
+          "height": 300,
+          "width": 150
+        }
+      }
+    }
+  },
+  "changed_artifact_summary": {
+    "status": "known",
+    "value": {
+      "changed_stream_count": 1,
+      "changed_range_count": 1,
+      "changed_record_count": 1
+    }
+  },
+  "evidence_refs": [
+    {
+      "type": "StateTransitionReceiptV1",
+      "version": "chaptera.state-transition-receipt.v1",
+      "sha256": "bc8e3112f0665f85c3183fc370fd7a4e8dfb437dc164a17695eb943c2634168e",
+      "relative_artifact_name": "state-transition.synthetic.json"
+    }
+  ],
+  "lifecycle_disposition": {
+    "status": "completed",
+    "reason": "synthetic contract exercise completed"
+  },
+  "evidence_scope": [
+    "contract-shape",
+    "deterministic-binding"
+  ],
+  "authority_ceiling": "synthetic_contract",
+  "non_claims": [
+    "No Publisher behavior is claimed.",
+    "No product fidelity decision is authorized."
+  ],
+  "privacy": {
+    "source_free": true,
+    "private_content_serialized": false
+  }
+}

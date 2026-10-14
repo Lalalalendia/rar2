@@ -120,6 +120,7 @@ def validate_observation(
     replacement_binding_id: str,
     replacement_mime: str,
     replacement_byte_len: int,
+    expected_wrap_mutation_scope: str,
 ) -> dict[str, Any]:
     observation = require_exact_keys(
         value,
@@ -274,6 +275,7 @@ def validate_observation(
             "reopen_used_fresh_session",
             "export_from_current_editor_state",
             "replacement_asset_sha_emitted",
+            "wrap_mutation_scope",
         },
         "invariants",
     )
@@ -292,9 +294,25 @@ def validate_observation(
         raise ContinuityV2Error("replacement byte length differs from independently bound bytes")
     if invariants["replacement_asset_sha_emitted"] is not False:
         raise ContinuityV2Error("producer claims replacement asset SHA emission")
+    if invariants["wrap_mutation_scope"] != expected_wrap_mutation_scope:
+        raise ContinuityV2Error("producer wrap mutation scope differs from requested acceptance mode")
 
-    ids = {move["origin_node_id"], resize["origin_node_id"], image["origin_node_id"]}
-    if len(ids) != 3:
+    move_id = move["origin_node_id"]
+    resize_id = resize["origin_node_id"]
+    image_id = image["origin_node_id"]
+    if expected_wrap_mutation_scope in {
+        "text_frame_non_intersecting",
+        "authority_blocked_not_asserted",
+    }:
+        if move_id == resize_id:
+            raise ContinuityV2Error(
+                "newsletter V2 requires MoveNode on a distinct exact source image"
+            )
+        if image_id != resize_id:
+            raise ContinuityV2Error(
+                "newsletter V2 requires ReplaceImage on the resized photo frame"
+            )
+    elif len({move_id, resize_id, image_id}) != 3:
         raise ContinuityV2Error("V2 requires distinct move/resize/image targets")
 
     return {
@@ -634,6 +652,9 @@ def run_continuity_v2(
     expected_hash: str = SAMPLE_SOURCE_HASH,
     expected_len: int = SAMPLE_SOURCE_BYTE_LEN,
     rar_commit: str | None = None,
+    require_explicit_crop: bool = False,
+    require_wrap_irrelevant_mutations: bool = False,
+    newsletter_two_object_mode: bool = False,
 ) -> dict[str, Any]:
     fixture = bind_fixture(fixture, expected_hash=expected_hash, expected_len=expected_len)
     replacement, replacement_bytes, replacement_mime, replacement_sha256 = bind_replacement(
@@ -667,6 +688,15 @@ def run_continuity_v2(
     env["CHAPTERA_SOURCE_HASH"] = expected_hash
     env["CHAPTERA_DESKTOP_CONTINUITY_V2"] = "1"
     env["CHAPTERA_REPLACEMENT_BINDING_ID"] = replacement_binding_id
+    env["CHAPTERA_CONTINUITY_REQUIRE_EXPLICIT_CROP"] = (
+        "1" if require_explicit_crop else "0"
+    )
+    env["CHAPTERA_CONTINUITY_REQUIRE_WRAP_IRRELEVANT"] = (
+        "1" if require_wrap_irrelevant_mutations else "0"
+    )
+    env["CHAPTERA_CONTINUITY_NEWSLETTER_TWO_OBJECT"] = (
+        "1" if newsletter_two_object_mode else "0"
+    )
 
     completed = subprocess.run(
         command,
@@ -702,6 +732,15 @@ def run_continuity_v2(
         replacement_binding_id=replacement_binding_id,
         replacement_mime=replacement_mime,
         replacement_byte_len=len(replacement_bytes),
+        expected_wrap_mutation_scope=(
+            "text_frame_non_intersecting"
+            if require_wrap_irrelevant_mutations
+            else (
+                "authority_blocked_not_asserted"
+                if newsletter_two_object_mode
+                else "not_asserted"
+            )
+        ),
     )
 
     if fixture.stat().st_size != expected_len or sha256_file(fixture) != expected_hash:
@@ -785,6 +824,7 @@ def run_continuity_v2(
                 "export_from_current_editor_state"
             ],
             "replacement_asset_sha_emitted": False,
+            "wrap_mutation_scope": observation["invariants"]["wrap_mutation_scope"],
         },
     }
 
@@ -810,6 +850,11 @@ def main() -> int:
     parser.add_argument("--project-output", required=True, type=pathlib.Path)
     parser.add_argument("--export-output", required=True, type=pathlib.Path)
     parser.add_argument("--receipt-output", required=True, type=pathlib.Path)
+    parser.add_argument("--expected-source-hash", default=SAMPLE_SOURCE_HASH)
+    parser.add_argument("--expected-source-bytes", type=int, default=SAMPLE_SOURCE_BYTE_LEN)
+    parser.add_argument("--require-explicit-crop", action="store_true")
+    parser.add_argument("--require-wrap-irrelevant-mutations", action="store_true")
+    parser.add_argument("--newsletter-two-object-mode", action="store_true")
     parser.add_argument("desktop_command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -825,6 +870,11 @@ def main() -> int:
             export_output=args.export_output,
             receipt_output=args.receipt_output,
             command_template=command,
+            expected_hash=args.expected_source_hash,
+            expected_len=args.expected_source_bytes,
+            require_explicit_crop=args.require_explicit_crop,
+            require_wrap_irrelevant_mutations=args.require_wrap_irrelevant_mutations,
+            newsletter_two_object_mode=args.newsletter_two_object_mode,
         )
     except (ContinuityV2Error, OSError) as error:
         print(str(error), file=sys.stderr)

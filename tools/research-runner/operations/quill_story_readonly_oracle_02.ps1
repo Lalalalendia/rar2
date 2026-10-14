@@ -20,7 +20,19 @@ $ExpectedWitnessSha256 = @(
 $LalamuCommit = "f78cc6f455f4dc222868f9cc035511a6ca7a91ea"
 $AnalysisPath = Join-Path $OutputRoot "analysis\quill-story-readonly-oracle.json"
 $LogPath = Join-Path $OutputRoot "logs\quill-story-readonly-oracle.txt"
-$TempRoot = Join-Path $env:RUNNER_TEMP ("quill-story-readonly-oracle-" + [guid]::NewGuid().ToString("N"))
+$StagePath = Join-Path $OutputRoot "analysis\quill-story-readonly-native-stage.json"
+$script:NativePhase = "fixture_acquisition"
+$script:NativeWitnessIndex = 0
+$FixtureRoot = [string]$env:PUB_RESEARCH_FIXTURE_ROOT
+$TempBase = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    $env:RUNNER_TEMP
+} else {
+    $env:TEMP
+}
+if ([string]::IsNullOrWhiteSpace($TempBase)) {
+    throw "Neither RUNNER_TEMP nor TEMP is available for temporary witness staging"
+}
+$TempRoot = Join-Path $TempBase ("quill-story-readonly-oracle-" + [guid]::NewGuid().ToString("N"))
 $WitnessDir = Join-Path $TempRoot "witness"
 
 function Close-PubDocument {
@@ -57,15 +69,52 @@ function Get-Utf16LeDigest {
     }
 }
 
+function Write-NativeStage {
+    param(
+        [Parameter(Mandatory = $true)][string]$State,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [Parameter(Mandatory = $true)][int]$WitnessIndex
+    )
+    if ($State -notin @("running", "invalid", "complete") -or
+        $Phase -notin @("fixture_acquisition", "publisher_identity", "application_create", "document_open", "stories_collection", "story_read", "source_integrity", "receipt_write", "complete") -or
+        $WitnessIndex -lt 0 -or $WitnessIndex -gt 4) {
+        throw "Invalid Quill native stage contract"
+    }
+    Write-PubJson -Path $StagePath -Value ([ordered]@{
+        schema = "chaptera.quill-readonly-native-stage.v1"
+        experiment_id = "QUILL-STORY-READONLY-ORACLE-02"
+        status = $State
+        phase = $Phase
+        witness_index = $WitnessIndex
+        source_document_bytes_emitted = $false
+        local_filesystem_paths_emitted = $false
+    })
+}
+
 New-Item -ItemType Directory -Force -Path $WitnessDir | Out-Null
 try {
+    Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex 0
+    $witnessOrdinal = 0
     foreach ($sha in $ExpectedWitnessSha256) {
-        $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/$LalamuCommit/pub-corpus/corpus/native/unclassified/$sha.pub"
+        $witnessOrdinal += 1
+        $script:NativeWitnessIndex = $witnessOrdinal
+        Write-NativeStage -State "running" -Phase "fixture_acquisition" -WitnessIndex $witnessOrdinal
         $target = Join-Path $WitnessDir "$sha.pub"
-        Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+        if (-not [string]::IsNullOrWhiteSpace($FixtureRoot)) {
+            $source = Join-Path $FixtureRoot "$sha.pub"
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw "Exact local witness missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination $target -Force
+        } else {
+            $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/$LalamuCommit/pub-corpus/corpus/native/unclassified/$sha.pub"
+            Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+        }
+
         $record = Get-PubFileRecord $target
         if ($record.sha256 -ne $sha) {
-            throw "Downloaded witness SHA mismatch for $sha"
+            $mode = if ([string]::IsNullOrWhiteSpace($FixtureRoot)) { "downloaded" } else { "local" }
+            throw "$mode witness SHA mismatch for $sha"
         }
     }
 
@@ -74,13 +123,21 @@ try {
         throw "Expected exactly four unresolved sentinel PUBs, found $($paths.Count)"
     }
 
+    $script:NativePhase = "publisher_identity"
+    $script:NativeWitnessIndex = 0
+    Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex 0
     $publisher = Get-PubPublisherIdentity
     if (-not $publisher.available) {
         throw "Microsoft Publisher COM automation is unavailable"
     }
 
     $witnesses = @()
+    $witnessOrdinal = 0
     foreach ($item in $paths) {
+        $witnessOrdinal += 1
+        $script:NativeWitnessIndex = $witnessOrdinal
+        $script:NativePhase = "application_create"
+        Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
         $before = Get-PubFileRecord $item.FullName
         $application = $null
         $document = $null
@@ -89,9 +146,15 @@ try {
 
         try {
             $application = New-PubPublisherApplication
+            $script:NativePhase = "document_open"
+            Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
             $document = $application.Open($before.path, $true, $false)
+            $script:NativePhase = "stories_collection"
+            Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
             $storiesCollection = $document.Stories
             $storyCount = [int]$storiesCollection.Count
+            $script:NativePhase = "story_read"
+            Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
 
             for ($storyIndex = 1; $storyIndex -le $storyCount; $storyIndex++) {
                 $story = $null
@@ -120,6 +183,8 @@ try {
             Close-PubPublisherApplication $application
         }
 
+        $script:NativePhase = "source_integrity"
+        Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex $witnessOrdinal
         $after = Get-PubFileRecord $item.FullName
         if ($after.sha256 -ne $before.sha256 -or $after.size -ne $before.size) {
             throw "Source PUB changed during read-only oracle for $($before.sha256)"
@@ -149,9 +214,13 @@ try {
         witness_count = $witnesses.Count
         witnesses = @($witnesses | Sort-Object source_sha256)
         source_commit = $LalamuCommit
-        evidence_boundary = "Exact four SHA-addressed #337 supersets; public pinned donor bytes are downloaded into runner temp and deleted after the run; Publisher Open is read-only only; receipt contains Story UTF-16 lengths and SHA-256 digests, never document text; no Save or SaveAs."
+        witness_source = if ([string]::IsNullOrWhiteSpace($FixtureRoot)) { "pinned_lalamu_download" } else { "exact_local_fixture_root" }
+        evidence_boundary = "Exact four SHA-addressed #337 supersets; witness bytes are SHA-verified and staged into temp from either the exact local fixture root or the pinned public lalamu lineage, then deleted after the run; Publisher Open is read-only only; receipt contains Story UTF-16 lengths and SHA-256 digests, never document text; no Save or SaveAs."
     }
 
+    $script:NativePhase = "receipt_write"
+    $script:NativeWitnessIndex = 0
+    Write-NativeStage -State "running" -Phase $script:NativePhase -WitnessIndex 0
     Write-PubJson -Value $receipt -Path $AnalysisPath
     @(
         "QUILL-STORY-READONLY-ORACLE-02 PASS",
@@ -161,6 +230,12 @@ try {
         "source_unchanged=4/4",
         "document_text_retained=false"
     ) | Set-Content -LiteralPath $LogPath -Encoding utf8
+    $script:NativePhase = "complete"
+    Write-NativeStage -State "complete" -Phase $script:NativePhase -WitnessIndex 0
+}
+catch {
+    Write-NativeStage -State "invalid" -Phase $script:NativePhase -WitnessIndex $script:NativeWitnessIndex
+    throw
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {

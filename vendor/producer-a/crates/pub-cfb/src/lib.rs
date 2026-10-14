@@ -1,9 +1,28 @@
 use anyhow::{Context, Result};
+mod partial_root_recovery;
+mod truncated_recovery;
+pub use partial_root_recovery::{
+    DiscoveredPhysicalStream, PhysicalDirectoryEntry, PhysicalDirectoryInventory, RawDirectoryLink,
+    RawPhysicalDirectoryEntry, RawPhysicalDirectoryInventory, RecoveredDirectoryLink,
+    RecoveredRawDirectoryEntry, RecoveredRawDirectoryPrefix, RecoveredRegularStreamPrefixBySid,
+    RecoveredRootRegularStreamPrefix, RegularStreamStorageKind, RootRegularStreamPrefixStatus,
+    RootRegularStreamSourceRange, RootRegularStreamTruncationReason,
+    discover_regular_stream_sid_reader, inspect_partial_cfb_physical_directory_reader,
+    inspect_partial_cfb_raw_directory_reader, recover_partial_cfb_raw_directory_prefix_reader,
+    recover_regular_stream_prefix_by_sid_reader,
+    recover_regular_stream_prefix_by_sid_reader_with_expected_sha,
+    recover_root_regular_stream_prefix_reader,
+};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
+pub use truncated_recovery::{
+    TruncatedCfbPhysicalGap, TruncatedRawPhysicalDirectoryInventory,
+    inspect_truncated_cfb_raw_directory_reader,
+    recover_truncated_regular_stream_prefix_by_sid_reader_with_expected_sha,
+};
 use uuid::Uuid;
 
 pub const CFB_INVENTORY_SCHEMA_VERSION: u32 = 1;

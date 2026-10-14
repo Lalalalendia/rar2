@@ -8,11 +8,8 @@ use chaptera_server::{
     config::{ChapteraConfig, EnvironmentMode, SecretResolver},
     doctor,
     edge::EdgePolicy,
-    guest_reader_http::{
-        self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore,
-    },
-    guest_reader_worker::{self, IsolatedGuestSceneProducer},
-    install,
+    guest_reader_runtime::build_guest_reader_router,
+    guest_reader_worker, install,
     job_queue::SqliteJobQueue,
     jobs::UnconfiguredWorkerRuntime,
     jobs_runtime::JobsRuntime,
@@ -21,18 +18,20 @@ use chaptera_server::{
         self, IsolatedMigrationEditableRouteProducer, MigrationEditableRouteHttpState,
     },
     product_api_http::{self, ProductApiHttpState},
+    product_editor_assets,
     product_export_http::{self, ProductExportHttpState},
+    product_replay_worker,
     project_persistence_sqlite::SqliteProjectPersistence,
-    public_rate_limit::SqlitePublicRateLimitAuthority,
     revision_materializer::BlobStoreExactSourceLoader,
-    runtime_readiness::{ports_with_configured_serve, ports_with_revision_stream},
+    runtime_readiness::{
+        ports_with_configured_serve, ports_with_guest_reader, ports_with_revision_stream,
+    },
     schema_migration::SqliteMigrationRuntime,
     serve,
     source_authority::SqliteDocumentSourceAuthority,
     source_baseline,
     source_baseline::IsolatedSourceBaselineProducer,
     source_ingress_http::{self, SourceIngressHttpState},
-    source_ingress_security::ProductionSourceSecurityScanner,
     source_ingress_sqlite::SqliteSourceIngressRepository,
     source_validation_job::SourceValidationJobQueue,
     sqlite_store::SqliteRevisionStore,
@@ -42,6 +41,8 @@ use chaptera_server::{
     worker,
     worker_runtime::ConfiguredWorkerRuntime,
     workspace_context::SqliteWorkspaceContextResolver,
+    workspace_http::{self, WorkspaceHttpState},
+    workspace_projects_http::{self, WorkspaceProjectsHttpState},
 };
 use clap::Parser;
 
@@ -62,6 +63,58 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::ProductIsolatedReplay {
+        document_id,
+        expected_sha256,
+        expected_byte_len,
+        project_json,
+        expected_project_sha256,
+        move_node_id,
+        move_x_emu,
+        move_y_emu,
+        story_intent_json,
+        resize_intent_json,
+        scene_revision_id,
+        scene_baseline_revision_id,
+        editable_export_target,
+    } = &cli.command
+    {
+        let move_intent = move_node_id.as_ref().and_then(|node_id| {
+            Some(product_replay_worker::IsolatedMoveNodeIntentV1 {
+                node_id: node_id.clone(),
+                x_emu: (*move_x_emu)?,
+                y_emu: (*move_y_emu)?,
+            })
+        });
+        let scene_intent = scene_revision_id
+            .as_ref()
+            .zip(scene_baseline_revision_id.as_ref())
+            .map(|(revision_id, baseline_revision_id)| {
+                product_replay_worker::IsolatedReaderSceneIntentV1 {
+                    revision_id: revision_id.clone(),
+                    baseline_revision_id: baseline_revision_id.clone(),
+                }
+            });
+        return match product_replay_worker::run_product_replay_worker(
+            document_id,
+            expected_sha256,
+            *expected_byte_len,
+            project_json.as_deref(),
+            expected_project_sha256.as_deref(),
+            move_intent,
+            scene_intent,
+            story_intent_json.as_deref(),
+            editable_export_target.as_deref(),
+            resize_intent_json.as_deref(),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {}", error.code);
                 ExitCode::FAILURE
             }
         };
@@ -197,6 +250,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             busy_timeout,
                         )
                         .await?;
+                        let workspace_router = workspace_http::router(WorkspaceHttpState::new(
+                            auth_http.clone(),
+                            workspace.clone(),
+                        ));
                         let admission = SqliteUploadAdmissionAuthority::open(
                             &config.sqlite.path,
                             config.sqlite.pool_max,
@@ -228,6 +285,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             busy_timeout,
                         )
                         .await?;
+                        let project_catalog_router =
+                            workspace_projects_http::router(WorkspaceProjectsHttpState::new(
+                                auth_http.clone(),
+                                workspace.clone(),
+                                projects.clone(),
+                                authz.clone(),
+                            ));
                         let source_state = SourceIngressHttpState::new(
                             auth_http.clone(),
                             workspace,
@@ -251,6 +315,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             authz.clone(),
                             revision_stream.clone(),
                             BlobStoreExactSourceLoader::new(blob_store.service().clone()),
+                        )?
+                        .with_isolated_replay(
+                            source_ingress_http::baseline_config(source_config),
                         )?;
                         let export_state = ProductExportHttpState::new(
                             auth_http.clone(),
@@ -272,82 +339,29 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             migration_route_producer,
                         );
                         Some(
-                            source_ingress_http::router(source_state)
+                            workspace_router
+                                .merge(project_catalog_router)
+                                .merge(source_ingress_http::router(source_state))
                                 .merge(product_api_http::router(product_state))
                                 .merge(product_export_http::router(export_state))
-                                .merge(migration_editable_route::router(migration_route_state)),
+                                .merge(migration_editable_route::router(migration_route_state))
+                                .merge(product_editor_assets::router()),
                         )
                     } else {
                         None
                     };
 
-                    if let Some(guest_config) = &config.cloud_reader_guest {
-                        let rate_secret = secrets
-                            .cloud_reader_guest_rate_secret
-                            .as_ref()
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    "cloud_reader_guest rate subject secret was not resolved",
-                                )
-                            })?;
-                        let guest_rate = SqlitePublicRateLimitAuthority::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                            guest_config.public_rate_limit(),
-                            rate_secret.expose(),
-                        )
-                        .await?;
-                        let guest_admission = SqliteUploadAdmissionAuthority::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                            guest_config.upload_admission(),
-                        )
-                        .await?;
-                        let guest_sessions = SqliteGuestReaderSessionStore::open(
-                            &config.sqlite.path,
-                            config.sqlite.pool_max,
-                            busy_timeout,
-                        )
-                        .await?;
-                        let guest_scan_config = config.source_validation.materialize();
-                        let guest_scanner =
-                            ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
-                        let guest_scene_worker = IsolatedGuestSceneProducer::new_with_fonts(
-                            guest_scan_config,
-                            &guest_config.font_resources,
-                        )?;
-                        let guest_state = GuestReaderHttpState::new(
-                            guest_rate,
-                            guest_admission,
-                            guest_sessions,
-                            blob_store.service().clone(),
-                            guest_scanner,
-                            guest_scene_worker,
-                            GuestReaderHttpConfig {
-                                session_ttl: Duration::from_secs(guest_config.session_ttl_seconds),
-                                max_file_bytes: guest_config.max_file_bytes,
-                            },
-                        )?;
-                        let guest_cleanup_state = guest_state.clone();
-                        tokio::spawn(async move {
-                            let mut interval = tokio::time::interval(Duration::from_secs(30));
-                            interval
-                                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            loop {
-                                interval.tick().await;
-                                if let Err(error) =
-                                    guest_cleanup_state.cleanup_expired_sessions().await
-                                {
-                                    eprintln!("chaptera_guest_cleanup {error}");
-                                }
-                            }
-                        });
-                        let guest_router = guest_reader_http::router(guest_state);
+                    if let Some(guest_router) =
+                        build_guest_reader_router(&config, &secrets, &blob_store).await?
+                    {
                         product_router = Some(match product_router {
                             Some(router) => router.merge(guest_router),
+                            None if config.storage.provider == "filesystem" => {
+                                // With AuthN but no source/project API, expose only the
+                                // guest temporary preview. Never mount Product pages.
+                                guest_router
+                                    .merge(product_editor_assets::temporary_preview_router())
+                            }
                             None => guest_router,
                         });
                     }
@@ -368,6 +382,37 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         Some(auth_http),
                         !matches!(config.environment, EnvironmentMode::Prod),
                         product_router,
+                    )
+                    .await?;
+                } else if config.cloud_reader_guest.is_some() {
+                    let blob_store = BlobStoreRuntime::open(&config).await?;
+                    let mut product_router =
+                        build_guest_reader_router(&config, &secrets, &blob_store)
+                            .await?
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cloud_reader_guest configuration disappeared during startup",
+                                )
+                            })?;
+                    if config.storage.provider == "filesystem" {
+                        // Anonymous Temporary Edit V0 needs its read-only web
+                        // preview even when AuthN/SourceIngress are disabled.
+                        // The restricted router denies all Product Editor pages.
+                        product_router =
+                            product_router.merge(product_editor_assets::temporary_preview_router());
+                    }
+                    drop(secrets);
+
+                    let assembled = ports_with_guest_reader(revision_stream, blob_store);
+                    let state = AppState::new_guest_reader(assembled.ports);
+                    serve::run_with_auth_local_product(
+                        config.runtime_config(),
+                        edge_policy,
+                        state,
+                        None,
+                        !matches!(config.environment, EnvironmentMode::Prod),
+                        Some(product_router),
                     )
                     .await?;
                 } else {
@@ -423,6 +468,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::ProductIsolatedReplay { .. } => unreachable!(
+            "product-isolated-replay is dispatched synchronously before Tokio runtime creation"
         ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"

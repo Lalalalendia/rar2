@@ -8,19 +8,25 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_LENGTH, RETRY_AFTER},
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
     },
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
+};
+use chaptera_cdm_model::{
+    AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1, canonical_revision_json_v1,
+    derive_authoring_revision_id_v1,
 };
 use chaptera_failure_intake_protocol::{
     ClusterDispositionV1, ExactByteDispositionV1, FailureClassificationV1, INTAKE_RECEIPT_V1,
     IntakeConsentRequestV1, IntakeReceiptV1, RETENTION_POLICY_V1, ServerIntakeEvidenceV1,
 };
 use futures_util::StreamExt;
+use pub_editor::{EditOperation, EditorProject};
+use pub_reader::PubResolvedGraph;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,19 +35,30 @@ use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     blob_store::{BlobStoreError, BlobStoreService, CreateBindingRequest, ResourceKind},
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
+    product_replay_worker::{
+        IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
+        IsolatedResizeNodeIntentV1, IsolatedStoryRangeIntentV1,
+    },
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
     reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
     reader_observability::ReaderObservabilityV1,
+    revision_materializer::{
+        EDITOR_REVISION_EVENT_SCHEMA_V1, EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        EditorRevisionEventV1, append_event_operation, cloud_revision_project,
+        decode_editor_revision_event_v1, encode_editor_revision_event_v1, project_sha256,
+    },
+    source_baseline::{derive_commit_revision_identities, derive_import_baseline_identities},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
+    sqlite_store::{AppendOutcome, RevisionEdge, RevisionIdentityBinding, SqliteRevisionStore},
     upload_admission::{
         ReserveUploadOutcome, SqliteUploadAdmissionAuthority, UploadAdmissionError,
         UploadAdmissionRequest,
@@ -57,7 +74,10 @@ const CONTRIBUTION_CAPABILITY_TTL: Duration = Duration::from_secs(5 * 60);
 const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str = "chaptera.reader-contribution-capability.v1";
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
+const TEMPORARY_EDIT_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TEMPORARY_EDITOR_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_TEMPORARY_EDITOR_REVISIONS: usize = 128;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GuestReaderHttpConfig {
@@ -83,6 +103,13 @@ impl GuestReaderHttpConfig {
 }
 
 #[derive(Clone)]
+struct TemporaryEditorCurrentBackend {
+    worker: IsolatedProductReplayProducer,
+    revisions: SqliteRevisionStore,
+    admission: Arc<tokio::sync::Semaphore>,
+}
+
+#[derive(Clone)]
 pub struct GuestReaderHttpState {
     rate: SqlitePublicRateLimitAuthority,
     admission: SqliteUploadAdmissionAuthority,
@@ -90,6 +117,8 @@ pub struct GuestReaderHttpState {
     blob_store: BlobStoreService,
     scanner: Arc<ProductionSourceSecurityScanner>,
     scene_worker: IsolatedGuestSceneProducer,
+    temporary_editor: Option<TemporaryEditorCurrentBackend>,
+    cleanup_lock: Arc<tokio::sync::Mutex<()>>,
     observability: ReaderObservabilityV1,
     config: GuestReaderHttpConfig,
 }
@@ -110,10 +139,7 @@ async fn issue_contribution_capability(
     let session = state
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
-    if session.state != GuestSessionState::Opened
-        || session.classification.as_deref() != Some("unsupported")
-        || session.quarantine_deleted_at_ms.is_some()
-    {
+    if !contribution_eligible(&session) {
         return Err(GuestReaderError::unprocessable(
             "guest_contribution_ineligible",
         ));
@@ -187,10 +213,7 @@ async fn contribute_session(
     let session = state
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
-    if session.state != GuestSessionState::Opened
-        || session.classification.as_deref() != Some("unsupported")
-        || session.quarantine_deleted_at_ms.is_some()
-    {
+    if !contribution_eligible(&session) {
         return Err(GuestReaderError::unprocessable(
             "guest_contribution_ineligible",
         ));
@@ -226,6 +249,13 @@ async fn retain_contribution(
     submission: &ResearchSubmission,
     now_ms: i64,
 ) -> Result<IntakeReceiptV1, GuestReaderError> {
+    // The private temporary editing mode must never cross into research
+    // retention, even if a valid contribution token existed for a reader.
+    if !contribution_eligible(session) {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
     if submission.session_id != session.session_id || submission.expires_at_ms <= now_ms {
         return Err(GuestReaderError::conflict(
             "guest_contribution_capability_invalid",
@@ -372,9 +402,28 @@ impl GuestReaderHttpState {
             blob_store,
             scanner: Arc::new(scanner),
             scene_worker,
+            temporary_editor: None,
+            cleanup_lock: Arc::new(tokio::sync::Mutex::new(())),
             observability: ReaderObservabilityV1::default(),
             config,
         })
+    }
+}
+
+impl GuestReaderHttpState {
+    /// Shares the existing exact RevisionStream SQLite pool and the confined
+    /// Product EditorSession worker; never registers another PUB parser.
+    pub fn with_temporary_current(
+        mut self,
+        worker: IsolatedProductReplayProducer,
+        revisions: SqliteRevisionStore,
+    ) -> Self {
+        self.temporary_editor = Some(TemporaryEditorCurrentBackend {
+            worker,
+            revisions,
+            admission: Arc::new(tokio::sync::Semaphore::new(2)),
+        });
+        self
     }
 }
 
@@ -404,6 +453,77 @@ pub fn router(state: GuestReaderHttpState) -> Router {
         .with_state(state)
 }
 
+/// Mounted only on filesystem-backed Guest Reader instances. The temporary
+/// editor reuses its private upload and scene lifecycle without adding a
+/// second parser, auth provider or persistent document catalog.
+pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
+    Router::new()
+        .route(
+            "/v1/editor/temporary-sessions",
+            post(issue_temporary_edit_session),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}",
+            delete(delete_temporary_editor_session),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/current",
+            get(temporary_editor_current),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/move-node",
+            post(temporary_editor_move_node),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/story-range",
+            post(temporary_editor_story_range),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/resize-node",
+            post(temporary_editor_resize_node),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/scene",
+            get(temporary_editor_scene),
+        )
+        .route(
+            "/v1/editor/temporary-sessions/{session_id}/exports/{target}",
+            get(temporary_editor_edited_export),
+        )
+        .with_state(state)
+}
+
+/// Explicit anonymous owner revocation. The SQLite state transition denies
+/// all further Guest reads/commits before any physical source deletion starts.
+/// A failed physical delete leaves a revoked, expired row for the sweeper.
+async fn delete_temporary_editor_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, GuestReaderError> {
+    if !is_temporary_edit_session(&session_id) {
+        return Err(GuestReaderError::not_found("guest_session_not_found"));
+    }
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    let owned = state.authorized_session(&session_id, &headers, now).await?;
+    if !state.sessions.revoke_temporary(&session_id, now).await? {
+        return Err(GuestReaderError::gone("guest_session_expired"));
+    }
+    // Existing cleanup owns the exact quarantine generation and RevisionStream
+    // foreign-key purge; a successful 204 means physical cleanup succeeded.
+    state.cleanup_one(owned, now).await?;
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IssueGuestSessionBody {
@@ -420,6 +540,8 @@ struct IssueGuestSessionResponse {
     upload_path: String,
     open_path: String,
     scene_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -493,11 +615,1622 @@ impl<T: Serialize> IntoResponse for GuestJson<T> {
     }
 }
 
+/// The first no-account EditorSession bridge. It reads the same source byte
+/// identity already accepted by Guest Reader, but runs the *existing* Product
+/// EditorSession replay inside isolation. This route is read-only; it does not
+/// create a durable user Project or extend the one-hour temporary TTL.
+#[derive(Debug, Serialize)]
+struct TemporaryEditorCurrentResponse {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    revision_cursor: i64,
+    canonical_authoring_revision_id: String,
+    baseline_revision_id: String,
+    expires_at_ms: i64,
+    project: EditorProject,
+    authoring_graph: PubResolvedGraph,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorSceneResponse {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    expires_at_ms: i64,
+    scene: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditorMoveNodeRequest {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: TemporaryMoveNodeIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryMoveNodeIntent {
+    kind: String,
+    node_id: String,
+    x_emu: i64,
+    y_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorMoveNodeAccepted {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    client_operation_id: String,
+    canonical_operation: EditOperation,
+    expires_at_ms: i64,
+    replayed: bool,
+    scene_refresh: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditorResizeNodeRequest {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: TemporaryResizeNodeIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryResizeNodeIntent {
+    kind: String,
+    node_id: String,
+    x_emu: i64,
+    y_emu: i64,
+    width_emu: i64,
+    height_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorResizeNodeAccepted {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    client_operation_id: String,
+    canonical_operation: EditOperation,
+    expires_at_ms: i64,
+    replayed: bool,
+    scene_refresh: &'static str,
+}
+
+fn validate_temporary_resize_node_request(
+    request: &TemporaryEditorResizeNodeRequest,
+    path_session_id: &str,
+) -> Result<(), GuestReaderError> {
+    if request.protocol_version != "chaptera.commit-request.v1"
+        || !is_temporary_edit_session(path_session_id)
+        || request.document_id != path_session_id
+        || request.command.kind != "resize_node"
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_resize_request_invalid",
+        ));
+    }
+    if request.client_operation_id.is_empty()
+        || request.client_operation_id.len() > 160
+        || !request
+            .client_operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+        || request.command.node_id.is_empty()
+        || request.command.node_id.len() > 128
+        || request.command.node_id.chars().any(char::is_control)
+        || request.command.width_emu <= 0
+        || request.command.height_emu <= 0
+        || request
+            .command
+            .x_emu
+            .checked_add(request.command.width_emu)
+            .is_none()
+        || request
+            .command
+            .y_emu
+            .checked_add(request.command.height_emu)
+            .is_none()
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_resize_intent_invalid",
+        ));
+    }
+    let valid_hash = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    };
+    if !valid_hash(&request.source_hash)
+        || !request
+            .base_revision_id
+            .strip_prefix("sha256:")
+            .is_some_and(valid_hash)
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_resize_revision_invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn temporary_resize_request_hash(
+    request: &TemporaryEditorResizeNodeRequest,
+) -> Result<String, GuestReaderError> {
+    let bytes = canonical_revision_json_v1(request)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_resize_hash_failed"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn temporary_resize_accepted(
+    edge: RevisionEdge,
+    binding: RevisionIdentityBinding,
+    expires_at_ms: i64,
+    replayed: bool,
+) -> Result<GuestJson<TemporaryEditorResizeNodeAccepted>, GuestReaderError> {
+    if edge.document_id != binding.document_id
+        || edge.child_revision != binding.service_revision_id
+        || binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1
+    {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_resize_receipt_invalid",
+        ));
+    }
+    let event = decode_editor_revision_event_v1(&edge)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_resize_receipt_invalid"))?;
+    if !matches!(event.operation, EditOperation::ResizeNode { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_resize_receipt_invalid",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorResizeNodeAccepted {
+        protocol_version: "chaptera.temporary-editor-resize-node.v1",
+        document_id: edge.document_id,
+        source_hash: event.source_sha256,
+        base_revision_id: edge.parent_revision,
+        revision_id: edge.child_revision,
+        canonical_authoring_revision_id: binding.canonical_revision_id,
+        client_operation_id: edge.operation_id,
+        canonical_operation: event.operation,
+        expires_at_ms,
+        replayed,
+        scene_refresh: "current",
+    }))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditorStoryRangeRequest {
+    protocol_version: String,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    client_operation_id: String,
+    command: TemporaryStoryRangeIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryStoryRangeIntent {
+    kind: String,
+    story_id: String,
+    start_scalar: u32,
+    end_scalar: u32,
+    replacement_text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TemporaryEditorStoryRangeAccepted {
+    protocol_version: &'static str,
+    document_id: String,
+    source_hash: String,
+    base_revision_id: String,
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    client_operation_id: String,
+    canonical_operation: EditOperation,
+    expires_at_ms: i64,
+    replayed: bool,
+    scene_refresh: &'static str,
+}
+
+/// This shape check is not Story eligibility: only the confined canonical
+/// EditorSession decides whether the actual source-backed Story is mutable.
+fn validate_temporary_story_range_request(
+    request: &TemporaryEditorStoryRangeRequest,
+    path_session_id: &str,
+) -> Result<(), GuestReaderError> {
+    if request.protocol_version != "chaptera.commit-request.v1"
+        || !is_temporary_edit_session(path_session_id)
+        || request.document_id != path_session_id
+        || request.command.kind != "replace_story_range"
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_story_request_invalid",
+        ));
+    }
+    if request.client_operation_id.is_empty()
+        || request.client_operation_id.len() > 160
+        || !request
+            .client_operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+        || request.command.story_id.is_empty()
+        || request.command.story_id.len() > 128
+        || request.command.story_id.chars().any(char::is_control)
+        || request.command.end_scalar < request.command.start_scalar
+        || request.command.replacement_text.len() > 8192
+        || request
+            .command
+            .replacement_text
+            .chars()
+            .any(char::is_control)
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_story_intent_invalid",
+        ));
+    }
+    let valid_hash = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    };
+    if !valid_hash(&request.source_hash)
+        || !request
+            .base_revision_id
+            .strip_prefix("sha256:")
+            .is_some_and(valid_hash)
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_story_revision_invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn temporary_story_request_hash(
+    request: &TemporaryEditorStoryRangeRequest,
+) -> Result<String, GuestReaderError> {
+    let bytes = canonical_revision_json_v1(request)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_story_hash_failed"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn temporary_story_accepted(
+    edge: RevisionEdge,
+    binding: RevisionIdentityBinding,
+    expires_at_ms: i64,
+    replayed: bool,
+) -> Result<GuestJson<TemporaryEditorStoryRangeAccepted>, GuestReaderError> {
+    if edge.document_id != binding.document_id
+        || edge.child_revision != binding.service_revision_id
+        || binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1
+    {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_story_receipt_invalid",
+        ));
+    }
+    let event = decode_editor_revision_event_v1(&edge)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_story_receipt_invalid"))?;
+    if !matches!(event.operation, EditOperation::ReplaceStoryRange { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_story_receipt_invalid",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorStoryRangeAccepted {
+        protocol_version: "chaptera.temporary-editor-story-range.v1",
+        document_id: edge.document_id,
+        source_hash: event.source_sha256,
+        base_revision_id: edge.parent_revision,
+        revision_id: edge.child_revision,
+        canonical_authoring_revision_id: binding.canonical_revision_id,
+        client_operation_id: edge.operation_id,
+        canonical_operation: event.operation,
+        expires_at_ms,
+        replayed,
+        scene_refresh: "current",
+    }))
+}
+
+/// Use the existing Product MoveNode intent envelope, but authorize it only
+/// through a temporary Guest capability, never through Product OIDC/AuthZ.
+fn validate_temporary_move_node_request(
+    request: &TemporaryEditorMoveNodeRequest,
+    path_session_id: &str,
+) -> Result<(), GuestReaderError> {
+    if request.protocol_version != "chaptera.commit-request.v1"
+        || !is_temporary_edit_session(path_session_id)
+        || request.document_id != path_session_id
+        || request.command.kind != "move_node_to"
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_move_request_invalid",
+        ));
+    }
+    if request.client_operation_id.is_empty()
+        || request.client_operation_id.len() > 160
+        || !request
+            .client_operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+        || request.command.node_id.is_empty()
+        || request.command.node_id.len() > 192
+        || request.command.node_id.chars().any(char::is_control)
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_move_identity_invalid",
+        ));
+    }
+    let valid_hash = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    };
+    if !valid_hash(&request.source_hash)
+        || !request
+            .base_revision_id
+            .strip_prefix("sha256:")
+            .is_some_and(valid_hash)
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_move_revision_invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn temporary_move_request_hash(
+    request: &TemporaryEditorMoveNodeRequest,
+) -> Result<String, GuestReaderError> {
+    let bytes = canonical_revision_json_v1(request)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_move_hash_failed"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn temporary_move_accepted(
+    edge: RevisionEdge,
+    binding: RevisionIdentityBinding,
+    expires_at_ms: i64,
+    replayed: bool,
+) -> Result<GuestJson<TemporaryEditorMoveNodeAccepted>, GuestReaderError> {
+    if edge.document_id != binding.document_id
+        || edge.child_revision != binding.service_revision_id
+        || binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1
+    {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_move_receipt_invalid",
+        ));
+    }
+    let event = decode_editor_revision_event_v1(&edge)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_move_receipt_invalid"))?;
+    if !matches!(event.operation, EditOperation::MoveNode { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_move_receipt_invalid",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorMoveNodeAccepted {
+        protocol_version: "chaptera.temporary-editor-move-node.v1",
+        document_id: edge.document_id,
+        source_hash: event.source_sha256,
+        base_revision_id: edge.parent_revision,
+        revision_id: edge.child_revision,
+        canonical_authoring_revision_id: binding.canonical_revision_id,
+        client_operation_id: edge.operation_id,
+        canonical_operation: event.operation,
+        expires_at_ms,
+        replayed,
+        scene_refresh: "current",
+    }))
+}
+
+fn require_temporary_editor_current_session(
+    session: &GuestReaderSession,
+) -> Result<(), GuestReaderError> {
+    if !is_temporary_edit_session(&session.session_id) {
+        return Err(GuestReaderError::not_found("guest_session_not_found"));
+    }
+    if session.state != GuestSessionState::Opened
+        || !matches!(
+            session.classification.as_deref(),
+            Some("supported" | "partial")
+        )
+        || session.quarantine_deleted_at_ms.is_some()
+        || session.source_sha256.is_none()
+    {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_source_not_admitted",
+        ));
+    }
+    Ok(())
+}
+
+async fn read_exact_temporary_editor_source(
+    state: &GuestReaderHttpState,
+    session: &GuestReaderSession,
+) -> Result<Vec<u8>, GuestReaderError> {
+    let observed = session
+        .observed_byte_len
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_storage_identity_missing"))?;
+    if observed == 0 || observed > MAX_TEMPORARY_EDITOR_SOURCE_BYTES {
+        return Err(GuestReaderError::payload_too_large(
+            "temporary_editor_source_too_large",
+        ));
+    }
+    let generation = session
+        .storage_generation
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_storage_identity_missing"))?;
+    let etag = session
+        .object_etag
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_storage_identity_missing"))?;
+    let expected_hash = session
+        .source_sha256
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_source_identity_missing"))?;
+
+    let exact = state
+        .blob_store
+        .open_quarantine_exact(
+            GUEST_SERVICE_TENANT_ID,
+            &session.upload_id,
+            generation,
+            etag,
+            observed,
+        )
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_source_unavailable"))?;
+    let mut limited = exact.take(MAX_TEMPORARY_EDITOR_SOURCE_BYTES + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_source_read_failed"))?;
+    if bytes.len() as u64 != observed || format!("{:x}", Sha256::digest(&bytes)) != expected_hash {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    Ok(bytes)
+}
+
+async fn temporary_editor_current(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<GuestJson<TemporaryEditorCurrentResponse>, GuestReaderError> {
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    temporary_editor_current_inner(&state, &session_id, &headers).await
+}
+
+/// Only these existing canonical edit kinds may be reconstructed from an
+/// anonymous temporary session. The policy is narrower than EditorSession.
+fn temporary_editor_replay_operation_admitted(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::MoveNode { .. }
+            | EditOperation::ReplaceStoryRange { .. }
+            | EditOperation::ResizeNode { .. }
+    )
+}
+
+/// Shared private canonical Current replay. HTTP GET and Guest mutation each
+/// charge one rate-limit admission, never two admissions for the same action.
+async fn temporary_editor_current_inner(
+    state: &GuestReaderHttpState,
+    session_id: &str,
+    headers: &HeaderMap,
+) -> Result<GuestJson<TemporaryEditorCurrentResponse>, GuestReaderError> {
+    let session = state
+        .authorized_session(session_id, headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&session)?;
+    let now = now_ms()?;
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+    // One anonymous bearer cannot exhaust server CPU by queuing unbounded
+    // isolated EditorSession workers. This limit is independent of upload cap.
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+
+    let source_hash = session
+        .source_sha256
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_source_identity_missing"))?;
+    let source_bytes = read_exact_temporary_editor_source(state, &session).await?;
+    let baseline_project = backend
+        .worker
+        .baseline_project(session_id, source_hash, &source_bytes)
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("temporary_editor_canonical_unsupported"))?;
+    let mut project = cloud_revision_project(&baseline_project);
+    let baseline = derive_import_baseline_identities(
+        session_id,
+        source_hash,
+        &project.schema_version,
+        &project,
+    )
+    .map_err(|_| GuestReaderError::internal("temporary_editor_baseline_invalid"))?;
+
+    let mut revision_id = baseline.service_revision_id.clone();
+    let mut canonical_revision_id = baseline.canonical_authoring_revision_id;
+    let mut revision_cursor = 0_i64;
+    let mut project_hash = project_sha256(&project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let edges = backend
+        .revisions
+        .load_document_edges(session_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+    if edges.len() > MAX_TEMPORARY_EDITOR_REVISIONS {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_revision_limit",
+        ));
+    }
+    for edge in edges {
+        if edge.parent_revision != revision_id
+            || edge.parent_cursor != revision_cursor
+            || edge.semantic_schema_version != EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION
+            || edge.authoring_root_hash.is_some()
+        {
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
+        }
+        let event = decode_editor_revision_event_v1(&edge)
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        if event.source_sha256 != source_hash || event.before_project_sha256 != project_hash {
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
+        }
+        if !temporary_editor_replay_operation_admitted(&event.operation) {
+            return Err(GuestReaderError::unprocessable(
+                "temporary_editor_revision_unsupported",
+            ));
+        }
+        project = append_event_operation(project, event.operation)
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        project_hash = project_sha256(&project)
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        if project_hash != edge.resulting_state_hash || project_hash != event.after_project_sha256 {
+            return Err(GuestReaderError::internal(
+                "temporary_editor_revision_invalid",
+            ));
+        }
+        let identity = backend
+            .revisions
+            .require_revision_identity(session_id, &edge.child_revision)
+            .await
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        canonical_revision_id = identity.canonical_revision_id;
+        revision_id = edge.child_revision;
+        revision_cursor = edge.child_cursor;
+    }
+    let authoring_graph = backend
+        .worker
+        .project_authoring_graph(
+            session_id,
+            source_hash,
+            &source_bytes,
+            &project,
+            &project_hash,
+        )
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("temporary_editor_canonical_unsupported"))?;
+
+    // Long-running worker input/read must not resurrect an expired session.
+    // This rechecks the bearer and the current SQLite TTL without touching it.
+    let current = state
+        .authorized_session(session_id, headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&current)?;
+    if current.source_sha256 != session.source_sha256 {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorCurrentResponse {
+        protocol_version: "chaptera.temporary-editor-current.v1",
+        document_id: session_id.to_owned(),
+        source_hash: source_hash.to_owned(),
+        revision_id,
+        revision_cursor,
+        canonical_authoring_revision_id: canonical_revision_id,
+        baseline_revision_id: baseline.service_revision_id,
+        expires_at_ms: current.expires_at_ms,
+        project,
+        authoring_graph,
+    }))
+}
+
+/// A source-bound, non-renewing rich Reader Scene for the accepted Guest revision.
+/// The baseline Guest /scene route is deliberately left immutable.
+async fn temporary_editor_scene(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<GuestJson<TemporaryEditorSceneResponse>, GuestReaderError> {
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let source_bytes = read_exact_temporary_editor_source(&state, &session).await?;
+    let project_hash = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let scene = backend
+        .worker
+        .project_reader_scene(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &project_hash,
+            &IsolatedReaderSceneIntentV1 {
+                revision_id: current.revision_id.clone(),
+                baseline_revision_id: current.baseline_revision_id.clone(),
+            },
+        )
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("temporary_editor_scene_unavailable"))?;
+
+    // A worker result is not a durable head claim until its bearer, expiry
+    // and RevisionStream head are rechecked after isolated computation.
+    let latest = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&latest)?;
+    if latest.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let edges = backend
+        .revisions
+        .load_document_edges(&session_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+    let same_head = if current.revision_cursor == 0 {
+        edges.is_empty()
+    } else {
+        edges.last().is_some_and(|edge| {
+            edge.child_revision == current.revision_id
+                && edge.child_cursor == current.revision_cursor
+        })
+    };
+    if !same_head {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_scene_stale_revision",
+        ));
+    }
+    if scene["protocol_version"] != "chaptera.reader-scene.v1"
+        || scene["document_id"] != session_id
+        || scene["source_hash"] != current.source_hash
+        || scene["revision_id"] != current.revision_id
+        || !scene["pages"].is_array()
+        || !scene["nodes"].is_array()
+    {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_scene_identity_mismatch",
+        ));
+    }
+    Ok(GuestJson(TemporaryEditorSceneResponse {
+        protocol_version: "chaptera.temporary-editor-scene.v1",
+        document_id: session_id,
+        source_hash: current.source_hash,
+        revision_id: current.revision_id,
+        expires_at_ms: latest.expires_at_ms,
+        scene,
+    }))
+}
+
+/// Commit one bounded geometry mutation to the *same* canonical RevisionStream
+/// used by the authenticated Product Editor. The Guest bearer is checked
+/// before and after isolated worker execution. Migration 21 alone decides
+/// whether the new insert is still within the server-owned one-hour deadline.
+async fn temporary_editor_move_node(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<TemporaryEditorMoveNodeRequest>,
+) -> Result<GuestJson<TemporaryEditorMoveNodeAccepted>, GuestReaderError> {
+    validate_temporary_move_node_request(&request, &session_id)?;
+    let request_hash = temporary_move_request_hash(&request)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(request.source_hash.as_str()) {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+
+    // Reconcile an already accepted operation BEFORE the current-head check.
+    // It must not insert a second event or extend the session's expiry.
+    if let Some(existing) = backend
+        .revisions
+        .read_edge_by_operation(&session_id, &request.client_operation_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?
+    {
+        if existing.request_hash != request_hash
+            || existing.parent_revision != request.base_revision_id
+        {
+            return Err(GuestReaderError::conflict(
+                "temporary_editor_operation_id_conflict",
+            ));
+        }
+        let binding = backend
+            .revisions
+            .require_revision_identity(&session_id, &existing.child_revision)
+            .await
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        return temporary_move_accepted(existing, binding, session.expires_at_ms, true);
+    }
+
+    // Current uses the existing isolated worker and the existing contiguous
+    // RevisionStream replay; no untrusted PUB parser runs inside Axum.
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if request.base_revision_id != current.revision_id {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        ));
+    }
+    if current.revision_cursor >= MAX_TEMPORARY_EDITOR_REVISIONS as i64 {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_revision_limit",
+        ));
+    }
+    let before_project_sha256 = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+
+    // At most two concurrent anonymous isolated workers. The host never
+    // derives expected_before or source geometry from browser-provided data.
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let (operation, resulting_project) = backend
+        .worker
+        .move_node_to(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &before_project_sha256,
+            &IsolatedMoveNodeIntentV1 {
+                node_id: request.command.node_id.clone(),
+                x_emu: request.command.x_emu,
+                y_emu: request.command.y_emu,
+            },
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_move_node_invalid" | "product_move_node_rejected" => {
+                GuestReaderError::unprocessable("temporary_editor_move_rejected")
+            }
+            _ => GuestReaderError::internal("temporary_editor_worker_failed"),
+        })?;
+    if !matches!(operation, EditOperation::MoveNode { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_worker_receipt_invalid",
+        ));
+    }
+    let after_project_sha256 = project_sha256(&resulting_project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let identities = derive_commit_revision_identities(
+        &session_id,
+        &current.source_hash,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &current.revision_id,
+        &operation,
+    )
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?;
+    let parent_canonical: AuthoringRevisionIdV1 = current
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+        GuestReaderError::internal("temporary_editor_revision_identity_invalid")
+    })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
+            .to_string();
+    let canonical_event = encode_editor_revision_event_v1(&EditorRevisionEventV1 {
+        schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: current.source_hash.clone(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        authoring_root_hash: None,
+        operation,
+    })
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_event_invalid"))?;
+    let commit_at = now_ms()?;
+    let still_live = state
+        .authorized_session(&session_id, &headers, commit_at)
+        .await?;
+    require_temporary_editor_current_session(&still_live)?;
+    if still_live.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+
+    let edge = RevisionEdge {
+        document_id: session_id.clone(),
+        parent_revision: current.revision_id,
+        parent_cursor: current.revision_cursor,
+        operation_id: request.client_operation_id,
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor: current.revision_cursor + 1,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: commit_at,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: session_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: commit_at,
+    };
+    // Shared SQLite atomic edge+identity. Schema21 trigger renews TTL ONLY
+    // on actual INSERT, and rejects edits if the session was expired/swept.
+    let outcome = backend
+        .revisions
+        .append_edge_with_revision_identity(edge, binding)
+        .await
+        .map_err(|_| GuestReaderError::conflict("temporary_editor_revision_commit_rejected"))?;
+
+    let expiry = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?
+        .expires_at_ms;
+    match outcome {
+        AppendOutcome::Committed(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_move_accepted(edge, identity, expiry, false)
+        }
+        AppendOutcome::AlreadyCommitted(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_move_accepted(edge, identity, expiry, true)
+        }
+        AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        )),
+    }
+}
+
+/// One bounded anonymous Story range mutation through the same isolated
+/// canonical EditorSession and SQLite RevisionStream as Guest MoveNode.
+/// The accepted new edge alone may renew the one-hour TTL.
+async fn temporary_editor_story_range(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<TemporaryEditorStoryRangeRequest>,
+) -> Result<GuestJson<TemporaryEditorStoryRangeAccepted>, GuestReaderError> {
+    validate_temporary_story_range_request(&request, &session_id)?;
+    let request_hash = temporary_story_request_hash(&request)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(request.source_hash.as_str()) {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+
+    // Reconcile an already accepted operation BEFORE the current-head check.
+    // It must not insert a second event or extend the session's expiry.
+    if let Some(existing) = backend
+        .revisions
+        .read_edge_by_operation(&session_id, &request.client_operation_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?
+    {
+        if existing.request_hash != request_hash
+            || existing.parent_revision != request.base_revision_id
+        {
+            return Err(GuestReaderError::conflict(
+                "temporary_editor_operation_id_conflict",
+            ));
+        }
+        let binding = backend
+            .revisions
+            .require_revision_identity(&session_id, &existing.child_revision)
+            .await
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        return temporary_story_accepted(existing, binding, session.expires_at_ms, true);
+    }
+
+    // Current uses the existing isolated worker and the existing contiguous
+    // RevisionStream replay; no untrusted PUB parser runs inside Axum.
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if request.base_revision_id != current.revision_id {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        ));
+    }
+    if current.revision_cursor >= MAX_TEMPORARY_EDITOR_REVISIONS as i64 {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_revision_limit",
+        ));
+    }
+    let before_project_sha256 = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+
+    // At most two concurrent anonymous isolated workers. The host never
+    // derives expected_before or Story eligibility or expected text from browser-provided data.
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let (operation, resulting_project) = backend
+        .worker
+        .replace_story_range(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &before_project_sha256,
+            &IsolatedStoryRangeIntentV1 {
+                story_id: request.command.story_id.clone(),
+                start_scalar: request.command.start_scalar,
+                end_scalar: request.command.end_scalar,
+                replacement_text: request.command.replacement_text.clone(),
+            },
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_story_range_invalid" | "product_story_range_rejected" => {
+                GuestReaderError::unprocessable("temporary_editor_story_rejected")
+            }
+            _ => GuestReaderError::internal("temporary_editor_worker_failed"),
+        })?;
+    if !matches!(operation, EditOperation::ReplaceStoryRange { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_worker_receipt_invalid",
+        ));
+    }
+    let after_project_sha256 = project_sha256(&resulting_project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let identities = derive_commit_revision_identities(
+        &session_id,
+        &current.source_hash,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &current.revision_id,
+        &operation,
+    )
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?;
+    let parent_canonical: AuthoringRevisionIdV1 = current
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+        GuestReaderError::internal("temporary_editor_revision_identity_invalid")
+    })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
+            .to_string();
+    let canonical_event = encode_editor_revision_event_v1(&EditorRevisionEventV1 {
+        schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: current.source_hash.clone(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        authoring_root_hash: None,
+        operation,
+    })
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_event_invalid"))?;
+    let commit_at = now_ms()?;
+    let still_live = state
+        .authorized_session(&session_id, &headers, commit_at)
+        .await?;
+    require_temporary_editor_current_session(&still_live)?;
+    if still_live.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+
+    let edge = RevisionEdge {
+        document_id: session_id.clone(),
+        parent_revision: current.revision_id,
+        parent_cursor: current.revision_cursor,
+        operation_id: request.client_operation_id,
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor: current.revision_cursor + 1,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: commit_at,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: session_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: commit_at,
+    };
+    // Shared SQLite atomic edge+identity. Schema21 trigger renews TTL ONLY
+    // on actual INSERT, and rejects edits if the session was expired/swept.
+    let outcome = backend
+        .revisions
+        .append_edge_with_revision_identity(edge, binding)
+        .await
+        .map_err(|_| GuestReaderError::conflict("temporary_editor_revision_commit_rejected"))?;
+
+    let expiry = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?
+        .expires_at_ms;
+    match outcome {
+        AppendOutcome::Committed(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_story_accepted(edge, identity, expiry, false)
+        }
+        AppendOutcome::AlreadyCommitted(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_story_accepted(edge, identity, expiry, true)
+        }
+        AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        )),
+    }
+}
+
+/// One bounded anonymous ResizeNode mutation through the same isolated
+/// canonical EditorSession and SQLite RevisionStream as Guest MoveNode.
+/// The accepted new edge alone may renew the one-hour TTL.
+async fn temporary_editor_resize_node(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<TemporaryEditorResizeNodeRequest>,
+) -> Result<GuestJson<TemporaryEditorResizeNodeAccepted>, GuestReaderError> {
+    validate_temporary_resize_node_request(&request, &session_id)?;
+    let request_hash = temporary_resize_request_hash(&request)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    if session.source_sha256.as_deref() != Some(request.source_hash.as_str()) {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+
+    // Reconcile an already accepted operation BEFORE the current-head check.
+    // It must not insert a second event or extend the session's expiry.
+    if let Some(existing) = backend
+        .revisions
+        .read_edge_by_operation(&session_id, &request.client_operation_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?
+    {
+        if existing.request_hash != request_hash
+            || existing.parent_revision != request.base_revision_id
+        {
+            return Err(GuestReaderError::conflict(
+                "temporary_editor_operation_id_conflict",
+            ));
+        }
+        let binding = backend
+            .revisions
+            .require_revision_identity(&session_id, &existing.child_revision)
+            .await
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+        return temporary_resize_accepted(existing, binding, session.expires_at_ms, true);
+    }
+
+    // Current uses the existing isolated worker and the existing contiguous
+    // RevisionStream replay; no untrusted PUB parser runs inside Axum.
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if request.base_revision_id != current.revision_id {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        ));
+    }
+    if current.revision_cursor >= MAX_TEMPORARY_EDITOR_REVISIONS as i64 {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_revision_limit",
+        ));
+    }
+    let before_project_sha256 = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+
+    // At most two concurrent anonymous isolated workers. The host never
+    // derives source geometry eligibility from browser-provided data.
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let (operation, resulting_project) = backend
+        .worker
+        .resize_node_to(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &before_project_sha256,
+            &IsolatedResizeNodeIntentV1 {
+                node_id: request.command.node_id.clone(),
+                x_emu: request.command.x_emu,
+                y_emu: request.command.y_emu,
+                width_emu: request.command.width_emu,
+                height_emu: request.command.height_emu,
+            },
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_resize_node_invalid" | "product_resize_node_rejected" => {
+                GuestReaderError::unprocessable("temporary_editor_resize_rejected")
+            }
+            _ => GuestReaderError::internal("temporary_editor_worker_failed"),
+        })?;
+    if !matches!(operation, EditOperation::ResizeNode { .. }) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_worker_receipt_invalid",
+        ));
+    }
+    let after_project_sha256 = project_sha256(&resulting_project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let identities = derive_commit_revision_identities(
+        &session_id,
+        &current.source_hash,
+        &resulting_project.schema_version,
+        &resulting_project,
+        &current.revision_id,
+        &operation,
+    )
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?;
+    let parent_canonical: AuthoringRevisionIdV1 = current
+        .canonical_authoring_revision_id
+        .parse()
+        .map_err(|_| {
+        GuestReaderError::internal("temporary_editor_revision_identity_invalid")
+    })?;
+    let canonical_child =
+        derive_authoring_revision_id_v1(&resulting_project, Some(parent_canonical))
+            .map_err(|_| GuestReaderError::internal("temporary_editor_revision_identity_failed"))?
+            .to_string();
+    let canonical_event = encode_editor_revision_event_v1(&EditorRevisionEventV1 {
+        schema_version: EDITOR_REVISION_EVENT_SCHEMA_V1.to_owned(),
+        source_sha256: current.source_hash.clone(),
+        before_project_sha256,
+        after_project_sha256: after_project_sha256.clone(),
+        authoring_root_hash: None,
+        operation,
+    })
+    .map_err(|_| GuestReaderError::internal("temporary_editor_revision_event_invalid"))?;
+    let commit_at = now_ms()?;
+    let still_live = state
+        .authorized_session(&session_id, &headers, commit_at)
+        .await?;
+    require_temporary_editor_current_session(&still_live)?;
+    if still_live.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+
+    let edge = RevisionEdge {
+        document_id: session_id.clone(),
+        parent_revision: current.revision_id,
+        parent_cursor: current.revision_cursor,
+        operation_id: request.client_operation_id,
+        request_hash,
+        canonical_event,
+        child_revision: identities.service_revision_id.clone(),
+        child_cursor: current.revision_cursor + 1,
+        resulting_state_hash: after_project_sha256,
+        authoring_root_hash: None,
+        semantic_schema_version: EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION,
+        committed_at_ms: commit_at,
+    };
+    let binding = RevisionIdentityBinding {
+        document_id: session_id.clone(),
+        service_revision_id: identities.service_revision_id,
+        canonical_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+        canonical_revision_id: canonical_child,
+        bound_at_ms: commit_at,
+    };
+    // Shared SQLite atomic edge+identity. Schema21 trigger renews TTL ONLY
+    // on actual INSERT, and rejects edits if the session was expired/swept.
+    let outcome = backend
+        .revisions
+        .append_edge_with_revision_identity(edge, binding)
+        .await
+        .map_err(|_| GuestReaderError::conflict("temporary_editor_revision_commit_rejected"))?;
+
+    let expiry = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?
+        .expires_at_ms;
+    match outcome {
+        AppendOutcome::Committed(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_resize_accepted(edge, identity, expiry, false)
+        }
+        AppendOutcome::AlreadyCommitted(edge) => {
+            let identity = backend
+                .revisions
+                .require_revision_identity(&session_id, &edge.child_revision)
+                .await
+                .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+            temporary_resize_accepted(edge, identity, expiry, true)
+        }
+        AppendOutcome::Conflict(_) => Err(GuestReaderError::conflict(
+            "temporary_editor_stale_revision",
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemporaryEditedExportQuery {
+    revision_id: String,
+    canonical_authoring_revision_id: String,
+    #[serde(default)]
+    report_only: bool,
+}
+
+fn validate_temporary_export_query(
+    target: &str,
+    query: &TemporaryEditedExportQuery,
+) -> Result<(), GuestReaderError> {
+    if !matches!(target, "idml" | "odg" | "pdf" | "pdf9up")
+        || query.revision_id.len() != 71
+        || !query.revision_id.starts_with("sha256:")
+        || !query.revision_id[7..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+        || query.canonical_authoring_revision_id.len() != 64
+        || !query
+            .canonical_authoring_revision_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+    {
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_export_request_invalid",
+        ));
+    }
+    Ok(())
+}
+
+/// A pristine temporary session can be exported as a fixed PDF without a
+/// synthetic edit. Editable formats still require an accepted revision.
+fn temporary_export_admits_revision(target: &str, revision_cursor: i64) -> bool {
+    revision_cursor > 0 || (target == "pdf" && revision_cursor == 0)
+}
+
+/// A one-shot edited Revision download. Output is never materialized into a
+/// durable user Project, derived-BlobStore artifact or S3 service. Worker
+/// scratch files are torn down before the response bytes reach Axum.
+async fn temporary_editor_edited_export(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path((session_id, target)): Path<(String, String)>,
+    Query(query): Query<TemporaryEditedExportQuery>,
+    headers: HeaderMap,
+) -> Result<Response, GuestReaderError> {
+    validate_temporary_export_query(&target, &query)?;
+    let now = now_ms()?;
+    state.cleanup_expired(now).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now)
+        .await?;
+    // Even report-only requests require the exact same bearer/TTL authority.
+    let session = state.authorized_session(&session_id, &headers, now).await?;
+    require_temporary_editor_current_session(&session)?;
+    let GuestJson(current) = temporary_editor_current_inner(&state, &session_id, &headers).await?;
+    if current.revision_id != query.revision_id
+        || current.canonical_authoring_revision_id != query.canonical_authoring_revision_id
+    {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_export_stale_revision",
+        ));
+    }
+    if !temporary_export_admits_revision(&target, current.revision_cursor) {
+        return Err(GuestReaderError::unprocessable(
+            "temporary_editor_export_requires_accepted_edit",
+        ));
+    }
+    let backend = state
+        .temporary_editor
+        .as_ref()
+        .ok_or_else(|| GuestReaderError::internal("temporary_editor_worker_not_configured"))?;
+    let source = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&source)?;
+    if source.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let _permit =
+        backend.admission.clone().try_acquire_owned().map_err(|_| {
+            GuestReaderError::rate_limited("temporary_editor_worker_busy", now + 1_000)
+        })?;
+    let source_bytes = read_exact_temporary_editor_source(&state, &source).await?;
+    let hash = project_sha256(&current.project)
+        .map_err(|_| GuestReaderError::internal("temporary_editor_project_invalid"))?;
+    let output = backend
+        .worker
+        .export_editable_current(
+            &session_id,
+            &current.source_hash,
+            &source_bytes,
+            &current.project,
+            &hash,
+            &target,
+        )
+        .await
+        .map_err(|error| match error.code {
+            "product_edited_export_blocked" | "product_edited_export_limit" => {
+                GuestReaderError::unprocessable("temporary_editor_export_unavailable")
+            }
+            _ => GuestReaderError::internal("temporary_editor_export_worker_failed"),
+        })?;
+    // An export MUST NOT become a mutation or prolong the hour. Before any
+    // bytes are returned, reauthorize the original bearer and compare the
+    // current SQLite RevisionStream head with the requested exact revision.
+    let latest = state
+        .authorized_session(&session_id, &headers, now_ms()?)
+        .await?;
+    require_temporary_editor_current_session(&latest)?;
+    if latest.source_sha256.as_deref() != Some(current.source_hash.as_str()) {
+        return Err(GuestReaderError::internal(
+            "temporary_editor_source_identity_mismatch",
+        ));
+    }
+    let edges = backend
+        .revisions
+        .load_document_edges(&session_id)
+        .await
+        .map_err(|_| GuestReaderError::internal("temporary_editor_revision_invalid"))?;
+    // The unedited head has no SQLite edges. An empty stream is accepted only
+    // for the exact canonical baseline identity; never invent a MoveNode.
+    let exact_head = if current.revision_cursor == 0 {
+        current.revision_id == current.baseline_revision_id && edges.is_empty()
+    } else {
+        edges.last().is_some_and(|edge| {
+            edge.child_revision == query.revision_id && edge.child_cursor == current.revision_cursor
+        })
+    };
+    if !exact_head {
+        return Err(GuestReaderError::conflict(
+            "temporary_editor_export_stale_revision",
+        ));
+    }
+    // Provide a private, exact LossReport prior to download via report_only.
+    // The host emits no public or unauthenticated source-derived metadata.
+    if query.report_only {
+        return Ok(GuestJson(serde_json::json!({
+            "protocol_version": "chaptera.temporary-edited-export-report.v1",
+            "revision_id": query.revision_id,
+            "canonical_authoring_revision_id": query.canonical_authoring_revision_id,
+            "source_hash": current.source_hash,
+            "target": target,
+            "is_baseline": current.revision_cursor == 0,
+            "artifact_sha256": output.artifact_sha256,
+            "loss_report_sha256": output.loss_report_sha256,
+            "loss_report": output.loss_report,
+            "expires_at_ms": latest.expires_at_ms,
+        }))
+        .into_response());
+    }
+    let mut response = Response::new(Body::from(output.artifact_bytes));
+    let response_headers = response.headers_mut();
+    let (mime, disposition) = match target.as_str() {
+        "idml" => (
+            "application/vnd.adobe.indesign-idml-package",
+            "attachment; filename=\"chaptera-edited.idml\"",
+        ),
+        "odg" => (
+            "application/vnd.oasis.opendocument.graphics",
+            "attachment; filename=\"chaptera-edited.odg\"",
+        ),
+        "pdf" if current.revision_cursor == 0 => (
+            "application/pdf",
+            "attachment; filename=\"chaptera-original.pdf\"",
+        ),
+        "pdf" => (
+            "application/pdf",
+            "attachment; filename=\"chaptera-edited.pdf\"",
+        ),
+        "pdf9up" => (
+            "application/pdf",
+            "attachment; filename=\"chaptera-edited-a4-9up.pdf\"",
+        ),
+        _ => unreachable!("request target was validated before export"),
+    };
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+    response_headers.insert(CONTENT_DISPOSITION, HeaderValue::from_static(disposition));
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    for (name, value) in [
+        ("x-chaptera-edit-revision", query.revision_id.as_str()),
+        ("x-chaptera-export-sha256", output.artifact_sha256.as_str()),
+        (
+            "x-chaptera-loss-report-sha256",
+            output.loss_report_sha256.as_str(),
+        ),
+    ] {
+        response_headers.insert(
+            name,
+            HeaderValue::from_str(value).map_err(|_| {
+                GuestReaderError::internal("temporary_editor_export_receipt_invalid")
+            })?,
+        );
+    }
+    Ok(response)
+}
+
 async fn issue_session(
     State(state): State<GuestReaderHttpState>,
     Extension(client_ip): Extension<ClientIp>,
     headers: HeaderMap,
     Json(body): Json<IssueGuestSessionBody>,
+) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
+    issue_session_with_prefix(state, client_ip, headers, body, "guest").await
+}
+
+async fn issue_temporary_edit_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    headers: HeaderMap,
+    Json(body): Json<IssueGuestSessionBody>,
+) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
+    issue_session_with_prefix(state, client_ip, headers, body, "tempedit").await
+}
+
+async fn issue_session_with_prefix(
+    state: GuestReaderHttpState,
+    client_ip: ClientIp,
+    headers: HeaderMap,
+    body: IssueGuestSessionBody,
+    id_prefix: &str,
 ) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
     let started = Instant::now();
     let trace = ReaderObservabilityV1::context_from_headers(&headers);
@@ -513,7 +2246,7 @@ async fn issue_session(
         ));
     }
 
-    let session_id = random_id("guest")?;
+    let session_id = random_id(id_prefix)?;
     let upload_id = format!("guest-upload:{}", opaque_suffix(&session_id));
     let reservation_id = format!("guest-reservation:{}", opaque_suffix(&session_id));
     let access_token = random_token()?;
@@ -590,6 +2323,7 @@ async fn issue_session(
         upload_path: format!("/v1/reader/guest-sessions/{session_id}/content"),
         open_path: format!("/v1/reader/guest-sessions/{session_id}/open"),
         scene_path: format!("/v1/reader/guest-sessions/{session_id}/scene"),
+        mode: is_temporary_edit_session(&session_id).then_some("temporary_edit"),
     }))
 }
 
@@ -657,7 +2391,7 @@ async fn put_content(
             metadata.byte_len,
             &metadata.storage_generation,
             &metadata.etag,
-            now_ms,
+            self::now_ms()?,
         )
         .await
     {
@@ -797,7 +2531,7 @@ async fn open_session(
         SourceSecurityScanOutcome::Rejected { code } => {
             let rejected = state
                 .sessions
-                .finish_rejected(&opening.session_id, code, now_ms)
+                .finish_rejected(&opening.session_id, code, self::now_ms()?)
                 .await?;
             state.finalize_rejected_cleanup(&rejected, now_ms).await?;
             state.observability.record(
@@ -913,7 +2647,7 @@ async fn open_session(
             scene_json.as_deref(),
             terminal_code.as_deref(),
             failure_classification_json.as_deref(),
-            now_ms,
+            self::now_ms()?,
         )
         .await?;
     state.release_admission(&opened, now_ms).await?;
@@ -1110,13 +2844,28 @@ impl GuestReaderHttpState {
         session: GuestReaderSession,
         now_ms: i64,
     ) -> Result<(), GuestReaderError> {
+        // DELETE, expiry reads and the periodic sweeper may all target the
+        // same exact quarantine generation. Only one physical cleanup owns it
+        // at a time; reload current state after acquiring the shared lock.
+        let _cleanup = self.cleanup_lock.lock().await;
+        let Some(session) = self.sessions.get(&session.session_id).await? else {
+            return Ok(());
+        };
+        // Claim expiration in SQLite before touching the physical source. A
+        // future accepted editor commit can extend expires_at_ms, so an
+        // expired_pending() snapshot is not deletion authority by itself.
+        if !self
+            .sessions
+            .mark_expired(&session.session_id, now_ms)
+            .await?
+        {
+            return Ok(());
+        }
+
         let started = Instant::now();
         let trace = self.observability.session_context(&session.session_id);
         let _ = self.release_admission(&session, now_ms).await;
         self.delete_quarantine(&session, now_ms).await?;
-        self.sessions
-            .mark_expired(&session.session_id, now_ms)
-            .await?;
         self.sessions.delete_expired(&session.session_id).await?;
         self.observability.record(
             "reader.cleanup",
@@ -1491,11 +3240,19 @@ impl SqliteGuestReaderSessionStore {
     ) -> Result<GuestReaderSession, GuestReaderError> {
         let observed = i64::try_from(observed_byte_len)
             .map_err(|_| GuestReaderError::internal("guest_observed_length_invalid"))?;
+        // The one-hour retention window starts at accepted upload completion,
+        // not at token issuance or an HTTP read. Guest Reader TTL is unchanged.
+        let accepted_expiry_ms = if is_temporary_edit_session(session_id) {
+            Some(add_duration(now_ms, TEMPORARY_EDIT_TTL)?)
+        } else {
+            None
+        };
         let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
             SET state='stored', observed_byte_len=?, storage_generation=?,
-                object_etag=?, updated_at_ms=?
+                object_etag=?, updated_at_ms=?,
+                expires_at_ms=COALESCE(?, expires_at_ms)
             WHERE session_id=? AND state='issued' AND expires_at_ms>?
             "#,
         )
@@ -1503,6 +3260,7 @@ impl SqliteGuestReaderSessionStore {
         .bind(generation.as_bytes())
         .bind(etag.as_bytes())
         .bind(now_ms)
+        .bind(accepted_expiry_ms)
         .bind(session_id.as_bytes())
         .bind(now_ms)
         .execute(&self.pool)
@@ -1578,7 +3336,7 @@ impl SqliteGuestReaderSessionStore {
             UPDATE reader_guest_sessions
             SET state='opened', classification=?, source_sha256=?, scene_json=?,
                 terminal_code=?, failure_classification_json=?, updated_at_ms=?
-            WHERE session_id=? AND state='opening'
+            WHERE session_id=? AND state='opening' AND expires_at_ms>?
             "#,
         )
         .bind(classification)
@@ -1588,6 +3346,7 @@ impl SqliteGuestReaderSessionStore {
         .bind(failure_classification_json)
         .bind(now_ms)
         .bind(session_id.as_bytes())
+        .bind(now_ms)
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
@@ -1610,12 +3369,13 @@ impl SqliteGuestReaderSessionStore {
             UPDATE reader_guest_sessions
             SET state='rejected', classification='rejected', terminal_code=?,
                 updated_at_ms=?
-            WHERE session_id=? AND state='opening'
+            WHERE session_id=? AND state='opening' AND expires_at_ms>?
             "#,
         )
         .bind(code)
         .bind(now_ms)
         .bind(session_id.as_bytes())
+        .bind(now_ms)
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
@@ -1649,13 +3409,44 @@ impl SqliteGuestReaderSessionStore {
         Ok(())
     }
 
-    async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<(), GuestReaderError> {
-        sqlx::query(
+    /// Revoke only a live temporary-edit capability in one SQLite statement.
+    /// A concurrent revision insert and this update serialize on the same
+    /// SQLite writer; migration 21 rejects all fresh commits after revocation.
+    async fn revoke_temporary(
+        &self,
+        session_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, GuestReaderError> {
+        if !is_temporary_edit_session(session_id) {
+            return Err(GuestReaderError::not_found("guest_session_not_found"));
+        }
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_guest_sessions
+            SET state='expired',
+                expires_at_ms=MAX(created_at_ms + 1, MIN(expires_at_ms, ?)),
+                terminal_code='temporary_editor_deleted_by_user',
+                updated_at_ms=MAX(updated_at_ms, ?)
+            WHERE session_id=? AND state!='expired' AND expires_at_ms>?
+            "#,
+        )
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(session_id.as_bytes())
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<bool, GuestReaderError> {
+        let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
             SET state='expired', terminal_code=COALESCE(terminal_code, 'guest_session_expired'),
                 updated_at_ms=MAX(updated_at_ms, ?)
-            WHERE session_id=? AND expires_at_ms<=?
+            WHERE session_id=? AND (state='expired' OR expires_at_ms<=?)
             "#,
         )
         .bind(now_ms)
@@ -1664,7 +3455,9 @@ impl SqliteGuestReaderSessionStore {
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        Ok(())
+        // The row might have been renewed since the sweep took its snapshot.
+        // Only a still-expired row can authorize source-byte deletion.
+        Ok(result.rows_affected() == 1)
     }
 
     async fn delete_expired(&self, session_id: &str) -> Result<(), GuestReaderError> {
@@ -1680,7 +3473,8 @@ impl SqliteGuestReaderSessionStore {
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        if result.rows_affected() != 1 {
+        // A concurrent recovery pass may have already deleted the row.
+        if result.rows_affected() != 1 && self.get(session_id).await?.is_some() {
             return Err(GuestReaderError::conflict("guest_expiry_delete_conflict"));
         }
         Ok(())
@@ -1700,7 +3494,6 @@ impl SqliteGuestReaderSessionStore {
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE expires_at_ms<=?
-              AND (state!='expired' OR quarantine_deleted_at_ms IS NULL)
             ORDER BY expires_at_ms ASC
             LIMIT ?
             "#,
@@ -1881,6 +3674,20 @@ fn content_length(headers: &HeaderMap) -> Result<u64, GuestReaderError> {
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .ok_or_else(|| GuestReaderError::bad_request("content_length_invalid"))
+}
+
+fn contribution_eligible(session: &GuestReaderSession) -> bool {
+    !is_temporary_edit_session(&session.session_id)
+        && session.state == GuestSessionState::Opened
+        && session.classification.as_deref() == Some("unsupported")
+        && session.quarantine_deleted_at_ms.is_none()
+}
+
+fn is_temporary_edit_session(session_id: &str) -> bool {
+    let Some(suffix) = session_id.strip_prefix("tempedit:") else {
+        return false;
+    };
+    suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn random_id(prefix: &str) -> Result<String, GuestReaderError> {
@@ -2128,6 +3935,240 @@ mod tests {
         }
     }
 
+    #[test]
+    fn edited_export_accepts_only_bounded_pinned_revision_and_known_targets() {
+        let ok = TemporaryEditedExportQuery {
+            revision_id: format!("sha256:{}", "a".repeat(64)),
+            canonical_authoring_revision_id: "b".repeat(64),
+            report_only: false,
+        };
+        assert!(validate_temporary_export_query("odg", &ok).is_ok());
+        assert!(validate_temporary_export_query("idml", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf9up", &ok).is_ok());
+        assert!(validate_temporary_export_query("pdf16up", &ok).is_err());
+        let malformed = TemporaryEditedExportQuery {
+            revision_id: "sha256:wrong".to_owned(),
+            canonical_authoring_revision_id: ok.canonical_authoring_revision_id.clone(),
+            report_only: true,
+        };
+        assert!(validate_temporary_export_query("idml", &malformed).is_err());
+        let malformed = TemporaryEditedExportQuery {
+            revision_id: ok.revision_id.clone(),
+            canonical_authoring_revision_id: "Z".repeat(64),
+            report_only: true,
+        };
+        assert!(validate_temporary_export_query("odg", &malformed).is_err());
+    }
+
+    #[test]
+    fn temporary_current_replays_resize_but_rejects_unrelated_edit_kinds() {
+        let resize: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "resize_node",
+            "node_id": "20000000-0000-4000-8000-000000000001",
+            "before": {"x": 0, "y": 0, "width": 5000, "height": 2000},
+            "after": {"x": 0, "y": 0, "width": 5100, "height": 2000}
+        }))
+        .unwrap();
+        assert!(temporary_editor_replay_operation_admitted(&resize));
+
+        let other: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_text",
+            "story_id": "20000000-0000-4000-8000-000000000002",
+            "before": "old",
+            "after": "new"
+        }))
+        .unwrap();
+        assert!(!temporary_editor_replay_operation_admitted(&other));
+    }
+
+    #[test]
+    fn temporary_resize_node_rejects_unbounded_or_forged_intents() {
+        let id = "tempedit:0123456789abcdef0123456789abcdef";
+        let mut request = TemporaryEditorResizeNodeRequest {
+            protocol_version: "chaptera.commit-request.v1".to_owned(),
+            document_id: id.to_owned(),
+            source_hash: "a".repeat(64),
+            base_revision_id: format!("sha256:{}", "b".repeat(64)),
+            client_operation_id: "resize-001".to_owned(),
+            command: TemporaryResizeNodeIntent {
+                kind: "resize_node".to_owned(),
+                node_id: "20000000-0000-4000-8000-000000000001".to_owned(),
+                x_emu: -100,
+                y_emu: 10,
+                width_emu: 5000,
+                height_emu: 2000,
+            },
+        };
+        assert!(validate_temporary_resize_node_request(&request, id).is_ok());
+        let original = temporary_resize_request_hash(&request).unwrap();
+        request.command.width_emu += 1;
+        assert_ne!(original, temporary_resize_request_hash(&request).unwrap());
+        request.command.width_emu = 0;
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.command.width_emu = 5000;
+        request.command.height_emu = -1;
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.command.height_emu = 2000;
+        request.command.x_emu = i64::MAX;
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.command.x_emu = -100;
+        request.command.kind = "move_node_to".to_owned();
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.command.kind = "resize_node".to_owned();
+        request.client_operation_id = "bad/id".to_owned();
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.client_operation_id = "resize-001".to_owned();
+        request.base_revision_id = "sha256:not-valid".to_owned();
+        assert!(validate_temporary_resize_node_request(&request, id).is_err());
+        request.base_revision_id = format!("sha256:{}", "b".repeat(64));
+        assert!(validate_temporary_resize_node_request(&request, "guest:bad").is_err());
+    }
+
+    #[test]
+    fn temporary_story_range_admits_only_bounded_private_canonical_intent() {
+        let id = "tempedit:0123456789abcdef0123456789abcdef";
+        let mut request = TemporaryEditorStoryRangeRequest {
+            protocol_version: "chaptera.commit-request.v1".to_owned(),
+            document_id: id.to_owned(),
+            source_hash: "a".repeat(64),
+            base_revision_id: format!("sha256:{}", "b".repeat(64)),
+            client_operation_id: "story-001".to_owned(),
+            command: TemporaryStoryRangeIntent {
+                kind: "replace_story_range".to_owned(),
+                story_id: "01234567-89ab-4def-8abc-123456789abc".to_owned(),
+                start_scalar: 1,
+                end_scalar: 4,
+                replacement_text: "new text".to_owned(),
+            },
+        };
+        assert!(validate_temporary_story_range_request(&request, id).is_ok());
+        let first_hash = temporary_story_request_hash(&request).unwrap();
+        request.command.replacement_text.push('!');
+        assert_ne!(first_hash, temporary_story_request_hash(&request).unwrap());
+        request.command.replacement_text.pop();
+
+        request.command.replacement_text = "invalid\nparagraph".to_owned();
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.command.replacement_text = "X".repeat(8193);
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.command.replacement_text = "valid".to_owned();
+        request.command.start_scalar = 5;
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.command.start_scalar = 1;
+        request.command.kind = "move_node_to".to_owned();
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.command.kind = "replace_story_range".to_owned();
+        request.client_operation_id = "bad/id".to_owned();
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.client_operation_id = "story-001".to_owned();
+        request.source_hash = "not-sha256".to_owned();
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.source_hash = "a".repeat(64);
+        request.base_revision_id = "sha256:bad".to_owned();
+        assert!(validate_temporary_story_range_request(&request, id).is_err());
+        request.base_revision_id = format!("sha256:{}", "b".repeat(64));
+        assert!(
+            validate_temporary_story_range_request(
+                &request,
+                "guest:0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pristine_temporary_export_allows_pdf_only_without_creating_a_revision() {
+        assert!(temporary_export_admits_revision("pdf", 0));
+        assert!(!temporary_export_admits_revision("idml", 0));
+        assert!(!temporary_export_admits_revision("odg", 0));
+        assert!(!temporary_export_admits_revision("pdf", -1));
+        for target in ["pdf", "idml", "odg"] {
+            assert!(temporary_export_admits_revision(target, 1));
+        }
+    }
+
+    #[test]
+    fn temporary_move_node_admits_only_scoped_bounded_product_intent() {
+        let id = "tempedit:0123456789abcdef0123456789abcdef";
+        let mut request = TemporaryEditorMoveNodeRequest {
+            protocol_version: "chaptera.commit-request.v1".to_owned(),
+            document_id: id.to_owned(),
+            source_hash: "a".repeat(64),
+            base_revision_id: format!("sha256:{}", "b".repeat(64)),
+            client_operation_id: "move-001".to_owned(),
+            command: TemporaryMoveNodeIntent {
+                kind: "move_node_to".to_owned(),
+                node_id: "rectangle-1".to_owned(),
+                x_emu: 1200,
+                y_emu: 3400,
+            },
+        };
+        assert!(validate_temporary_move_node_request(&request, id).is_ok());
+        let original_hash = temporary_move_request_hash(&request).unwrap();
+        request.command.x_emu += 1;
+        assert_ne!(
+            original_hash,
+            temporary_move_request_hash(&request).unwrap()
+        );
+        request.command.x_emu -= 1;
+
+        request.protocol_version = "chaptera.unknown".to_owned();
+        assert!(validate_temporary_move_node_request(&request, id).is_err());
+        request.protocol_version = "chaptera.commit-request.v1".to_owned();
+        request.document_id = "guest:0123456789abcdef0123456789abcdef".to_owned();
+        assert!(validate_temporary_move_node_request(&request, id).is_err());
+        request.document_id = id.to_owned();
+        request.base_revision_id = "sha256:1234".to_owned();
+        assert!(validate_temporary_move_node_request(&request, id).is_err());
+        request.base_revision_id = format!("sha256:{}", "b".repeat(64));
+        request.client_operation_id = "bad/route".to_owned();
+        assert!(validate_temporary_move_node_request(&request, id).is_err());
+        request.client_operation_id = "move-001".to_owned();
+        request.command.kind = "replace_story_range".to_owned();
+        assert!(validate_temporary_move_node_request(&request, id).is_err());
+        request.command.kind = "move_node_to".to_owned();
+        assert!(
+            validate_temporary_move_node_request(
+                &request,
+                "guest:0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn temporary_editor_current_admission_requires_exact_opened_source() {
+        let mut guest = session(1_000);
+        assert_eq!(
+            require_temporary_editor_current_session(&guest)
+                .unwrap_err()
+                .code,
+            "guest_session_not_found"
+        );
+        guest.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        assert_eq!(
+            require_temporary_editor_current_session(&guest)
+                .unwrap_err()
+                .code,
+            "temporary_editor_source_not_admitted"
+        );
+        guest.state = GuestSessionState::Opened;
+        guest.classification = Some("supported".to_owned());
+        guest.source_sha256 = Some("a".repeat(64));
+        assert!(require_temporary_editor_current_session(&guest).is_ok());
+        guest.classification = Some("partial".to_owned());
+        assert!(require_temporary_editor_current_session(&guest).is_ok());
+        guest.classification = Some("salvage".to_owned());
+        assert!(require_temporary_editor_current_session(&guest).is_err());
+        guest.classification = Some("supported".to_owned());
+        guest.quarantine_deleted_at_ms = Some(1_000);
+        assert!(require_temporary_editor_current_session(&guest).is_err());
+        guest.quarantine_deleted_at_ms = None;
+        guest.state = GuestSessionState::Expired;
+        assert!(require_temporary_editor_current_session(&guest).is_err());
+    }
+
     #[tokio::test]
     async fn migration_seeds_non_loginable_service_principal_and_guest_table() {
         let path = migrated_path("schema").await;
@@ -2215,6 +4256,186 @@ mod tests {
 
         store.close().await;
         let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn immediate_same_millisecond_delete_uses_expired_state_without_invalid_expiry() {
+        let path = migrated_path("tempedit-same-ms-delete").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:11111111111111111111111111111111".to_owned();
+        store.insert(&temporary).await.unwrap();
+        assert!(
+            store
+                .revoke_temporary(&temporary.session_id, 1_000)
+                .await
+                .unwrap()
+        );
+        let closed = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(closed.state, GuestSessionState::Expired);
+        assert_eq!(closed.expires_at_ms, closed.created_at_ms + 1);
+        assert!(
+            store
+                .mark_expired(&temporary.session_id, 1_000)
+                .await
+                .unwrap()
+        );
+        store
+            .mark_quarantine_deleted(&temporary.session_id, 1_000)
+            .await
+            .unwrap();
+        store.delete_expired(&temporary.session_id).await.unwrap();
+        assert!(store.get(&temporary.session_id).await.unwrap().is_none());
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn explicit_temporary_delete_revokes_before_purge_and_cannot_renew_ttl() {
+        let path = migrated_path("tempedit-early-delete").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        store.insert(&temporary).await.unwrap();
+        let stored = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 3_605_000);
+        assert!(
+            store
+                .revoke_temporary(&temporary.session_id, 5_100)
+                .await
+                .unwrap()
+        );
+        let revoked = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(revoked.state, GuestSessionState::Expired);
+        assert_eq!(revoked.expires_at_ms, 5_100);
+        assert_eq!(
+            revoked.terminal_code.as_deref(),
+            Some("temporary_editor_deleted_by_user")
+        );
+        assert!(
+            !store
+                .revoke_temporary(&temporary.session_id, 5_200)
+                .await
+                .unwrap()
+        );
+        let rejected = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_200)
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code, "guest_upload_state_conflict");
+        assert_eq!(
+            store
+                .revoke_temporary("guest:0123456789abcdef0123456789abcdef", 5_200)
+                .await
+                .unwrap_err()
+                .code,
+            "guest_session_not_found"
+        );
+        assert!(
+            store
+                .mark_expired(&temporary.session_id, 5_200)
+                .await
+                .unwrap()
+        );
+        store
+            .mark_quarantine_deleted(&temporary.session_id, 5_200)
+            .await
+            .unwrap();
+        store.delete_expired(&temporary.session_id).await.unwrap();
+        assert!(store.get(&temporary.session_id).await.unwrap().is_none());
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn temporary_editor_upload_acceptance_starts_one_hour_ttl() {
+        let path = migrated_path("tempedit-one-hour").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        assert!(is_temporary_edit_session(&temporary.session_id));
+        store.insert(&temporary).await.unwrap();
+
+        let stored = store
+            .mark_stored(&temporary.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 3_605_000);
+        assert_eq!(stored.updated_at_ms, 5_000);
+        let reread = store.get(&temporary.session_id).await.unwrap().unwrap();
+        assert_eq!(reread.expires_at_ms, 3_605_000);
+        let before_deadline = store
+            .mark_expired(&temporary.session_id, 3_604_999)
+            .await
+            .unwrap();
+        assert!(!before_deadline);
+        let at_deadline = store
+            .mark_expired(&temporary.session_id, 3_605_000)
+            .await
+            .unwrap();
+        assert!(at_deadline);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn ordinary_guest_reader_upload_retains_its_original_expiry() {
+        let path = migrated_path("guest-reader-stable-ttl").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let reader = session(1_000);
+        assert!(!is_temporary_edit_session(&reader.session_id));
+        store.insert(&reader).await.unwrap();
+        let stored = store
+            .mark_stored(&reader.session_id, 1024, "generation-1", "etag-1", 5_000)
+            .await
+            .unwrap();
+        assert_eq!(stored.expires_at_ms, 61_000);
+        let expired = store
+            .mark_expired(&reader.session_id, 61_000)
+            .await
+            .unwrap();
+        assert!(expired);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn temporary_edit_mode_cannot_enter_persistent_research_retention() {
+        let mut temporary = session(1_000);
+        temporary.session_id = "tempedit:0123456789abcdef0123456789abcdef".to_owned();
+        temporary.state = GuestSessionState::Opened;
+        temporary.classification = Some("unsupported".to_owned());
+        assert!(!contribution_eligible(&temporary));
+
+        let mut ordinary = session(1_000);
+        ordinary.state = GuestSessionState::Opened;
+        ordinary.classification = Some("unsupported".to_owned());
+        assert!(contribution_eligible(&ordinary));
+        ordinary.quarantine_deleted_at_ms = Some(2_000);
+        assert!(!contribution_eligible(&ordinary));
+    }
+
+    #[test]
+    fn temporary_edit_identity_requires_server_issued_shape() {
+        let valid = "tempedit:0123456789abcdef0123456789abcdef";
+        assert!(is_temporary_edit_session(valid));
+        assert!(!is_temporary_edit_session("tempedit:invalid"));
+        let ordinary = "guest:0123456789abcdef0123456789abcdef";
+        assert!(!is_temporary_edit_session(ordinary));
     }
 
     #[tokio::test]
@@ -2410,5 +4631,166 @@ mod tests {
         let b = token_hash(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assert!(constant_time_eq(&a, &a));
         assert!(!constant_time_eq(&a, &b));
+    }
+
+    #[tokio::test]
+    async fn upload_finishing_at_deadline_cannot_store_source() {
+        let path = migrated_path("upload-at-deadline").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+
+        let error = store
+            .mark_stored(&pending.session_id, 1024, "generation-1", "etag-1", 61_000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "guest_upload_state_conflict");
+        assert_eq!(
+            store.get(&pending.session_id).await.unwrap().unwrap().state,
+            GuestSessionState::Issued
+        );
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn worker_finishing_at_deadline_cannot_publish_scene_or_rejection() {
+        let path = migrated_path("scene-at-deadline").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+        store
+            .mark_stored(&pending.session_id, 1024, "generation-1", "etag-1", 1_001)
+            .await
+            .unwrap();
+        store.claim_open(&pending.session_id, 1_002).await.unwrap();
+
+        let opened = store
+            .finish_opened(
+                &pending.session_id,
+                "supported",
+                &"a".repeat(64),
+                Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
+                None,
+                None,
+                61_000,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(opened.code, "guest_open_state_conflict");
+        let rejected = store
+            .finish_rejected(&pending.session_id, "scanner_rejected", 61_000)
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code, "guest_open_state_conflict");
+        let stored = store.get(&pending.session_id).await.unwrap().unwrap();
+        assert_eq!(stored.state, GuestSessionState::Opening);
+        assert!(stored.scene_json.is_none());
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn stale_expiry_snapshot_cannot_delete_a_renewed_session() {
+        let path = migrated_path("stale-expiry-claim").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+
+        // The reaper has read a row that was due for expiration.
+        assert_eq!(store.expired_pending(61_000, 16).await.unwrap().len(), 1);
+        // Simulate a later, authoritative expiry extension before its delete
+        // claim (the mutation/operation identity fence belongs to the caller).
+        sqlx::query("UPDATE reader_guest_sessions SET expires_at_ms=? WHERE session_id=?")
+            .bind(3_661_000_i64)
+            .bind(pending.session_id.as_bytes())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        assert!(
+            !store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
+        let live = store.get(&pending.session_id).await.unwrap().unwrap();
+        assert_eq!(live.state, GuestSessionState::Issued);
+        assert_eq!(live.expires_at_ms, 3_661_000);
+
+        // Its genuine new deadline can still be claimed, never earlier.
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 3_661_000)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.get(&pending.session_id).await.unwrap().unwrap().state,
+            GuestSessionState::Expired
+        );
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn expired_metadata_is_swept_after_quarantine_delete_crash() {
+        let path = migrated_path("expired-metadata-resume").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let pending = session(1_000);
+        store.insert(&pending).await.unwrap();
+        sqlx::query("UPDATE reader_guest_sessions SET scene_json=? WHERE session_id=?")
+            .bind(br#"{"private":true}"#.as_slice())
+            .bind(pending.session_id.as_bytes())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        assert!(
+            !store
+                .mark_expired(&pending.session_id, 60_999)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .mark_expired(&pending.session_id, 61_000)
+                .await
+                .unwrap()
+        );
+        store
+            .mark_quarantine_deleted(&pending.session_id, 61_001)
+            .await
+            .unwrap();
+        // A prior worker crashed after deleting the bytes but before
+        // deleting the DB row containing the source-derived Scene.
+        let pending_cleanup = store.expired_pending(61_001, 16).await.unwrap();
+        assert_eq!(pending_cleanup.len(), 1);
+        assert_eq!(pending_cleanup[0].state, GuestSessionState::Expired);
+        assert_eq!(pending_cleanup[0].quarantine_deleted_at_ms, Some(61_001));
+
+        store.delete_expired(&pending.session_id).await.unwrap();
+        // Finalization is idempotent when a second sweeper observed the same
+        // expired snapshot before the first one finished.
+        store.delete_expired(&pending.session_id).await.unwrap();
+        assert!(store.get(&pending.session_id).await.unwrap().is_none());
+        store.close().await;
+        let _ = fs::remove_file(path);
     }
 }

@@ -155,6 +155,19 @@ pub fn open_for_product(bytes: &[u8]) -> Result<ViewerGeometryDocument, String> 
         .map_err(|error| format!("{error:#}"))
 }
 
+pub fn smoke_check_bytes(bytes: &[u8]) -> Result<(), String> {
+    let visual = open_for_product(bytes).map_err(|error| format!("open PUB bytes: {error}"))?;
+
+    if visual.document.pages.is_empty() {
+        return Err("document has no Viewer pages".to_owned());
+    }
+    if visual.scene.nodes.is_empty() {
+        return Err("document has no resolved scene nodes".to_owned());
+    }
+
+    Ok(())
+}
+
 pub fn start_folder_sweep(root: PathBuf) -> FolderSweepHandle {
     let (sender, receiver) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));

@@ -5,24 +5,63 @@
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
+mod acceptance_cli;
 mod acceptance_v2;
+mod acceptance_v2_cli;
 mod agent;
+mod authored_arrange;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod authored_arrange_gui_tests;
+mod authored_stack;
 mod diagnostic_sweep;
+mod duplicate_rectangle;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod duplicate_rectangle_gui_tests;
+mod editor_project_store;
 mod fallback_font;
+mod font_binding;
+mod history;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod history_gui_tests;
 mod image_decode_adapter;
+mod linked_story_ui;
 #[allow(dead_code)]
 mod locale;
+mod page_navigation;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod page_navigation_gui_tests;
+mod paragraph_alignment_overlay;
 mod product_smoke;
+mod reader_product_cli;
 mod reader_product_ui;
 mod reader_salvage;
+mod reader_update_control;
+#[cfg(test)]
+mod reader_visual_golden_tests;
+mod rectangle_creation;
+mod rectangle_creation_shell;
 mod render_backend;
+mod resize_modifiers;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod resize_modifiers_gui_tests;
 mod selection_keyboard;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod selection_keyboard_gui_tests;
+mod selection_keyboard_shell;
 mod source_font;
+mod suite_handoff_cli;
 #[allow(dead_code)]
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
+mod text_box_creation;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod text_box_creation_gui_tests;
+mod text_box_creation_shell;
 mod text_session;
+#[cfg(test)]
+mod text_session_gui_tests;
+mod text_session_shell;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
 
@@ -31,16 +70,17 @@ use chaptera_scene_instance::{
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
-    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1, apply_authored_page_render_lane_v1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1,
+    NodeRenderPlanV1, PageRenderPlanV1, layout_decorative_border_v1,
 };
 use eframe::egui;
+use font_binding::{
+    build_desktop_page_render_plan, build_desktop_page_render_plan_with_current_source_fonts,
+    build_desktop_page_render_plan_with_source_fonts,
+};
 use pub_interaction::{
-    MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown, ResizeTransaction,
-    ResizeUpdate, ScreenPoint, ScreenRect, ViewTransform, classify_resize_pointer_down,
-    resize_handle_center,
+    DocumentPoint, MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown,
+    ResizeTransaction, ResizeUpdate, ScreenPoint, ScreenRect, SnapFeedback, SnapIndex, SnapObject,
+    ViewTransform, classify_resize_pointer_down, resize_handle_center,
 };
 use pub_viewer::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
@@ -90,6 +130,7 @@ fn resolve_supporter_market() -> supporter::MarketProfile {
 }
 const SUPPORTER_STORAGE_KEY: &str = "chaptera.supporter.v1";
 const PAGE_MARGIN: f32 = 24.0;
+const SNAP_TOLERANCE_PX: f32 = 6.0;
 const EMU_PER_INCH: f32 = 914_400.0;
 const NUMERIC_ZOOM_POINTS_PER_INCH: f32 = 96.0;
 const MIN_NUMERIC_ZOOM: f32 = 0.10;
@@ -99,89 +140,48 @@ const PAGE_THUMBNAIL_MAX_HEIGHT: f32 = 148.0;
 const SOURCE_REVALIDATE_INTERVAL: Duration = Duration::from_secs(2);
 const SOURCE_EXACT_REVALIDATE_INTERVAL: Duration = Duration::from_secs(30);
 
-fn desktop_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
-    ExplicitRenderTextFontResourceV1 {
-        resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
-        expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
-        face_index: 0,
-        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
-        default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-        bytes: chaptera_desktop_fallback_font_resource::bytes(),
+fn paint_document_node_decorative_border(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    node: &NodeRenderPlanV1,
+    image_textures: &BTreeMap<String, CachedImageTexture>,
+) {
+    let (Some(border), Some(line)) = (node.decorative_border.as_ref(), node.solid_line.as_ref())
+    else {
+        return;
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return;
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return;
+    };
+
+    for placement in placements {
+        let key = format!("{:?}", placement.resource_id);
+        let Some(texture) = image_textures.get(&key) else {
+            continue;
+        };
+        let Some(rect) = render_backend::physical_rect_to_egui(
+            page_rect,
+            scene_scale,
+            placement.bounds.x.get(),
+            placement.bounds.y.get(),
+            placement.bounds.width.get(),
+            placement.bounds.height.get(),
+        ) else {
+            continue;
+        };
+        painter.image(
+            texture.texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
     }
-}
-
-fn build_desktop_page_render_plan(
-    visual: &ViewerGeometryDocument,
-    page_index: usize,
-) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
-    build_page_render_plan_with_text_layout_v1(visual, page_index, &desktop_text_font_resource())
-}
-
-fn build_desktop_page_render_plan_with_source_fonts(
-    visual: &ViewerGeometryDocument,
-    page_index: usize,
-    source_fonts: &source_font::DesktopSourceFontRegistry,
-) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
-    let fallback = desktop_text_font_resource();
-    build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
-        source_fonts.resource_for_fragment(fragment)
-    })
-}
-
-fn editor_authored_page_render_lane(
-    editor: &pub_editor::EditorSession,
-    page_id: pub_editor::PageId,
-) -> Result<AuthoredPageRenderLaneV1, String> {
-    let stack = editor
-        .authored_stack(page_id)
-        .ok_or_else(|| "authored lane page is absent from the editor graph".to_owned())?;
-    let mut nodes = Vec::with_capacity(stack.members.len());
-
-    for node_id in stack.members {
-        let shape = editor
-            .authored_shape(node_id)
-            .ok_or_else(|| format!("authored lane member {node_id:?} has no authored shape"))?;
-        if shape.page_id != page_id || shape.parent_id != page_id {
-            return Err(format!(
-                "authored lane member {node_id:?} does not belong directly to page {page_id:?}"
-            ));
-        }
-        if shape.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
-            || shape.paint.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
-        {
-            return Err(format!(
-                "authored lane member {node_id:?} is not canonically AuthorCreated"
-            ));
-        }
-
-        nodes.push(AuthoredPageRenderNodeV1 {
-            node_id,
-            bounds: shape.bounds,
-            solid_fill_rgb: shape.paint.fill.visible.then_some([
-                shape.paint.fill.color.r,
-                shape.paint.fill.color.g,
-                shape.paint.fill.color.b,
-            ]),
-            solid_line: shape.paint.stroke.visible.then_some(RenderSolidLineV1 {
-                rgb: [
-                    shape.paint.stroke.color.r,
-                    shape.paint.stroke.color.g,
-                    shape.paint.stroke.color.b,
-                ],
-                width_emu: shape.paint.stroke.width_emu,
-            }),
-        });
-    }
-
-    Ok(AuthoredPageRenderLaneV1 { page_id, nodes })
-}
-
-fn apply_editor_authored_page_lane(
-    plan: &mut PageRenderPlanV1,
-    editor: &pub_editor::EditorSession,
-) -> Result<(), String> {
-    let lane = editor_authored_page_render_lane(editor, plan.page_id)?;
-    apply_authored_page_render_lane_v1(plan, &lane).map_err(|error| error.to_string())
 }
 
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
@@ -479,245 +479,6 @@ mod scene_selection_state_tests {
         );
         assert_eq!(selection.primary(), Some("origin:42/page:1/use:1"));
     }
-
-    #[cfg(feature = "embedded-fixture-tests")]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn real_gui_shift_pointer_toggles_two_scene_instances_without_editor_operations() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture), cc.storage)
-            });
-        harness.step();
-        harness.step();
-
-        let (page_label, first_instance, second_instance, first_point, second_point) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-
-            visual
-                .document
-                .pages
-                .iter()
-                .find_map(|page| {
-                    let page_origin = page.id.into_canonical();
-                    let page_id_text = page.id.as_canonical().to_string();
-                    let entries = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|node| node.parent_origin == page_origin)
-                        .enumerate()
-                        .filter_map(|(paint_order, node)| {
-                            let instance =
-                                direct_scene_instance(editor, &page_id_text, node.origin)?;
-                            Some(SceneHitEntry {
-                                instance_id: instance.instance_id,
-                                node_id: node.origin,
-                                bounds: node.bounds,
-                                z_order: 0,
-                                paint_order: u32::try_from(paint_order).ok()?,
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let hit_index = SceneHitTestIndex::new(entries);
-
-                    let mut candidates = hit_index
-                        .entries
-                        .iter()
-                        .filter_map(|hit| {
-                            if hit.bounds.width.get() <= 0 || hit.bounds.height.get() <= 0 {
-                                return None;
-                            }
-                            let point = pub_interaction::DocumentPoint::new(
-                                pub_editor::LengthEmu::new(
-                                    hit.bounds.x.get() + hit.bounds.width.get() / 2,
-                                ),
-                                pub_editor::LengthEmu::new(
-                                    hit.bounds.y.get() + hit.bounds.height.get() / 2,
-                                ),
-                            );
-                            hit_index
-                                .topmost_at(point)
-                                .filter(|top| top.instance_id == hit.instance_id)
-                                .map(|_| (hit.instance_id.clone(), point))
-                        })
-                        .take(2)
-                        .collect::<Vec<_>>();
-
-                    if candidates.len() != 2 {
-                        return None;
-                    }
-                    let second = candidates.pop().expect("second candidate");
-                    let first = candidates.pop().expect("first candidate");
-                    Some((
-                        format!("Page {}", page.index),
-                        first.0,
-                        second.0,
-                        first.1,
-                        second.1,
-                    ))
-                })
-                .expect("fixture exposes two independently topmost direct page-local objects")
-        };
-
-        harness.get_by_label(&page_label).click();
-        harness.step();
-
-        let to_screen = |harness: &Harness<ViewerApp>, point: pub_interaction::DocumentPoint| {
-            let canvas = harness
-                .get_by_label("Document canvas")
-                .raw_bounds()
-                .expect("document canvas has screen bounds");
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let page = visual
-                .document
-                .pages
-                .get(app.selected_page)
-                .expect("selected page");
-            let surface = visual
-                .scene
-                .surfaces
-                .iter()
-                .find(|surface| surface.origin == page.id)
-                .expect("selected page surface");
-            let viewport = egui::vec2(
-                (canvas.x1 - canvas.x0) as f32,
-                (canvas.y1 - canvas.y0) as f32,
-            );
-            let scene_scale = fitted_scale(
-                surface.size.width.get(),
-                surface.size.height.get(),
-                viewport,
-            )
-            .expect("valid fit scale")
-                * app.zoom;
-            let page_width = surface.size.width.get() as f32 * scene_scale;
-            let page_height = surface.size.height.get() as f32 * scene_scale;
-            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
-            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
-            egui::pos2(
-                page_left + point.x.get() as f32 * scene_scale,
-                page_top + point.y.get() as f32 * scene_scale,
-            )
-        };
-
-        let first_screen = to_screen(&harness, first_point);
-        let second_screen = to_screen(&harness, second_point);
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(first_screen),
-            egui::Event::PointerButton {
-                pos: first_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-            egui::Event::PointerButton {
-                pos: first_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 1);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(first_instance.as_str())
-        );
-
-        harness.input_mut().modifiers = egui::Modifiers::SHIFT;
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(second_screen),
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-        ]);
-        harness.step();
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 2);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(second_instance.as_str())
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "selection must remain transient"
-        );
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(second_screen),
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-        ]);
-        harness.step();
-        harness.step();
-        harness.input_mut().modifiers = egui::Modifiers::default();
-
-        assert_eq!(harness.state().canvas_selection.len(), 1);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(first_instance.as_str())
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "Shift-click removal must not create an Editor operation"
-        );
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -829,32 +590,16 @@ fn main() -> eframe::Result<()> {
         std::process::exit(2);
     }
 
-    let mut args = std::env::args_os().skip(1);
-    let first_arg = args.next();
-
-    if first_arg.as_deref()
-        == Some(std::ffi::OsStr::new(
-            chaptera_update_handoff::CONTROL_MODE_ARG,
-        ))
-    {
-        if !reader_only_mode() {
-            eprintln!("update control mode is reserved for the Chaptera Reader product");
+    let mut args = std::env::args_os().skip(1).peekable();
+    match reader_update_control::try_run_from_args(&mut args, reader_only_mode()) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("{error}");
             std::process::exit(2);
         }
-        let Some(request_path) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera-reader --chaptera-update-control HANDOFF-REQUEST.json");
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("Reader update control mode accepts exactly one handoff request");
-            std::process::exit(2);
-        }
-        if let Err(error) = run_reader_update_control(&request_path) {
-            eprintln!("Reader update control failed: {error}");
-            std::process::exit(2);
-        }
-        return Ok(());
     }
+    let first_arg = args.next();
 
     if first_arg.as_deref() == Some(std::ffi::OsStr::new("--agent-v1")) {
         if args.next().is_some() {
@@ -868,272 +613,27 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--product-smoke-v1")) {
-        let output = args.next().map(PathBuf::from);
-        if args.next().is_some() {
-            eprintln!("usage: chaptera --product-smoke-v1 [OUTPUT.json]");
-            std::process::exit(2);
-        }
-        match product_smoke::run() {
-            Ok(receipt) => {
-                let encoded = serde_json::to_string(&receipt)
-                    .expect("product smoke receipt is JSON-serializable");
-                if let Some(output) = output {
-                    if let Err(error) = fs::write(&output, format!("{encoded}\n")) {
-                        eprintln!("write product smoke receipt {}: {error}", output.display());
-                        std::process::exit(2);
-                    }
-                } else {
-                    println!("{encoded}");
-                }
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--handoff-create-v1")) {
-        if !reader_only_mode() {
-            eprintln!("only the Chaptera Reader product may create a V1 suite handoff");
-            std::process::exit(2);
-        }
-        let Some(target) = args.next().and_then(|value| value.into_string().ok()) else {
-            eprintln!(
-                "usage: chaptera-reader --handoff-create-v1 TARGET_PRODUCT SOURCE.pub OUTPUT.json"
-            );
-            std::process::exit(2);
-        };
-        let Some(source) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera-reader --handoff-create-v1 TARGET_PRODUCT SOURCE.pub OUTPUT.json"
-            );
-            std::process::exit(2);
-        };
-        let Some(output) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera-reader --handoff-create-v1 TARGET_PRODUCT SOURCE.pub OUTPUT.json"
-            );
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("Reader handoff creation accepts exactly target, source, and output");
-            std::process::exit(2);
-        }
-
-        let admitted = match chaptera_suite_handoff::AdmittedSource::open(&source) {
-            Ok(admitted) => admitted,
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        };
-        let reader_supported = smoke_check_bytes(admitted.bytes()).is_ok();
-        let rescue_eligible = !reader_supported
-            && matches!(
-                classify_failure_candidate(admitted.bytes()).class,
-                FailureIntakeClass::PubDamaged
-            );
-        match chaptera_suite_handoff::create_reader_handoff_from_admitted(
-            &admitted,
-            &target,
-            reader_supported,
-            rescue_eligible,
-        )
-        .and_then(|packet| {
-            chaptera_suite_handoff::write_packet(&packet, &output)?;
-            Ok(packet)
-        }) {
-            Ok(packet) => {
-                println!(
-                    "{{\"protocol_version\":\"{}\",\"sender_product_id\":\"{}\",\"target_product_id\":\"{}\",\"requested_job\":\"{}\",\"source_sha256\":\"{}\"}}",
-                    chaptera_suite_handoff::PACKET_VERSION,
-                    chaptera_suite_handoff::READER_PRODUCT_ID,
-                    packet.target_product_id,
-                    packet.requested_job,
-                    packet.source.sha256
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--handoff-accept-v1")) {
-        if reader_only_mode() {
-            eprintln!("Chaptera Reader is a handoff sender, not an Editor receiver");
-            std::process::exit(2);
-        }
-        let Some(packet_path) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera-editor --handoff-accept-v1 PACKET.json ACCEPTANCE.json");
-            std::process::exit(2);
-        };
-        let Some(output) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera-editor --handoff-accept-v1 PACKET.json ACCEPTANCE.json");
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("Editor handoff acceptance accepts exactly packet and output");
-            std::process::exit(2);
-        }
-
-        let result = chaptera_suite_handoff::load_for_receiver(
-            &packet_path,
-            chaptera_suite_handoff::EDITOR_PRODUCT_ID,
-        )
-        .and_then(|validated| {
-            let admitted = smoke_check_bytes(validated.source_bytes()).is_ok();
-            chaptera_suite_handoff::finish_acceptance(validated, admitted)
-        })
-        .and_then(|receipt| {
-            chaptera_suite_handoff::write_acceptance(&receipt, &output)?;
-            Ok(receipt)
-        });
-
-        match result {
-            Ok(receipt) => {
-                println!(
-                    "{}",
-                    serde_json::to_string(&receipt)
-                        .expect("suite handoff acceptance is JSON-serializable")
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v1")) {
-        let Some(fixture) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        let Some(project) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        let Some(export) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("desktop acceptance mode accepts exactly three path arguments");
-            std::process::exit(2);
-        }
-
-        match acceptance::run(&fixture, &project, &export) {
-            Ok(observation) => {
-                println!(
-                    "{}",
-                    serde_json::to_string(&observation)
-                        .expect("desktop acceptance observation is JSON-serializable")
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v2")) {
-        let Some(fixture) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
-            );
-            std::process::exit(2);
-        };
-        let Some(replacement) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
-            );
-            std::process::exit(2);
-        };
-        let Some(project) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
-            );
-            std::process::exit(2);
-        };
-        let Some(export) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
-            );
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("desktop continuity V2 mode accepts exactly four path arguments");
-            std::process::exit(2);
-        }
-
-        match acceptance_v2::run(&fixture, &replacement, &project, &export) {
-            Ok(observation) => {
-                println!(
-                    "{}",
-                    serde_json::to_string(&observation)
-                        .expect("desktop continuity V2 observation is JSON-serializable")
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--reader-activation-probe-v1")) {
-        if !reader_only_mode() {
-            eprintln!("Reader activation probe is reserved for the Reader build");
-            std::process::exit(2);
-        }
-        let Some(path) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera-reader --reader-activation-probe-v1 SOURCE.pub RECEIPT.json HOLD_MS"
-            );
-            std::process::exit(2);
-        };
-        let Some(receipt) = args.next().map(PathBuf::from) else {
-            eprintln!(
-                "usage: chaptera-reader --reader-activation-probe-v1 SOURCE.pub RECEIPT.json HOLD_MS"
-            );
-            std::process::exit(2);
-        };
-        let Some(hold_ms) = args
-            .next()
-            .and_then(|value| value.into_string().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-        else {
-            eprintln!("Reader activation probe HOLD_MS must be an integer");
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("Reader activation probe accepts exactly source, receipt, and hold_ms");
-            std::process::exit(2);
-        }
-        if let Err(error) = reader_activation_probe(&path, &receipt, hold_ms) {
-            eprintln!("Reader activation probe failed: {error}");
-            std::process::exit(2);
-        }
+    if reader_product_cli::try_handle_product_smoke(first_arg.as_deref(), &mut args) {
         return Ok(());
     }
 
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--smoke-check")) {
-        let Some(path) = args.next().map(PathBuf::from) else {
-            std::process::exit(2);
-        };
-        if smoke_check(&path).is_err() {
-            std::process::exit(1);
-        }
+    if suite_handoff_cli::try_handle(first_arg.as_deref(), &mut args) {
+        return Ok(());
+    }
+
+    if acceptance_cli::try_handle(first_arg.as_deref(), &mut args) {
+        return Ok(());
+    }
+
+    if acceptance_v2_cli::try_handle(first_arg.as_deref(), &mut args) {
+        return Ok(());
+    }
+
+    if reader_product_cli::try_handle_reader_probe(
+        first_arg.as_deref(),
+        &mut args,
+        reader_only_mode(),
+    ) {
         return Ok(());
     }
 
@@ -1151,208 +651,13 @@ fn main() -> eframe::Result<()> {
         APP_TITLE,
         options,
         Box::new(move |cc| {
-            fallback_font::install(&cc.egui_ctx)
-                .expect("pinned Chaptera fallback font resource must validate");
+            font_binding::install_startup_font(&cc.egui_ctx);
             Ok(Box::new(ViewerApp::new_with_storage(
                 initial_path,
                 cc.storage,
             )))
         }),
     )
-}
-
-#[cfg(feature = "reader-only")]
-struct ReaderControlHooks;
-
-#[cfg(feature = "reader-only")]
-impl chaptera_update_orchestrator::UpdateHooks for ReaderControlHooks {
-    fn quiesce(&mut self, _control_updater: &Path) -> std::result::Result<(), String> {
-        // Ownership of the install lock proves the front-door U1 released its
-        // mutation authority before copied U1 reaches this point. Product-level
-        // process shutdown is deliberately a later slice.
-        Ok(())
-    }
-
-    fn health_check(&mut self, current_tree: &Path) -> std::result::Result<(), String> {
-        use sha2::{Digest, Sha256};
-        use std::process::{Command, Stdio};
-        use std::thread;
-        use std::time::{Duration, Instant};
-
-        const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
-
-        let candidate = current_tree.join(
-            std::env::current_exe()
-                .map_err(|error| format!("resolve control executable: {error}"))?
-                .file_name()
-                .ok_or_else(|| "control executable has no file name".to_owned())?,
-        );
-        let bytes = fs::read(&candidate)
-            .map_err(|error| format!("read activated Reader {}: {error}", candidate.display()))?;
-        if bytes.is_empty() {
-            return Err(format!(
-                "activated Reader executable is empty: {}",
-                candidate.display()
-            ));
-        }
-        let sha256 = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-
-        let mut child = Command::new(&candidate)
-            .arg("--product-smoke-v1")
-            .env("CHAPTERA_PRODUCT_SMOKE_BINARY_SHA256", sha256)
-            .env(
-                "CHAPTERA_PRODUCT_SMOKE_BINARY_BYTE_LEN",
-                bytes.len().to_string(),
-            )
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("launch activated Reader health smoke: {error}"))?;
-
-        let deadline = Instant::now() + HEALTH_TIMEOUT;
-        loop {
-            match child
-                .try_wait()
-                .map_err(|error| format!("wait for activated Reader health smoke: {error}"))?
-            {
-                Some(status) if status.success() => return Ok(()),
-                Some(status) => {
-                    return Err(format!(
-                        "activated Reader health smoke failed with status {status}"
-                    ));
-                }
-                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-                None => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "activated Reader health smoke exceeded {} seconds",
-                        HEALTH_TIMEOUT.as_secs()
-                    ));
-                }
-            }
-        }
-    }
-}
-
-#[cfg(feature = "reader-only")]
-fn run_reader_update_control(request_path: &Path) -> Result<(), String> {
-    let request = chaptera_update_handoff::read_control_request(request_path)
-        .map_err(|error| error.to_string())?;
-    let orchestrator = chaptera_update_orchestrator::UpdateOrchestrator::new(&request.install_root);
-    chaptera_update_handoff::validate_request_against_engine(&request, orchestrator.engine())
-        .map_err(|error| error.to_string())?;
-
-    let _lock = chaptera_update_orchestrator::InstallLock::acquire(&request.install_root)
-        .map_err(|error| error.to_string())?;
-    // Revalidate after blocking lock acquisition: the request may have become
-    // stale while copied U1 waited for its parent/front-door process to exit.
-    chaptera_update_handoff::validate_request_against_engine(&request, orchestrator.engine())
-        .map_err(|error| error.to_string())?;
-
-    let receipt = chaptera_update_handoff::ControlReceipt {
-        schema_version: chaptera_update_handoff::CONTROL_RECEIPT_SCHEMA_VERSION.to_owned(),
-        transaction_id: request.transaction_id.clone(),
-        pid: std::process::id(),
-        executable: std::env::current_exe()
-            .map_err(|error| format!("resolve control executable: {error}"))?,
-    };
-    chaptera_update_handoff::write_control_receipt(
-        &chaptera_update_handoff::receipt_path(request_path),
-        &receipt,
-    )
-    .map_err(|error| error.to_string())?;
-
-    let mut hooks = ReaderControlHooks;
-    orchestrator
-        .continue_prepared_candidate(&mut hooks)
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-#[cfg(not(feature = "reader-only"))]
-fn run_reader_update_control(_request_path: &Path) -> Result<(), String> {
-    Err("update control mode is unavailable outside the Reader build".to_owned())
-}
-
-fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<(), String> {
-    const MAX_HOLD_MS: u64 = 60_000;
-    if hold_ms == 0 || hold_ms > MAX_HOLD_MS {
-        return Err(format!(
-            "hold_ms must be within 1..={MAX_HOLD_MS}, got {hold_ms}"
-        ));
-    }
-
-    // Use the same source admission seam as other Reader product-open paths.
-    // This keeps the activation proof inside the shared .pub identity/bounds
-    // policy instead of introducing a new direct fs::read bypass.
-    let admitted = chaptera_suite_handoff::AdmittedSource::open(path)?;
-    let source_sha256 = admitted.sha256().to_owned();
-    let source_byte_len = admitted.bytes().len();
-    let visual = diagnostic_sweep::open_for_product(admitted.bytes())
-        .map_err(|error| format!("open {}: {error}", path.display()))?;
-    let page_count = visual.document.pages.len();
-
-    let write_receipt = |completed: bool, source_unchanged: bool| -> Result<(), String> {
-        if let Some(parent) = receipt.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("create activation receipt parent: {error}"))?;
-        }
-        let value = serde_json::json!({
-            "schema_version": "chaptera.reader-activation-session.v1",
-            "pid": std::process::id(),
-            "source_sha256": source_sha256,
-            "source_byte_len": source_byte_len,
-            "page_count": page_count,
-            "read_only": true,
-            "process_model": "independent_process_per_activation",
-            "completed": completed,
-            "source_unchanged": source_unchanged,
-        });
-        fs::write(
-            receipt,
-            format!(
-                "{}\n",
-                serde_json::to_string(&value)
-                    .map_err(|error| format!("serialize activation receipt: {error}"))?
-            ),
-        )
-        .map_err(|error| format!("write activation receipt {}: {error}", receipt.display()))
-    };
-
-    write_receipt(false, false)?;
-    std::hint::black_box(&visual);
-    std::thread::sleep(Duration::from_millis(hold_ms));
-
-    let after = chaptera_suite_handoff::AdmittedSource::open(path)
-        .map_err(|error| format!("re-admit {} after activation hold: {error}", path.display()))?;
-    if after.sha256() != source_sha256 || after.bytes().len() != source_byte_len {
-        return Err("Reader activation probe observed source mutation".to_owned());
-    }
-    write_receipt(true, true)
-}
-
-fn smoke_check(path: &Path) -> Result<(), String> {
-    let admitted = chaptera_suite_handoff::AdmittedSource::open(path)?;
-    smoke_check_bytes(admitted.bytes())
-}
-
-fn smoke_check_bytes(bytes: &[u8]) -> Result<(), String> {
-    let visual = diagnostic_sweep::open_for_product(bytes)
-        .map_err(|error| format!("open PUB bytes: {error}"))?;
-
-    if visual.document.pages.is_empty() {
-        return Err("document has no Viewer pages".to_owned());
-    }
-    if visual.scene.nodes.is_empty() {
-        return Err("document has no resolved scene nodes".to_owned());
-    }
-
-    Ok(())
 }
 
 struct CachedImageTexture {
@@ -1365,6 +670,7 @@ struct CachedPageFrameWork {
     page_index: usize,
     render_plan: PageRenderPlanV1,
     hit_index: SceneHitTestIndex,
+    snap_index: Option<SnapIndex>,
     movable_nodes: BTreeMap<String, (pub_editor::NodeId, pub_editor::RectEmu)>,
     resizable_nodes: BTreeMap<String, (pub_editor::NodeId, pub_editor::RectEmu)>,
 }
@@ -1376,6 +682,7 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    source_customer_page_ids: Vec<pub_editor::PageId>,
     salvage: Option<ReaderPartialSourceGraph>,
     source_fonts: source_font::DesktopSourceFontRegistry,
     source_fonts_install_attempted: bool,
@@ -1386,6 +693,8 @@ struct ViewerApp {
     canvas_selection: SceneSelectionState,
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
+    rectangle_creation: rectangle_creation::RectangleCreateSessionV1,
+    text_box_creation: text_box_creation::TextBoxCreateSessionV1,
     created_text_box_scene_nodes: BTreeSet<pub_editor::NodeId>,
     text_mode: Option<text_session::DesktopTextMode>,
     zoom: f32,
@@ -1440,6 +749,7 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_customer_page_ids: Vec::new(),
             salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
@@ -1450,6 +760,8 @@ impl ViewerApp {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -1812,10 +1124,20 @@ impl ViewerApp {
             match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
                 Ok(mut editor) => {
                     let project_status = match load_editor_project_sidecar(&path, &mut editor) {
-                        Ok(Some((sidecar, operation_count))) => Some(format!(
-                            "Loaded editor project {} with {operation_count} operations.",
-                            sidecar.display()
-                        )),
+                        Ok(Some((sidecar, operation_count, disposition))) => match disposition {
+                            editor_project_store::StoreDisposition::Current => Some(format!(
+                                "Loaded editor project {} with {operation_count} operations.",
+                                sidecar.display()
+                            )),
+                            editor_project_store::StoreDisposition::Recovery => Some(format!(
+                                "Recovered editor project from the last complete generation {} with {operation_count} operations. Save Project will republish a healthy current generation.",
+                                sidecar.display()
+                            )),
+                            editor_project_store::StoreDisposition::Legacy => Some(format!(
+                                "Loaded legacy editor project {} with {operation_count} operations. The next Save Project upgrades it to crash-safe generation storage.",
+                                sidecar.display()
+                            )),
+                        },
                         Ok(None) => None,
                         Err(error) => Some(format!("Editor project was not applied: {error}")),
                     };
@@ -1881,6 +1203,7 @@ impl ViewerApp {
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
         self.visual = Some(visual);
+        self.capture_source_customer_page_ids_from_visual();
         self.salvage = None;
         self.selected_page = 0;
         self.page_frame_cache.clear();
@@ -1924,17 +1247,7 @@ impl ViewerApp {
                 initial_page: 0,
             });
 
-        if let Err(error) = self.sync_visual_stories_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer text projection refresh failed closed: {error}"
-            ));
-        }
-        if let Err(error) = self.sync_visual_created_text_boxes_from_editor() {
-            self.edit_status = Some(format!(
-                "Viewer created TextBox scene sync failed closed: {error}"
-            ));
-        }
-        self.sync_visual_geometry_from_editor();
+        self.finish_open_authoring_projection();
     }
 
     fn commit_prepared_salvage_open(
@@ -1956,6 +1269,7 @@ impl ViewerApp {
         self.source_fonts = source_font::DesktopSourceFontRegistry::new();
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
+        self.source_customer_page_ids.clear();
         self.visual = None;
         self.salvage = Some(prepared.salvage);
         self.selected_page = 0;
@@ -1994,6 +1308,8 @@ impl ViewerApp {
     }
 
     fn load_path(&mut self, path: PathBuf) {
+        self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
+        self.text_box_creation = text_box_creation::TextBoxCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
@@ -2295,6 +1611,25 @@ impl ViewerApp {
                 self.open_pub_folder_diagnostics();
             }
 
+            self.show_rectangle_tool_control(ui, editor_available);
+
+            self.show_text_box_tool_control(ui, editor_available);
+
+            let duplicate_enabled =
+                rectangle_creation_shell::rectangle_tool_inactive(&self.rectangle_creation) && self.selected_authored_rectangle_target().is_ok();
+            let duplicate_response =
+                ui.add_enabled(duplicate_enabled, egui::Button::new("Duplicate"));
+            if duplicate_response.clicked()
+                && let Err(error) = self.duplicate_selected_authored_rectangle()
+            {
+                self.edit_status = Some(error);
+            }
+            if !duplicate_enabled {
+                duplicate_response.on_disabled_hover_text(
+                    "Select exactly one authored Rectangle to duplicate it.",
+                );
+            }
+
             if let Some(label) = document_label {
                 ui.label(label);
             } else {
@@ -2383,21 +1718,7 @@ impl ViewerApp {
                     }
                 }
                 if save_clicked {
-                    match self.save_editor_project_sidecar() {
-                        Ok(path) => {
-                            self.project_status = Some(format!(
-                                "Saved editor project with {operation_count} operations."
-                            ));
-                            self.edit_status = Some(format!(
-                                "Project saved to {}. Source PUB was not overwritten.",
-                                path.display()
-                            ));
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Could not save editor project: {error}"));
-                        }
-                    }
+                    self.save_project_with_status(operation_count);
                 }
                 if redo_clicked {
                     self.apply_redo();
@@ -2436,15 +1757,10 @@ impl ViewerApp {
                         self.selected_page > 0,
                         egui::Button::new("‹").min_size(egui::vec2(34.0, 26.0)),
                     );
-                    if previous.clicked() {
-                        self.selected_page -= 1;
-                        self.canvas_selection.clear();
-                        self.canvas_drag = None;
-                        self.canvas_resize = None;
-                        self.supporter_value
-                            .observe(supporter::ValueEvent::PageNavigated {
-                                page_index: self.selected_page,
-                            });
+                    if previous.clicked()
+                        && let Some(index) = self.selected_page.checked_sub(1)
+                    {
+                        self.navigate_to_page_index(index);
                     }
 
                     if page_count > 0 {
@@ -2459,15 +1775,10 @@ impl ViewerApp {
                         page_count > 0 && self.selected_page + 1 < page_count,
                         egui::Button::new("›").min_size(egui::vec2(34.0, 26.0)),
                     );
-                    if next.clicked() {
-                        self.selected_page += 1;
-                        self.canvas_selection.clear();
-                        self.canvas_drag = None;
-                        self.canvas_resize = None;
-                        self.supporter_value
-                            .observe(supporter::ValueEvent::PageNavigated {
-                                page_index: self.selected_page,
-                            });
+                    if next.clicked()
+                        && let Some(index) = self.selected_page.checked_add(1)
+                    {
+                        self.navigate_to_page_index(index);
                     }
                 });
 
@@ -2745,7 +2056,7 @@ impl ViewerApp {
             reader_product_ui::panel_separator(ui);
         } else {
             ui.heading("Pages");
-            ui.separator();
+            self.show_page_reorder_controls(ui);
         }
 
         self.ensure_image_textures(ui.ctx());
@@ -2807,14 +2118,7 @@ impl ViewerApp {
         });
 
         if let Some(index) = selected_page {
-            if self.selected_page != index {
-                self.canvas_selection.clear();
-                self.canvas_drag = None;
-                self.canvas_resize = None;
-                self.supporter_value
-                    .observe(supporter::ValueEvent::PageNavigated { page_index: index });
-            }
-            self.selected_page = index;
+            self.navigate_to_page_index(index);
         }
 
         if !reader_only_mode() {
@@ -3499,7 +2803,7 @@ impl ViewerApp {
             return;
         };
 
-        let frame_count = self
+        let frame_ordinals = self
             .visual
             .as_ref()
             .map(|visual| {
@@ -3507,9 +2811,10 @@ impl ViewerApp {
                     .story_frames
                     .iter()
                     .filter(|frame| frame.story_id == story_id)
-                    .count()
+                    .map(|frame| frame.ordinal)
+                    .collect::<Vec<_>>()
             })
-            .unwrap_or(0);
+            .unwrap_or_default();
 
         let Some(editor) = self.editor.as_ref() else {
             ui.colored_label(
@@ -3532,11 +2837,19 @@ impl ViewerApp {
             }
             self.show_table_cell_edit_controls(ui, story_id, &table_cells);
         } else {
-            if frame_count != 1 {
-                ui.weak(format!(
-                    "Read-only in the desktop slice: this Story has {frame_count} frames. The engine can validate shared-Story editing, but this Viewer does not yet paint linked text flow faithfully."
+            let story_ui = match linked_story_ui::state_for_validated_story_v1(&frame_ordinals) {
+                Ok(state) => state,
+                Err(reason) => {
+                    ui.weak(format!("Read-only in the desktop slice: {reason}."));
+                    return;
+                }
+            };
+            if let Some(chain_membership) = &story_ui.chain_membership {
+                ui.strong(format!("Linked Story chain: {chain_membership}"));
+                ui.small(format!(
+                    "{} frames share one canonical Story. Editing reflows that Story through the existing chain; link topology remains unchanged.",
+                    story_ui.frame_count
                 ));
-                return;
             }
             self.show_story_text_edit_controls(ui, story_id);
         }
@@ -3632,7 +2945,9 @@ impl ViewerApp {
     }
 
     fn show_story_text_edit_controls(&mut self, ui: &mut egui::Ui, story_id: pub_editor::StoryId) {
-        ui.small("Safe slice: one validated ordinary Story. The original PUB remains immutable.");
+        ui.small(
+            "Safe slice: one validated ordinary Story. Existing frame topology and the original PUB remain immutable.",
+        );
         if self
             .preview_clipped_story_keys
             .contains(&format!("{:?}", story_id))
@@ -3788,72 +3103,17 @@ impl ViewerApp {
         }
     }
 
-    fn finish_authoring_change(&mut self, status: &str) {
-        self.canvas_drag = None;
-        self.canvas_resize = None;
-        self.page_frame_cache.clear();
-        let text_projection_refresh = self.sync_visual_stories_from_editor();
-        let created_node_scene_sync = self.sync_visual_created_text_boxes_from_editor();
-        self.sync_visual_geometry_from_editor();
-        self.refresh_search();
-        self.export_preview = None;
-        self.project_status = Some("Editor project has unsaved changes.".to_owned());
-        self.edit_status = Some(match (text_projection_refresh, created_node_scene_sync) {
-            (Ok(()), Ok(())) => status.to_owned(),
-            (Err(text_error), Ok(())) => {
-                format!("{status} Viewer text projection refresh failed closed: {text_error}")
-            }
-            (Ok(()), Err(scene_error)) => {
-                format!("{status} Viewer created TextBox scene sync failed closed: {scene_error}")
-            }
-            (Err(text_error), Err(scene_error)) => format!(
-                "{status} Viewer text projection refresh failed closed: {text_error}; created TextBox scene sync failed closed: {scene_error}"
-            ),
-        });
-    }
-
-    fn apply_undo(&mut self) {
-        let outcome = self
-            .editor
-            .as_mut()
-            .expect("editor presence checked above")
-            .undo();
-        match outcome {
-            Ok(_) => self.finish_authoring_change("Undo restored the previous authoring state."),
-            Err(error) => {
-                self.edit_status = Some(format!("Undo unavailable: {} ({})", error, error.code()));
-            }
-        }
-    }
-
-    fn apply_redo(&mut self) {
-        let outcome = self
-            .editor
-            .as_mut()
-            .expect("editor presence checked above")
-            .redo();
-        match outcome {
-            Ok(_) => self.finish_authoring_change("Redo restored the edited authoring state."),
-            Err(error) => {
-                self.edit_status = Some(format!("Redo unavailable: {} ({})", error, error.code()));
-            }
-        }
-    }
-
     fn saved_project_operation_count(&self) -> Result<Option<usize>, String> {
         let Some(source_path) = self.source_path.as_ref() else {
             return Ok(None);
         };
-        let sidecar = editor_project_sidecar_path(source_path)
-            .ok_or_else(|| "source path has no file name".to_owned())?;
-        if !sidecar.exists() {
-            return Ok(None);
-        }
-        let bytes =
-            fs::read(&sidecar).map_err(|error| format!("read {}: {error}", sidecar.display()))?;
-        let project: pub_editor::EditorProject = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("parse editor project JSON: {error}"))?;
-        Ok(Some(project.operations.len()))
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "editor session is unavailable".to_owned())?;
+        editor_project_store::inspect(source_path, editor.source_hash())
+            .map(|opened| opened.map(|stored| stored.project.operations.len()))
+            .map_err(|error| format!("inspect saved EditorProject: {error}"))
     }
 
     fn reopen_saved_project(&mut self) -> Result<(), String> {
@@ -3972,48 +3232,23 @@ impl ViewerApp {
             return Err("there are no edit operations to save".to_owned());
         }
 
-        let sidecar = editor_project_sidecar_path(source_path)
-            .ok_or_else(|| "source path has no file name".to_owned())?;
         let project = editor
             .try_project()
             .map_err(|error| format!("materialize editor project: {error}"))?;
-
-        if !project.assets.is_empty() {
-            let asset_dir = editor_project_asset_dir_path(source_path)
-                .ok_or_else(|| "source path has no file name".to_owned())?;
-            fs::create_dir_all(&asset_dir)
-                .map_err(|error| format!("create {}: {error}", asset_dir.display()))?;
-
-            for metadata in &project.assets {
-                let asset = editor
-                    .replacement_assets()
-                    .find(|asset| asset.sha256 == metadata.sha256)
-                    .ok_or_else(|| {
-                        format!(
-                            "project-required replacement asset {} is unavailable",
-                            metadata.sha256
-                        )
-                    })?;
-                let file_name = pub_editor::editor_asset_file_name(asset.sha256, &asset.mime)
-                    .map_err(|error| format!("name replacement asset: {error}"))?;
-                let asset_path = asset_dir.join(file_name);
-                fs::write(&asset_path, &asset.bytes)
-                    .map_err(|error| format!("write {}: {error}", asset_path.display()))?;
-            }
-        }
-
-        let json = serde_json::to_vec_pretty(&project)
-            .map_err(|error| format!("serialize project: {error}"))?;
-        fs::write(&sidecar, json)
-            .map_err(|error| format!("write {}: {error}", sidecar.display()))?;
-        Ok(sidecar)
+        let runtime_assets = editor
+            .replacement_assets()
+            .map(|asset| (asset.sha256, asset.bytes.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let receipt = editor_project_store::commit(source_path, &project, &runtime_assets)
+            .map_err(|error| format!("durably save EditorProject: {error}"))?;
+        Ok(receipt.visible_path)
     }
 
     fn sync_visual_stories_from_editor(&mut self) -> Result<(), String> {
+        self.sync_visual_page_order_from_editor();
         let (Some(editor), Some(visual)) = (&self.editor, &mut self.visual) else {
             return Ok(());
         };
-
         if let Err(error) = visual.refresh_text_projection_from_resolved(editor.graph()) {
             // The refresh operation is transactional, so a failure would otherwise
             // leave source-time fragments looking current after an accepted edit.
@@ -4210,49 +3445,6 @@ impl ViewerApp {
         Ok(())
     }
 
-    fn show_object_edit_controls(&mut self, ui: &mut egui::Ui) {
-        if self.canvas_selection.primary().is_none() {
-            return;
-        }
-
-        ui.add_space(16.0);
-        ui.heading("Object");
-        ui.separator();
-
-        match self.selected_direct_replace_image_target() {
-            Ok(_) => {
-                ui.small(
-                    "Direct page-local image placement. PNG/JPEG replacement preserves source PUB bytes and is saved with the EditorProject.",
-                );
-                if ui.button("Replace image…").clicked() {
-                    #[cfg(target_os = "windows")]
-                    {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg"])
-                            .pick_file()
-                        {
-                            if let Err(error) = self.replace_selected_image_from_path(&path) {
-                                self.edit_status = Some(error);
-                            }
-                        }
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        self.edit_status = Some(
-                            "The native replacement picker is part of Windows Editor V0."
-                                .to_owned(),
-                        );
-                    }
-                }
-            }
-            Err(reason) => {
-                let response = ui.add_enabled(false, egui::Button::new("Replace image…"));
-                response.on_disabled_hover_text(&reason);
-                ui.weak(reason);
-            }
-        }
-    }
-
     fn commit_canvas_drag(&mut self, drag: MoveTransaction) {
         self.canvas_drag = None;
         self.canvas_resize = None;
@@ -4304,430 +3496,62 @@ impl ViewerApp {
         }
     }
 
-    fn enter_canvas_text_mode(
-        &mut self,
-        story_id: pub_editor::StoryId,
-        frame_id: pub_editor::NodeId,
-    ) {
-        let outcome = self
-            .editor
-            .as_ref()
-            .ok_or_else(|| "Editor session is unavailable.".to_owned())
-            .and_then(|editor| text_session::enter_explicit_text_mode(editor, story_id, frame_id));
-        match outcome {
-            Ok(mode) => {
-                self.text_mode = Some(mode);
-                self.canvas_drag = None;
-                self.canvas_resize = None;
-                self.edit_status = Some(
-                    "Text editing active on the canvas. Typing is committed through canonical Story range operations."
-                        .to_owned(),
-                );
+    fn save_project_with_status(&mut self, operation_count: usize) {
+        if operation_count == 0 {
+            self.project_status = Some("Editor project has no edit operations to save.".to_owned());
+            self.edit_status =
+                Some("Nothing new to save. Source PUB was not overwritten.".to_owned());
+            return;
+        }
+
+        if self.saved_project_operation_count().ok().flatten() == Some(operation_count) {
+            self.project_status = Some(format!(
+                "Editor project is already saved with {operation_count} operations."
+            ));
+            self.edit_status = Some(
+                "Chaptera Project is already saved. Source PUB was not overwritten.".to_owned(),
+            );
+            return;
+        }
+
+        match self.save_editor_project_sidecar() {
+            Ok(path) => {
+                self.project_status = Some(format!(
+                    "Saved editor project with {operation_count} operations."
+                ));
+                self.edit_status = Some(format!(
+                    "Project saved to {}. Source PUB was not overwritten.",
+                    path.display()
+                ));
             }
             Err(error) => {
-                self.edit_status = Some(format!("Edit Text unavailable: {error}"));
+                self.edit_status = Some(format!("Could not save editor project: {error}"));
             }
         }
     }
 
-    fn exit_canvas_text_mode(&mut self, trigger: &str) {
-        let Some(mode) = self.text_mode.as_ref() else {
-            return;
-        };
-        match text_session::exit_text_mode(mode, trigger) {
-            Ok(()) => {
-                self.text_mode = None;
-                self.edit_status =
-                    Some("Exited canvas text editing without creating an edit.".to_owned());
-            }
-            Err(error) => {
-                self.edit_status = Some(format!("Could not exit canvas text editing: {error}"));
-            }
-        }
-    }
-
-    fn refresh_visual_text_projection_from_editor(&mut self) -> Result<(), String> {
-        let editor = self
-            .editor
-            .as_ref()
-            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
-        let visual = self
-            .visual
-            .as_mut()
-            .ok_or_else(|| "Viewer projection is unavailable.".to_owned())?;
-        visual
-            .refresh_text_projection_from_resolved(editor.graph())
-            .map_err(|error| format!("refresh current Story projection: {error:#}"))
-    }
-
-    fn apply_canvas_text_input(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let outcome = match (&mut self.editor, &mut self.text_mode) {
-            (Some(editor), Some(mode)) => text_session::replace_external_text(editor, mode, text),
-            _ => return,
-        };
-        match outcome {
-            Ok(()) => match self.refresh_visual_text_projection_from_editor() {
-                Ok(()) => self.finish_authoring_change(
-                    "Typed on the canvas through one canonical ReplaceStoryRange operation.",
-                ),
-                Err(error) => {
-                    self.edit_status = Some(format!(
-                        "Text was committed, but the canvas projection could not be refreshed: {error}"
-                    ));
-                }
-            },
-            Err(error) => {
-                self.edit_status = Some(format!("Canvas text input rejected: {error}"));
-            }
-        }
-    }
-
-    fn apply_canvas_text_keyboard(
-        &mut self,
-        command: chaptera_text_input_adapter::keyboard::KeyboardCommandV1,
-    ) {
-        let before_operations = self
-            .editor
-            .as_ref()
-            .map(|editor| editor.operations().len())
-            .unwrap_or(0);
-        let outcome = match (&mut self.editor, &mut self.text_mode) {
-            (Some(editor), Some(mode)) => {
-                text_session::apply_keyboard_command(editor, mode, command)
-            }
-            _ => return,
-        };
-        match outcome {
-            Ok(()) => {
-                let after_operations = self
-                    .editor
-                    .as_ref()
-                    .map(|editor| editor.operations().len())
-                    .unwrap_or(before_operations);
-                if after_operations > before_operations {
-                    match self.refresh_visual_text_projection_from_editor() {
-                        Ok(()) => self.finish_authoring_change(
-                            "Canvas text keyboard edit committed through canonical Story range authority.",
-                        ),
-                        Err(error) => {
-                            self.edit_status = Some(format!(
-                                "Text keyboard edit was committed, but the canvas projection could not be refreshed: {error}"
-                            ));
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                self.edit_status = Some(format!("Canvas text keyboard input rejected: {error}"));
-            }
-        }
-    }
-
-    fn reposition_canvas_text_caret(
-        &mut self,
-        page_id: &str,
-        point: pub_interaction::DocumentPoint,
-    ) {
-        let Some(mode) = self.text_mode.as_mut() else {
-            return;
-        };
-        if let Err(error) =
-            text_session::reposition_pointer(mode, page_id, point.x.get(), point.y.get())
-        {
-            self.edit_status = Some(format!("Canvas caret move rejected: {error}"));
-        }
-    }
-
-    fn selected_direct_move_target(
-        &self,
-    ) -> Result<(pub_editor::NodeId, pub_editor::RectEmu), String> {
-        if self.canvas_selection.len() != 1 {
-            return Err("Object nudge requires exactly one selected object.".to_owned());
-        }
-        let selected_instance = self
-            .canvas_selection
-            .primary()
-            .ok_or_else(|| "Select one object first.".to_owned())?;
-        let visual = self
-            .visual
-            .as_ref()
-            .ok_or_else(|| "Document scene is unavailable.".to_owned())?;
-        let page = visual
-            .document
-            .pages
-            .get(self.selected_page)
-            .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
-        let editor = self
-            .editor
-            .as_ref()
-            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
-        let page_origin = page.id.into_canonical();
-        let page_id_text = page.id.as_canonical().to_string();
-
-        for scene_node in visual
-            .scene
-            .nodes
-            .iter()
-            .filter(|node| node.parent_origin == page_origin)
-        {
-            let Some(instance) = direct_scene_instance(editor, &page_id_text, scene_node.origin)
-            else {
-                continue;
-            };
-            if instance.instance_id != selected_instance {
-                continue;
-            }
-            let admission = admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
-            let origin_node_id = scene_node.origin.as_canonical().to_string();
-            if !admission.admitted
-                || admission.origin_node_id.as_deref() != Some(origin_node_id.as_str())
-            {
-                return Err("Selected visual instance is projected/read-only.".to_owned());
-            }
-            let authored = editor
-                .graph()
-                .nodes
-                .get(&scene_node.origin)
-                .ok_or_else(|| "Selected object has no authored node.".to_owned())?;
-            let bounds = authored.header.bounds;
-            editor
-                .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
-                .map_err(|error| {
-                    format!("Selected object cannot move: {} ({})", error, error.code())
-                })?;
-            return Ok((scene_node.origin, bounds));
-        }
-
-        Err("Selected visual instance is not a direct page-local object.".to_owned())
-    }
-
-    fn active_story_owns_selected_object(&self) -> bool {
-        let Some(mode) = self.text_mode.as_ref() else {
-            return false;
-        };
-        self.selected_direct_move_target()
-            .is_ok_and(|(node_id, _)| node_id == mode.frame_id)
-    }
-
-    fn nudge_selected_object(&mut self, dx_emu: i64, dy_emu: i64, rebind_text: bool) {
-        let outcome = self
-            .selected_direct_move_target()
-            .and_then(|(node_id, before)| {
-                let x = before
-                    .x
-                    .checked_add(pub_editor::LengthEmu::new(dx_emu))
-                    .ok_or_else(|| "Object nudge overflowed X geometry.".to_owned())?;
-                let y = before
-                    .y
-                    .checked_add(pub_editor::LengthEmu::new(dy_emu))
-                    .ok_or_else(|| "Object nudge overflowed Y geometry.".to_owned())?;
-                let editor = self
-                    .editor
-                    .as_mut()
-                    .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
-                let before_operations = editor.operations().len();
-                editor
-                    .can_move_node_to(node_id, x, y)
-                    .map_err(|error| format!("Nudge unavailable: {} ({})", error, error.code()))?;
-                editor
-                    .move_node_to(node_id, x, y)
-                    .map_err(|error| format!("Nudge rejected: {} ({})", error, error.code()))?;
-                if editor.operations().len() != before_operations + 1 {
-                    return Err(
-                        "Object nudge must append exactly one MoveNode operation.".to_owned()
-                    );
-                }
-                Ok(())
-            });
-
-        match outcome {
-            Ok(()) => {
-                self.finish_authoring_change(
-                    "Nudged canvas object in the authoring session. One MoveNode operation was committed.",
-                );
-                if rebind_text
-                    && let (Some(editor), Some(mode)) = (&self.editor, &mut self.text_mode)
-                    && let Err(error) =
-                        text_session::rebind_after_non_text_document_change(editor, mode)
-                {
-                    self.edit_status = Some(format!(
-                        "Object nudge committed, but active Story authority could not rebind: {error}"
-                    ));
-                }
-            }
-            Err(error) => {
-                self.edit_status = Some(error);
-                self.sync_visual_geometry_from_editor();
-            }
-        }
-    }
-
-    fn select_all_current_page_objects(&mut self) {
-        let Some(visual) = self.visual.as_ref() else {
-            return;
-        };
-        let Some(editor) = self.editor.as_ref() else {
-            return;
-        };
-        let Some(page) = visual.document.pages.get(self.selected_page) else {
-            return;
-        };
-        let page_origin = page.id.into_canonical();
-        let page_id_text = page.id.as_canonical().to_string();
-        let selected = visual
-            .scene
-            .nodes
-            .iter()
-            .filter(|node| node.parent_origin == page_origin)
-            .filter_map(|node| direct_scene_instance(editor, &page_id_text, node.origin))
-            .map(|instance| instance.instance_id)
-            .collect::<Vec<_>>();
-        self.canvas_selection.replace_all(selected);
-        self.canvas_drag = None;
-        self.canvas_resize = None;
-    }
-
-    fn process_canvas_object_keyboard(&mut self, ctx: &egui::Context) {
+    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
         if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
             return;
         }
 
-        let events = ctx.input(|input| input.events.clone());
-        for event in events {
-            let egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-            else {
-                continue;
-            };
-
-            if key == egui::Key::Escape {
-                if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
-                    self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
-                } else if self.canvas_selection.len() > 0 {
-                    self.canvas_selection.clear();
-                    self.edit_status = Some("Cleared canvas selection.".to_owned());
-                }
-                continue;
-            }
-
-            if (modifiers.ctrl || modifiers.command)
-                && !modifiers.alt
-                && !modifiers.shift
-                && key == egui::Key::A
-            {
-                self.select_all_current_page_objects();
-                continue;
-            }
-
-            let Some(direction) = keyboard_arrow_direction(key) else {
-                continue;
-            };
-            let movable = self.selected_direct_move_target().is_ok();
-            let decision = selection_keyboard::route_arrow_v1(
-                selection_keyboard::FocusOwnerV1::Canvas,
-                direction,
-                selection_keyboard::KeyModifiersV1 {
-                    shift: modifiers.shift,
-                    control_or_command: modifiers.ctrl || modifiers.command,
-                    alt: modifiers.alt,
-                },
-                self.canvas_selection.len(),
-                movable,
-                false,
-            );
-            if decision.route == selection_keyboard::ArrowRouteV1::MoveObject {
-                self.nudge_selected_object(decision.dx_emu, decision.dy_emu, false);
-            }
-        }
-    }
-
-    fn process_canvas_text_input(&mut self, ctx: &egui::Context) -> bool {
-        if self.text_mode.is_none() {
-            return false;
-        }
-        if ctx.wants_keyboard_input() {
-            self.exit_canvas_text_mode("focus_transfer");
-            return true;
+        let save_pressed = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            command
+                && !input.modifiers.alt
+                && !input.modifiers.shift
+                && input.key_pressed(egui::Key::S)
+        });
+        if !save_pressed {
+            return;
         }
 
-        let events = ctx.input(|input| input.events.clone());
-        for event in events {
-            if self.text_mode.is_none() {
-                break;
-            }
-            match event {
-                egui::Event::Text(text) => self.apply_canvas_text_input(&text),
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } => {
-                    if key == egui::Key::Escape {
-                        self.exit_canvas_text_mode("escape");
-                        continue;
-                    }
-
-                    if (modifiers.ctrl || modifiers.command)
-                        && !modifiers.alt
-                        && !modifiers.shift
-                        && key == egui::Key::A
-                    {
-                        if let Some(mode) = self.text_mode.as_mut() {
-                            text_session::select_all(mode);
-                        }
-                        continue;
-                    }
-
-                    if modifiers.alt && !modifiers.shift && !modifiers.ctrl && !modifiers.command {
-                        if let Some(direction) = keyboard_arrow_direction(key) {
-                            let movable = self.selected_direct_move_target().is_ok();
-                            let decision = selection_keyboard::route_arrow_v1(
-                                selection_keyboard::FocusOwnerV1::StoryText,
-                                direction,
-                                selection_keyboard::KeyModifiersV1 {
-                                    alt: true,
-                                    ..Default::default()
-                                },
-                                self.canvas_selection.len(),
-                                movable,
-                                self.active_story_owns_selected_object(),
-                            );
-                            if decision.route == selection_keyboard::ArrowRouteV1::MoveObject {
-                                self.nudge_selected_object(decision.dx_emu, decision.dy_emu, true);
-                            }
-                        }
-                        continue;
-                    }
-
-                    if modifiers.ctrl || modifiers.command || modifiers.alt {
-                        continue;
-                    }
-                    use chaptera_text_input_adapter::keyboard::KeyboardCommandV1;
-                    let command = match (key, modifiers.shift) {
-                        (egui::Key::ArrowLeft, false) => Some(KeyboardCommandV1::MovePrevious),
-                        (egui::Key::ArrowRight, false) => Some(KeyboardCommandV1::MoveNext),
-                        (egui::Key::ArrowLeft, true) => Some(KeyboardCommandV1::ExtendPrevious),
-                        (egui::Key::ArrowRight, true) => Some(KeyboardCommandV1::ExtendNext),
-                        (egui::Key::Backspace, _) => Some(KeyboardCommandV1::DeleteBackward),
-                        (egui::Key::Delete, _) => Some(KeyboardCommandV1::DeleteForward),
-                        _ => None,
-                    };
-                    if let Some(command) = command {
-                        self.apply_canvas_text_keyboard(command);
-                    }
-                }
-                _ => {}
-            }
-        }
-        true
+        let operation_count = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        self.save_project_with_status(operation_count);
     }
 
     fn ensure_image_textures(&mut self, ctx: &egui::Context) {
@@ -4743,12 +3567,7 @@ impl ViewerApp {
                 continue;
             }
 
-            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&embedded.bytes);
-            match image_decode_adapter::decode_texture_image_v1(
-                &embedded.bytes,
-                &embedded.mime,
-                &expected_sha256,
-            ) {
+            match image_decode_adapter::decode_viewer_embedded_texture_v1(embedded) {
                 Ok(admitted) => {
                     let texture = ctx.load_texture(
                         format!("pub-image-{key}"),
@@ -4767,6 +3586,43 @@ impl ViewerApp {
                     self.image_decode_diagnostics.insert(
                         key.clone(),
                         image_decode_adapter::diagnostic_for(key, embedded.mime.clone(), &error),
+                    );
+                }
+            }
+        }
+
+        for resource in &visual.decorative_border_resources {
+            let key = format!("{:?}", resource.resource_id);
+            if self.image_textures.contains_key(&key)
+                || self.image_decode_diagnostics.contains_key(&key)
+            {
+                continue;
+            }
+
+            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+            match image_decode_adapter::decode_texture_image_v1(
+                &resource.bytes,
+                &resource.mime,
+                &expected_sha256,
+            ) {
+                Ok(admitted) => {
+                    let texture = ctx.load_texture(
+                        format!("pub-borderart-{key}"),
+                        admitted.color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.image_textures.insert(
+                        key,
+                        CachedImageTexture {
+                            texture,
+                            _cache_identity_sha256: admitted.cache_identity_sha256,
+                        },
+                    );
+                }
+                Err(error) => {
+                    self.image_decode_diagnostics.insert(
+                        key.clone(),
+                        image_decode_adapter::diagnostic_for(key, resource.mime.clone(), &error),
                     );
                 }
             }
@@ -4822,17 +3678,35 @@ impl ViewerApp {
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
         let mut render_plan = if self.source_fonts_active {
-            build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
+            if let Some(editor) = self.editor.as_ref() {
+                build_desktop_page_render_plan_with_current_source_fonts(
+                    visual,
+                    page_index,
+                    &self.source_fonts,
+                    editor,
+                )
+            } else {
+                build_desktop_page_render_plan_with_source_fonts(
+                    visual,
+                    page_index,
+                    &self.source_fonts,
+                )
+                .map_err(|error| error.to_string())
+            }
         } else {
-            build_desktop_page_render_plan(visual, page_index)
-        }
-        .map_err(|error| error.to_string())?;
+            build_desktop_page_render_plan(visual, page_index).map_err(|error| error.to_string())
+        }?;
         if let Some(editor) = self.editor.as_ref() {
-            apply_editor_authored_page_lane(&mut render_plan, editor)?;
+            paragraph_alignment_overlay::apply_editor_paragraph_alignment_layout_v1(
+                &mut render_plan,
+                editor,
+            )?;
+            authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor)?;
         }
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
+        let mut snap_objects = Vec::new();
         let mut movable_nodes = BTreeMap::new();
         let mut resizable_nodes = BTreeMap::new();
 
@@ -4853,6 +3727,16 @@ impl ViewerApp {
                 }
             };
             let instance_id = instance.instance_id.clone();
+
+            if projected.is_none()
+                && let Some(editor) = self.editor.as_ref()
+                && let Some(authored_node) = editor.graph().nodes.get(&render_node.node_id)
+            {
+                snap_objects.push(SnapObject {
+                    node_id: render_node.node_id,
+                    bounds: authored_node.header.bounds,
+                });
+            }
 
             if projected.is_none() {
                 if let Some(editor) = self.editor.as_ref() {
@@ -4903,10 +3787,18 @@ impl ViewerApp {
             });
         }
 
+        let snap_index = SnapIndex::new(
+            render_plan.page_size.width,
+            render_plan.page_size.height,
+            snap_objects,
+        )
+        .ok();
+
         Ok(CachedPageFrameWork {
             page_index,
             render_plan,
             hit_index: SceneHitTestIndex::new(hit_entries),
+            snap_index,
             movable_nodes,
             resizable_nodes,
         })
@@ -4925,24 +3817,7 @@ impl ViewerApp {
     }
 
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
-        if !self.source_fonts_install_attempted {
-            self.source_fonts_install_attempted = true;
-            let additional = self.source_fonts.egui_fonts();
-            match fallback_font::install_with_additional(ui.ctx(), &additional) {
-                Ok(()) => {
-                    self.source_fonts_active = true;
-                }
-                Err(_) => {
-                    self.source_fonts_active = false;
-                    let _ = fallback_font::install(ui.ctx());
-                }
-            }
-            self.page_frame_cache.clear();
-
-            // egui applies FontDefinitions at the next pass boundary. Do not
-            // build or paint a render plan that names a newly registered
-            // source-font family in the same pass that calls set_fonts.
-            ui.ctx().request_repaint();
+        if self.prepare_canvas_fonts(ui) {
             return;
         }
 
@@ -5085,6 +3960,7 @@ impl ViewerApp {
         debug_assert_eq!(frame_work.page_index, self.selected_page);
         let render_plan = &frame_work.render_plan;
         let hit_index = &frame_work.hit_index;
+        let snap_index = frame_work.snap_index.as_ref();
         let movable_nodes = &frame_work.movable_nodes;
         let resizable_nodes = &frame_work.resizable_nodes;
 
@@ -5141,9 +4017,20 @@ impl ViewerApp {
         let mut next_canvas_resize = self.canvas_resize;
         let mut drag_commit = None;
         let mut drag_error = None;
+        let mut snap_feedback_x = None;
+        let mut snap_feedback_y = None;
         let mut resize_commit = None;
         let mut resize_error = None;
+        let mut rectangle_frame = rectangle_creation_shell::RectangleFrameOutcome::default();
+        let mut text_box_outcome = text_box_creation_shell::TextBoxFrameOutcome::default();
+        let mut text_box_pointer_owned = false;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
+        let mut text_activation_request: Option<(
+            pub_editor::StoryId,
+            pub_editor::NodeId,
+            String,
+            pub_interaction::DocumentPoint,
+        )> = None;
         let mut text_pointer_request: Option<(String, pub_interaction::DocumentPoint)> = None;
         let mut text_exit_request = false;
         egui::ScrollArea::both()
@@ -5207,6 +4094,51 @@ impl ViewerApp {
                 let press_screen = ui.ctx().input(|input| input.pointer.press_origin());
                 let press_document = press_screen
                     .and_then(|pointer| canvas_document_point(page_rect, scene_scale, pointer));
+                let primary_pressed = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+                let primary_down = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+                let primary_released = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+                let resize_modifiers = ui
+                    .ctx()
+                    .input(|input| resize_modifiers::mask_from_egui(input.modifiers));
+                let snap_tolerance = snap_tolerance_emu(scene_scale);
+
+                rectangle_creation_shell::process_rectangle_primary_pointer(
+                    &mut self.rectangle_creation,
+                    reader_only_mode(),
+                    self.text_mode.is_some(),
+                    page.id,
+                    page_rect,
+                    press_screen,
+                    press_document,
+                    pointer_document,
+                    primary_pressed,
+                    primary_down,
+                    primary_released,
+                    &mut rectangle_frame,
+                );
+
+                if text_box_creation_shell::process_text_box_primary_pointer(
+                    &mut self.text_box_creation,
+                    reader_only_mode(),
+                    self.text_mode.is_some(),
+                    page.id,
+                    page_rect,
+                    press_screen,
+                    press_document,
+                    pointer_document,
+                    primary_pressed,
+                    primary_down,
+                    primary_released,
+                    &mut text_box_outcome,
+                ) {
+                    text_box_pointer_owned = true;
+                }
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5214,69 +4146,106 @@ impl ViewerApp {
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
                 {
-                    let mut resize_started = false;
-                    if let (Some(selected_instance), Some(pointer_start_screen)) =
-                        (selected_canvas_instance.as_deref(), press_screen)
-                        && let Some((node_id, before)) =
-                            resizable_nodes.get(selected_instance).copied()
-                    {
-                        let selected_screen_bounds = ScreenRect::new(
-                            f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
-                            f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
-                            f64::from(before.width.get() as f32 * scene_scale),
-                            f64::from(before.height.get() as f32 * scene_scale),
-                        );
-                        if let Ok(selected_screen_bounds) = selected_screen_bounds
-                            && let Ok(ResizePointerDown::Handle(handle)) =
-                                classify_resize_pointer_down(
-                                    selected_screen_bounds,
-                                    ScreenPoint::new(
-                                        f64::from(pointer_start_screen.x),
-                                        f64::from(pointer_start_screen.y),
-                                    ),
-                                    6.0,
-                                )
+                    if rectangle_creation_shell::process_rectangle_drag_started(
+                        &mut self.rectangle_creation,
+                        page.id,
+                        pointer_start,
+                        pointer_current,
+                        &mut rectangle_frame,
+                    ) {
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                    } else if text_box_creation_shell::process_text_box_drag_started(
+                        &mut self.text_box_creation,
+                        page.id,
+                        pointer_start,
+                        pointer_current,
+                        &mut text_box_outcome,
+                    ) {
+                        text_box_pointer_owned = true;
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                    } else {
+                        let mut resize_started = false;
+                        if let (Some(selected_instance), Some(pointer_start_screen)) =
+                            (selected_canvas_instance.as_deref(), press_screen)
+                            && let Some((node_id, before)) =
+                                resizable_nodes.get(selected_instance).copied()
                         {
-                            resize_started = true;
-                            canvas_hit = Some(selected_instance.to_owned());
-                            next_canvas_drag = None;
-                            match ResizeTransaction::begin(node_id, before, handle, pointer_start) {
-                                Ok(mut resize) => match resize.update(pointer_current) {
-                                    Ok(ResizeUpdate::Preview(_))
-                                    | Ok(ResizeUpdate::Invalid { .. }) => {
-                                        next_canvas_resize = Some(resize);
-                                    }
+                            let selected_screen_bounds = ScreenRect::new(
+                                f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
+                                f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
+                                f64::from(before.width.get() as f32 * scene_scale),
+                                f64::from(before.height.get() as f32 * scene_scale),
+                            );
+                            if let Ok(selected_screen_bounds) = selected_screen_bounds
+                                && let Ok(ResizePointerDown::Handle(handle)) =
+                                    classify_resize_pointer_down(
+                                        selected_screen_bounds,
+                                        ScreenPoint::new(
+                                            f64::from(pointer_start_screen.x),
+                                            f64::from(pointer_start_screen.y),
+                                        ),
+                                        6.0,
+                                    )
+                            {
+                                resize_started = true;
+                                canvas_hit = Some(selected_instance.to_owned());
+                                next_canvas_drag = None;
+                                match ResizeTransaction::begin(
+                                    node_id,
+                                    before,
+                                    handle,
+                                    pointer_start,
+                                ) {
+                                    Ok(mut resize) => match resize
+                                        .update_constrained(pointer_current, resize_modifiers)
+                                    {
+                                        Ok(ResizeUpdate::Preview(_))
+                                        | Ok(ResizeUpdate::Invalid { .. }) => {
+                                            next_canvas_resize = Some(resize);
+                                        }
+                                        Err(error) => {
+                                            next_canvas_resize = None;
+                                            resize_error =
+                                                Some(format!("Object resize cancelled: {error}"));
+                                        }
+                                    },
                                     Err(error) => {
                                         next_canvas_resize = None;
                                         resize_error =
                                             Some(format!("Object resize cancelled: {error}"));
                                     }
-                                },
-                                Err(error) => {
-                                    next_canvas_resize = None;
-                                    resize_error =
-                                        Some(format!("Object resize cancelled: {error}"));
                                 }
                             }
                         }
-                    }
 
-                    if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
-                        canvas_hit = Some(hit.instance_id.clone());
-                        next_canvas_resize = None;
-                        if let Some((node_id, before)) =
-                            movable_nodes.get(&hit.instance_id).copied()
-                        {
-                            match MoveTransaction::begin(node_id, before, pointer_start).and_then(
-                                |mut drag| {
-                                    drag.update(pointer_current)?;
-                                    Ok(drag)
-                                },
-                            ) {
-                                Ok(drag) => next_canvas_drag = Some(drag),
-                                Err(error) => {
-                                    next_canvas_drag = None;
-                                    drag_error = Some(format!("Object move cancelled: {error}"));
+                        if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
+                            canvas_hit = Some(hit.instance_id.clone());
+                            next_canvas_resize = None;
+                            if let Some((node_id, before)) =
+                                movable_nodes.get(&hit.instance_id).copied()
+                            {
+                                match MoveTransaction::begin(node_id, before, pointer_start)
+                                    .and_then(|mut drag| {
+                                        let feedback = update_drag_preview_with_snap(
+                                            &mut drag,
+                                            pointer_current,
+                                            snap_index,
+                                            snap_tolerance,
+                                        )?;
+                                        Ok((drag, feedback))
+                                    }) {
+                                    Ok((drag, feedback)) => {
+                                        snap_feedback_x = feedback.0;
+                                        snap_feedback_y = feedback.1;
+                                        next_canvas_drag = Some(drag);
+                                    }
+                                    Err(error) => {
+                                        next_canvas_drag = None;
+                                        drag_error =
+                                            Some(format!("Object move cancelled: {error}"));
+                                    }
                                 }
                             }
                         }
@@ -5285,10 +4254,21 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if let (Some(mut resize), Some(point)) =
+                    if rectangle_creation_shell::process_rectangle_drag_stopped(
+                        &mut self.rectangle_creation,
+                        pointer_document,
+                        &mut rectangle_frame,
+                    ) {
+                    } else if text_box_creation_shell::process_text_box_drag_stopped(
+                        &mut self.text_box_creation,
+                        pointer_document,
+                        &mut text_box_outcome,
+                    ) {
+                        text_box_pointer_owned = true;
+                    } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
-                        match resize.update(point) {
+                        match resize.update_constrained(point, resize_modifiers) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 match resize.commit() {
                                     Ok(commit) => resize_commit = Some(commit),
@@ -5305,8 +4285,17 @@ impl ViewerApp {
                     } else if let (Some(mut drag), Some(point)) =
                         (next_canvas_drag, pointer_document)
                     {
-                        match drag.update(point) {
-                            Ok(_) => drag_commit = Some(drag),
+                        match update_drag_preview_with_snap(
+                            &mut drag,
+                            point,
+                            snap_index,
+                            snap_tolerance,
+                        ) {
+                            Ok(feedback) => {
+                                snap_feedback_x = feedback.0;
+                                snap_feedback_y = feedback.1;
+                                drag_commit = Some(drag);
+                            }
                             Err(error) => {
                                 next_canvas_drag = None;
                                 drag_error = Some(format!("Object move cancelled: {error}"));
@@ -5321,8 +4310,19 @@ impl ViewerApp {
                     && response.dragged_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
-                    if let Some(mut resize) = next_canvas_resize {
-                        match resize.update(point) {
+                    if rectangle_creation_shell::process_rectangle_dragged(
+                        &mut self.rectangle_creation,
+                        point,
+                        &mut rectangle_frame,
+                    ) {
+                    } else if text_box_creation_shell::process_text_box_dragged(
+                        &mut self.text_box_creation,
+                        point,
+                        &mut text_box_outcome,
+                    ) {
+                        text_box_pointer_owned = true;
+                    } else if let Some(mut resize) = next_canvas_resize {
+                        match resize.update_constrained(point, resize_modifiers) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 next_canvas_resize = Some(resize);
                             }
@@ -5332,8 +4332,17 @@ impl ViewerApp {
                             }
                         }
                     } else if let Some(mut drag) = next_canvas_drag {
-                        match drag.update(point) {
-                            Ok(_) => next_canvas_drag = Some(drag),
+                        match update_drag_preview_with_snap(
+                            &mut drag,
+                            point,
+                            snap_index,
+                            snap_tolerance,
+                        ) {
+                            Ok(feedback) => {
+                                snap_feedback_x = feedback.0;
+                                snap_feedback_y = feedback.1;
+                                next_canvas_drag = Some(drag);
+                            }
                             Err(error) => {
                                 next_canvas_drag = None;
                                 drag_error = Some(format!("Object move cancelled: {error}"));
@@ -5343,29 +4352,26 @@ impl ViewerApp {
                 }
 
                 if !reader_only_mode()
+                    && rectangle_creation_shell::rectangle_tool_inactive(&self.rectangle_creation)
+                    && !self.text_box_creation.active()
+                    && !text_box_pointer_owned
                     && response.clicked_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
                     canvas_clicked = true;
                     let topmost = hit_index.topmost_at(point);
-                    if let Some(mode) = self.text_mode.as_ref() {
-                        match topmost {
-                            Some(hit) if hit.node_id == mode.frame_id => {
-                                canvas_hit = Some(hit.instance_id.clone());
-                                text_pointer_request = Some((page_id_text.clone(), point));
-                            }
-                            Some(hit) => {
-                                text_exit_request = true;
-                                canvas_hit = Some(hit.instance_id.clone());
-                            }
-                            None => {
-                                text_exit_request = true;
-                                canvas_hit = None;
-                            }
-                        }
-                    } else {
-                        canvas_hit = topmost.map(|hit| hit.instance_id.clone());
-                    }
+                    let text_request = text_session_shell::canvas_text_pointer_request(
+                        self.text_mode.as_ref(),
+                        topmost,
+                        visual,
+                        self.editor.as_ref(),
+                        &page_id_text,
+                        point,
+                    );
+                    canvas_hit = text_request.canvas_hit;
+                    text_pointer_request = text_request.text_pointer_request;
+                    text_activation_request = text_request.text_activation_request;
+                    text_exit_request = text_request.text_exit_request;
                 }
 
                 render_backend::paint_page_surface(&painter, page_rect);
@@ -5459,6 +4465,13 @@ impl ViewerApp {
                             .or(source_texture)
                             .map(|cached| cached.texture.id()),
                     );
+                    paint_document_node_decorative_border(
+                        &painter,
+                        page_rect,
+                        scene_scale,
+                        render_node,
+                        &self.image_textures,
+                    );
 
                     painter.rect_stroke(
                         node_rect,
@@ -5509,18 +4522,37 @@ impl ViewerApp {
                     }
                 }
 
-                if let Some(mode) = self.text_mode.as_ref()
-                    && let Some(stop) = text_session::focus_caret(mode)
-                    && stop.page_id == page_id_text
-                {
-                    let x = page_rect.left() + stop.page_x_emu as f32 * scene_scale;
-                    let y_top = page_rect.top() + stop.page_y_top_emu as f32 * scene_scale;
-                    let y_bottom = page_rect.top() + stop.page_y_bottom_emu as f32 * scene_scale;
-                    painter.line_segment(
-                        [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
-                        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(232, 126, 36)),
-                    );
-                }
+                paint_snap_feedback(
+                    &painter,
+                    page_rect,
+                    scene_scale,
+                    snap_feedback_x,
+                    snap_feedback_y,
+                );
+
+                rectangle_creation_shell::paint_rectangle_preview(
+                    &self.rectangle_creation,
+                    &painter,
+                    page.id,
+                    page_rect,
+                    scene_scale,
+                );
+
+                text_box_creation_shell::paint_text_box_preview(
+                    &self.text_box_creation,
+                    &painter,
+                    page.id,
+                    page_rect,
+                    scene_scale,
+                );
+
+                text_session_shell::paint_canvas_text_caret(
+                    self.text_mode.as_ref(),
+                    &painter,
+                    page_rect,
+                    scene_scale,
+                    &page_id_text,
+                );
 
                 for selected_instance_id in self
                     .canvas_selection
@@ -5569,32 +4601,16 @@ impl ViewerApp {
                         && resizable_nodes.contains_key(selected_instance_id);
                     paint_selection_overlay(&painter, selected_rect, resize_enabled);
 
-                    if self.text_mode.is_none()
-                        && let Some(fragment) = visual
-                            .text_fragments
-                            .iter()
-                            .find(|fragment| fragment.frame_id == selected_node_id)
-                        && self.editor.as_ref().is_some_and(|editor| {
-                            editor.can_replace_story_text(fragment.story_id).is_ok()
-                        })
-                    {
-                        let button_width = 76.0_f32;
-                        let button_height = 22.0_f32;
-                        let button_min = egui::pos2(
-                            selected_rect.left(),
-                            (selected_rect.top() - button_height - 4.0_f32)
-                                .max(page_rect.top() + 2.0_f32),
-                        );
-                        let button_rect = egui::Rect::from_min_size(
-                            button_min,
-                            egui::vec2(button_width, button_height),
-                        );
-                        if ui
-                            .put(button_rect, egui::Button::new("Edit Text"))
-                            .clicked()
-                        {
-                            edit_text_request = Some((fragment.story_id, selected_node_id));
-                        }
+                    if let Some(request) = text_session_shell::show_canvas_edit_text_button(
+                        ui,
+                        self.text_mode.is_some(),
+                        visual,
+                        self.editor.as_ref(),
+                        selected_node_id,
+                        selected_rect,
+                        page_rect,
+                    ) {
+                        edit_text_request = Some(request);
                     }
                     if resize_enabled {
                         let screen_bounds = ScreenRect::new(
@@ -5638,11 +4654,18 @@ impl ViewerApp {
                 }
             });
 
+        self.finish_rectangle_frame(rectangle_frame);
+
+        self.finish_text_box_frame(text_box_outcome);
+
         if text_exit_request {
             self.exit_canvas_text_mode("canvas_non_text_click");
         }
         if let Some((page_id, point)) = text_pointer_request {
             self.reposition_canvas_text_caret(&page_id, point);
+        }
+        if let Some((story_id, frame_id, page_id, point)) = text_activation_request {
+            self.enter_canvas_text_mode_at_pointer(story_id, frame_id, &page_id, point);
         }
         if let Some((story_id, frame_id)) = edit_text_request {
             self.enter_canvas_text_mode(story_id, frame_id);
@@ -5727,6 +4750,9 @@ impl eframe::App for ViewerApp {
         let text_keyboard_owned = self.process_canvas_text_input(ctx);
         if !text_keyboard_owned {
             self.process_canvas_object_keyboard(ctx);
+            self.process_global_history_shortcuts(ctx);
+            self.process_global_save_shortcut(ctx);
+            self.process_global_page_navigation_shortcuts(ctx);
         }
 
         debug_assert_eq!(
@@ -5798,19 +4824,69 @@ impl eframe::App for ViewerApp {
         self.show_exact_file_consent_dialog(ctx);
         self.show_diagnostic_sweep_window(ctx);
 
-        if self.text_mode.is_some() && ctx.wants_keyboard_input() {
-            self.exit_canvas_text_mode("explicit_exit");
-        }
+        self.finish_canvas_text_frame(ctx);
     }
 }
 
-fn keyboard_arrow_direction(key: egui::Key) -> Option<selection_keyboard::ArrowDirectionV1> {
-    match key {
-        egui::Key::ArrowLeft => Some(selection_keyboard::ArrowDirectionV1::Left),
-        egui::Key::ArrowRight => Some(selection_keyboard::ArrowDirectionV1::Right),
-        egui::Key::ArrowUp => Some(selection_keyboard::ArrowDirectionV1::Up),
-        egui::Key::ArrowDown => Some(selection_keyboard::ArrowDirectionV1::Down),
-        _ => None,
+fn snap_tolerance_emu(scene_scale: f32) -> Option<pub_editor::LengthEmu> {
+    if !scene_scale.is_finite() || scene_scale <= 0.0 {
+        return None;
+    }
+    let tolerance = f64::from(SNAP_TOLERANCE_PX) / f64::from(scene_scale);
+    if !tolerance.is_finite() || tolerance < 0.0 || tolerance > i64::MAX as f64 {
+        return None;
+    }
+    Some(pub_editor::LengthEmu::new(tolerance.round() as i64))
+}
+
+fn update_drag_preview_with_snap(
+    drag: &mut MoveTransaction,
+    pointer: DocumentPoint,
+    snap_index: Option<&SnapIndex>,
+    tolerance: Option<pub_editor::LengthEmu>,
+) -> Result<(Option<SnapFeedback>, Option<SnapFeedback>), pub_interaction::MoveTransactionError> {
+    let raw = drag.update(pointer)?;
+
+    let (Some(snap_index), Some(tolerance)) = (snap_index, tolerance) else {
+        return Ok((None, None));
+    };
+
+    let snapped = match snap_index.snap_rect(drag.node_id(), raw, tolerance) {
+        Ok(snapped) => snapped,
+        Err(_) => return Ok((None, None)),
+    };
+    drag.set_preview_origin(snapped.bounds.x, snapped.bounds.y)?;
+
+    Ok((snapped.x, snapped.y))
+}
+
+fn paint_snap_feedback(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    x: Option<SnapFeedback>,
+    y: Option<SnapFeedback>,
+) {
+    let stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(210, 45, 120));
+    if let Some(feedback) = x {
+        let x = page_rect.left() + feedback.position.get() as f32 * scene_scale;
+        painter.line_segment(
+            [
+                egui::pos2(x, page_rect.top()),
+                egui::pos2(x, page_rect.bottom()),
+            ],
+            stroke,
+        );
+    }
+    if let Some(feedback) = y {
+        let y = page_rect.top() + feedback.position.get() as f32 * scene_scale;
+        painter.line_segment(
+            [
+                egui::pos2(page_rect.left(), y),
+                egui::pos2(page_rect.right(), y),
+            ],
+            stroke,
+        );
     }
 }
 
@@ -5827,6 +4903,13 @@ fn canvas_document_point(
     transform
         .screen_to_document(ScreenPoint::new(f64::from(pointer.x), f64::from(pointer.y)))
         .ok()
+}
+
+fn strict_document_rect_interior(
+    bounds: &pub_editor::RectEmu,
+    point: pub_interaction::DocumentPoint,
+) -> bool {
+    text_session_shell::strict_document_rect_interior(bounds, point)
 }
 
 fn paint_selection_overlay(painter: &egui::Painter, rect: egui::Rect, show_handles: bool) {
@@ -5911,57 +4994,29 @@ fn apply_editor_project_json(
     Ok(operation_count)
 }
 
-fn load_editor_project_assets(
-    source_path: &Path,
-    project: &pub_editor::EditorProject,
-) -> Result<BTreeMap<pub_editor::Sha256Digest, Vec<u8>>, String> {
-    if project.assets.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let asset_dir = editor_project_asset_dir_path(source_path)
-        .ok_or_else(|| "source path has no file name".to_owned())?;
-    let mut assets = BTreeMap::new();
-    for metadata in &project.assets {
-        let file_name = metadata
-            .file_name()
-            .map_err(|error| format!("derive replacement asset name: {error}"))?;
-        let path = asset_dir.join(file_name);
-        let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
-        assets.insert(metadata.sha256, bytes);
-    }
-    Ok(assets)
-}
-
 fn load_editor_project_sidecar(
     source_path: &Path,
     editor: &mut pub_editor::EditorSession,
-) -> Result<Option<(PathBuf, usize)>, String> {
-    let sidecar = editor_project_sidecar_path(source_path)
-        .ok_or_else(|| "source path has no file name".to_owned())?;
-    if !sidecar.exists() {
+) -> Result<Option<(PathBuf, usize, editor_project_store::StoreDisposition)>, String> {
+    let Some(stored) = editor_project_store::inspect(source_path, editor.source_hash())
+        .map_err(|error| format!("inspect saved EditorProject: {error}"))?
+    else {
         return Ok(None);
-    }
-
-    let bytes =
-        fs::read(&sidecar).map_err(|error| format!("read {}: {error}", sidecar.display()))?;
-    let project: pub_editor::EditorProject = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse editor project JSON: {error}"))?;
-    let operation_count = project.operations.len();
-    let assets = load_editor_project_assets(source_path, &project)?;
+    };
+    let operation_count = stored.project.operations.len();
+    let disposition = stored.disposition;
     editor
-        .apply_project_with_assets(&project, &assets)
+        .apply_project_with_assets(&stored.project, &stored.asset_bytes)
         .map_err(|error| format!("replay editor project: {error}"))?;
-    Ok(Some((sidecar, operation_count)))
+    Ok(Some((stored.manifest_path, operation_count, disposition)))
 }
 
+#[cfg(test)]
 fn editor_project_sidecar_path(source_path: &Path) -> Option<PathBuf> {
-    let file_name = source_path.file_name()?;
-    let mut sidecar_name = file_name.to_os_string();
-    sidecar_name.push(".pub-editor.json");
-    Some(source_path.with_file_name(sidecar_name))
+    editor_project_store::sidecar_path(source_path)
 }
 
+#[cfg(test)]
 fn editor_project_asset_dir_path(source_path: &Path) -> Option<PathBuf> {
     let file_name = source_path.file_name()?;
     let mut asset_dir_name = file_name.to_os_string();
@@ -6085,10 +5140,18 @@ fn paint_page_thumbnail(
     let Ok(mut render_plan) = build_desktop_page_render_plan(visual, page_index) else {
         return;
     };
-    if let Some(editor) = editor
-        && apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
-    {
-        return;
+    if let Some(editor) = editor {
+        if paragraph_alignment_overlay::apply_editor_paragraph_alignment_layout_v1(
+            &mut render_plan,
+            editor,
+        )
+        .is_err()
+        {
+            return;
+        }
+        if authored_stack::apply_editor_authored_page_lane(&mut render_plan, editor).is_err() {
+            return;
+        }
     }
     if render_plan.page_size.width.get() <= 0 || render_plan.page_size.height.get() <= 0 {
         return;
@@ -6283,6 +5346,47 @@ mod tests {
 
         assert_eq!(point.x.get(), 100);
         assert_eq!(point.y.get(), 150);
+    }
+
+    #[test]
+    fn move_snap_adjusts_preview_origin_without_changing_size() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"44444444-4444-4444-4444-444444444444\"")
+                .expect("canonical NodeId");
+        let before = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(10),
+            pub_editor::LengthEmu::new(20),
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(80),
+        );
+        let mut drag = MoveTransaction::begin(
+            node_id,
+            before,
+            DocumentPoint::new(pub_editor::LengthEmu::ZERO, pub_editor::LengthEmu::ZERO),
+        )
+        .expect("valid move transaction");
+        let snap_index = SnapIndex::new(
+            pub_editor::LengthEmu::new(1_000),
+            pub_editor::LengthEmu::new(1_000),
+            Vec::new(),
+        )
+        .expect("valid page snap index");
+
+        let feedback = update_drag_preview_with_snap(
+            &mut drag,
+            DocumentPoint::new(pub_editor::LengthEmu::new(-5), pub_editor::LengthEmu::ZERO),
+            Some(&snap_index),
+            Some(pub_editor::LengthEmu::new(10)),
+        )
+        .expect("snapped preview");
+
+        let preview = drag.preview_bounds();
+        assert_eq!(preview.x, pub_editor::LengthEmu::ZERO);
+        assert_eq!(preview.y, before.y);
+        assert_eq!(preview.width, before.width);
+        assert_eq!(preview.height, before.height);
+        assert!(feedback.0.is_some());
+        assert!(feedback.1.is_none());
     }
 
     #[test]
@@ -6506,7 +5610,9 @@ mod tests {
             .map_or(normalized_source.as_str(), |(production, _)| production);
 
         assert!(production_source.contains("fs::read(&path)"));
-        assert!(production_source.contains("fs::write(&sidecar"));
+        assert!(production_source.contains("editor_project_store::commit("));
+        assert!(production_source.contains("editor_project_store::inspect("));
+        assert!(!production_source.contains("fs::write(&sidecar"));
         assert!(!production_source.contains("fs::write(&path"));
         assert!(!production_source.contains("OpenOptions"));
     }
@@ -6812,26 +5918,6 @@ mod tests {
     #[test]
     fn unsupported_open_failure_has_unsupported_fidelity_state() {
         let app = ViewerApp {
-            source_path: None,
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: None,
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
             load_error: Some(ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
                 attempted_path: None,
@@ -6839,36 +5925,7 @@ mod tests {
                 classification: Some(classify_failure_candidate(b"<html>not pub</html>")),
                 diagnostic_json: None,
             }),
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: None,
-            editor_load_error: None,
-            edit_buffer: String::new(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
+            ..ViewerApp::new(None)
         };
 
         assert_eq!(
@@ -6880,26 +5937,6 @@ mod tests {
     #[test]
     fn file_access_failure_does_not_claim_document_is_unsupported() {
         let app = ViewerApp {
-            source_path: None,
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: None,
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
             load_error: Some(ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::FileAccess,
                 attempted_path: None,
@@ -6907,36 +5944,7 @@ mod tests {
                 classification: None,
                 diagnostic_json: None,
             }),
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: None,
-            editor_load_error: None,
-            edit_buffer: String::new(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
+            ..ViewerApp::new(None)
         };
 
         assert_eq!(app.fidelity_status(), None);
@@ -7112,13 +6120,8 @@ mod tests {
             "exact image resource must retain at least one proven resolved scene-node use"
         );
 
-        let expected_sha256 = image_decode_adapter::exact_sha256_hex(&embedded.bytes);
-        let admitted = image_decode_adapter::decode_texture_image_v1(
-            &embedded.bytes,
-            &embedded.mime,
-            &expected_sha256,
-        )
-        .expect("bounded desktop decoder must admit the exact embedded image");
+        let admitted = image_decode_adapter::decode_viewer_embedded_texture_v1(embedded)
+            .expect("real PUB image must decode against Reader-verified source SHA");
 
         assert!(admitted.color_image.size[0] > 0);
         assert!(admitted.color_image.size[1] > 0);
@@ -7162,59 +6165,18 @@ mod tests {
             .clone();
         let replacement = format!("{before} [desktop edit]");
 
-        let mut app = ViewerApp {
-            source_path: Some(PathBuf::from("SampleNewsletter.pub")),
-            open_state: OpenStateAuthority::default(),
-            committed_source: None,
-            source_revalidate_after: None,
-            source_exact_revalidate_after: None,
-            visual: Some(visual),
-            salvage: None,
-            source_fonts: source_font::DesktopSourceFontRegistry::new(),
-            source_fonts_install_attempted: false,
-            source_fonts_active: false,
-            selected_page: 0,
-            page_frame_cache: BTreeMap::new(),
-            page_frame_cache_builds: 0,
-            canvas_selection: SceneSelectionState::default(),
-            canvas_drag: None,
-            canvas_resize: None,
-            created_text_box_scene_nodes: BTreeSet::new(),
-            text_mode: None,
-            zoom: 1.0,
-            zoom_mode: CanvasZoomMode::FitPage,
-            load_error: None,
-            search_query: String::new(),
-            search_results: Vec::new(),
-            salvage_search_results: Vec::new(),
-            selected_search_result: None,
-            image_textures: BTreeMap::new(),
-            image_decode_diagnostics: BTreeMap::new(),
-            editor: Some(editor),
-            editor_load_error: None,
-            edit_buffer: replacement.clone(),
-            edit_status: None,
-            selected_table_cell_index: None,
-            table_cell_buffer: String::new(),
-            export_preview: None,
-            project_status: None,
-            preview_clipped_frames: 0,
-            preview_clipped_story_keys: BTreeSet::new(),
-            preview_text_diagnostics: Vec::new(),
-            diagnostic_save_path: String::new(),
-            diagnostic_status: None,
-            diagnostic_sweep: None,
-            diagnostic_sweep_progress: diagnostic_sweep::FolderSweepProgress::default(),
-            diagnostic_sweep_report: None,
-            diagnostic_sweep_open: false,
-            diagnostic_sweep_status: None,
-            supporter_value: supporter::ValueTracker::default(),
-            supporter_state: supporter::SupporterState::default(),
-            exact_file_consent_open: false,
-            exact_file_consent_status: None,
-            show_diagnostics: false,
-            reader_inspector_tab: reader_product_ui::InspectorTab::Document,
-        };
+        let source_customer_page_ids = visual
+            .document
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        let mut app = ViewerApp::new(None);
+        app.source_path = Some(PathBuf::from("SampleNewsletter.pub"));
+        app.source_customer_page_ids = source_customer_page_ids;
+        app.visual = Some(visual);
+        app.editor = Some(editor);
+        app.edit_buffer = replacement.clone();
 
         app.editor
             .as_mut()
@@ -7588,7 +6550,7 @@ mod tests {
             "GUI open must create the EditorSession"
         );
 
-        let (story_id, original_story, search_term) = {
+        let (story_id, original_story, search_term, chain_label, linked_topology_before) = {
             let app = harness.state();
             let visual = app.visual.as_ref().expect("visual loaded");
             let editor = app.editor.as_ref().expect("editor loaded");
@@ -7602,11 +6564,11 @@ mod tests {
                         .iter()
                         .filter(|frame| frame.story_id == story.id)
                         .count()
-                        == 1
+                        > 1
                         && editor.can_replace_story_text(story.id).is_ok()
                         && !story.text.trim().is_empty()
                 })
-                .expect("real fixture exposes a GUI-editable Story");
+                .expect("real fixture exposes a GUI-editable linked Story");
             let term = story
                 .text
                 .split_whitespace()
@@ -7614,13 +6576,42 @@ mod tests {
                     word.trim_matches(|ch: char| !ch.is_alphanumeric())
                         .to_owned()
                 })
-                .filter(|word| word.chars().count() >= 6)
+                .filter(|word| word.chars().count() >= 4)
                 .find(|word| {
                     let matches = visual.document.search_text(word);
                     matches.len() == 1 && matches[0].story_id == story.id
                 })
-                .expect("editable Story exposes one unique search term");
-            (story.id, story.text.clone(), term)
+                .expect("editable linked Story exposes one unique search term");
+            let frame_ordinals = visual
+                .story_frames
+                .iter()
+                .filter(|frame| frame.story_id == story.id)
+                .map(|frame| frame.ordinal)
+                .collect::<Vec<_>>();
+            let story_ui = linked_story_ui::state_for_validated_story_v1(&frame_ordinals)
+                .expect("editable linked Story has placed frames");
+            let chain_label = format!(
+                "Linked Story chain: {}",
+                story_ui
+                    .chain_membership
+                    .as_deref()
+                    .expect("multi-frame Story exposes chain membership")
+            );
+            let topology = editor
+                .graph()
+                .nodes
+                .iter()
+                .filter_map(|(node_id, node)| {
+                    let frame = node.payload.story_frame.as_ref()?;
+                    (frame.story_id == Some(story.id)).then_some((
+                        *node_id,
+                        frame.ordinal,
+                        frame.previous_frame,
+                        frame.next_frame,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (story.id, story.text.clone(), term, chain_label, topology)
         };
 
         {
@@ -7640,6 +6631,11 @@ mod tests {
         harness.get_by_label(&result_label).click();
         harness.step();
         assert_eq!(harness.state().edit_buffer, original_story);
+        assert!(
+            !chain_label.ends_with(": "),
+            "linked Story chain label must expose at least two recovered frame ordinals"
+        );
+        let _chain = harness.get_by_label(&chain_label);
 
         let replacement = "Chaptera GUI-only V0 acceptance text".to_owned();
         {
@@ -7670,6 +6666,28 @@ mod tests {
                 .len(),
             1,
             "Story edit must be admitted through the real GUI button"
+        );
+        let linked_topology_after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor present")
+            .graph()
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                let frame = node.payload.story_frame.as_ref()?;
+                (frame.story_id == Some(story_id)).then_some((
+                    *node_id,
+                    frame.ordinal,
+                    frame.previous_frame,
+                    frame.next_frame,
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linked_topology_after, linked_topology_before,
+            "GUI linked Story edit must preserve exact frame topology"
         );
 
         let (movable_page_label, movable_document_point) = {
@@ -7862,11 +6880,119 @@ mod tests {
             "GUI Redo must restore exact moved geometry"
         );
 
-        harness.get_by_label("Save Project").click();
+        let history_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Z);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            before_move,
+            "Ctrl+Z must route to the same canonical Undo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count
+                .checked_sub(1)
+                .expect("walkthrough has one operation to undo"),
+            "Ctrl+Z must move exactly one applied operation onto the redo stack"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Y);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            after_move,
+            "Ctrl+Y must route to the same canonical Redo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count,
+            "Ctrl+Y must not append a new authoring operation"
+        );
+
+        let save_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
         harness.step();
         harness.step();
         let sidecar = editor_project_sidecar_path(&fixture).expect("sidecar path");
-        assert!(sidecar.is_file(), "GUI Save Project must write the sidecar");
+        assert!(
+            sidecar.is_file(),
+            "Ctrl+S must write the EditorProject sidecar"
+        );
+        let shortcut_sidecar = fs::read(&sidecar).expect("read Ctrl+S sidecar");
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            save_operation_count,
+            "Ctrl+S must not append an Editor operation"
+        );
+
+        harness.get_by_label("Save Project").click();
+        harness.step();
+        harness.step();
+        let button_sidecar = fs::read(&sidecar).expect("read Save Project sidecar");
+        assert_eq!(
+            shortcut_sidecar, button_sidecar,
+            "Ctrl+S and Save Project must materialize identical sidecar bytes"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+        harness.step();
+        assert_eq!(
+            harness.state().project_status.as_deref(),
+            Some("Editor project is already saved with 2 operations."),
+            "Ctrl+S on an already-saved project must be an honest no-op confirmation"
+        );
+        assert_eq!(
+            fs::read(&sidecar).expect("read unchanged sidecar"),
+            button_sidecar,
+            "saved-state Ctrl+S must not change sidecar bytes"
+        );
+
         // Save happens after command enablement is computed for this frame.
         // Advance once more so the accessibility tree reflects the saved sidecar.
         harness.step();
@@ -7951,274 +7077,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(not(feature = "reader-only"))]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn gui_resize_handle_commits_one_resize_node() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let original = fs::read(&fixture).expect("read pinned SampleNewsletter fixture");
-
-        let fixture_for_app = fixture.clone();
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
-            });
-        harness.step();
-
-        let (page_label, target_document_point) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-            visual
-                .document
-                .pages
-                .iter()
-                .find_map(|page| {
-                    let page_origin = page.id.into_canonical();
-                    let page_id_text = page.id.as_canonical().to_string();
-                    let page_nodes = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|node| node.parent_origin == page_origin)
-                        .collect::<Vec<_>>();
-                    let hit_index = SceneHitTestIndex::new(
-                        page_nodes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(paint_order, node)| {
-                                let instance =
-                                    direct_scene_instance(editor, &page_id_text, node.origin)?;
-                                Some(SceneHitEntry {
-                                    instance_id: instance.instance_id,
-                                    node_id: node.origin,
-                                    bounds: node.bounds,
-                                    z_order: 0,
-                                    paint_order: u32::try_from(paint_order).unwrap_or(u32::MAX),
-                                })
-                            })
-                            .collect(),
-                    );
-
-                    hit_index.entries.iter().rev().find_map(|hit| {
-                        let instance = direct_scene_instance(editor, &page_id_text, hit.node_id)?;
-                        let admission =
-                            admit_object_mutation_v1(&instance, ObjectMutationKindV1::ResizeNode);
-                        if !admission.admitted
-                            || admission.origin_node_id.as_deref()
-                                != Some(hit.node_id.as_canonical().to_string().as_str())
-                            || editor.can_resize_node(hit.node_id).is_err()
-                        {
-                            return None;
-                        }
-                        let point = pub_interaction::DocumentPoint::new(
-                            pub_editor::LengthEmu::new(
-                                hit.bounds.x.get() + hit.bounds.width.get() / 2,
-                            ),
-                            pub_editor::LengthEmu::new(
-                                hit.bounds.y.get() + hit.bounds.height.get() / 2,
-                            ),
-                        );
-                        hit_index
-                            .topmost_at(point)
-                            .filter(|top| top.instance_id == hit.instance_id)
-                            .map(|_| (format!("Page {}", page.index), point))
-                    })
-                })
-                .expect("real fixture exposes a topmost ResizeNode-admitted object")
-        };
-
-        harness.get_by_label(&page_label).click();
-        harness.step();
-
-        let object_center = {
-            let canvas = harness
-                .get_by_label("Document canvas")
-                .raw_bounds()
-                .expect("document canvas has screen bounds");
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let page = visual
-                .document
-                .pages
-                .get(app.selected_page)
-                .expect("selected resize page remains available");
-            let surface = visual
-                .scene
-                .surfaces
-                .iter()
-                .find(|surface| surface.origin == page.id)
-                .expect("selected resize page has a scene surface");
-            let viewport = egui::vec2(
-                (canvas.x1 - canvas.x0) as f32,
-                (canvas.y1 - canvas.y0) as f32,
-            );
-            let fit_scale = fitted_scale(
-                surface.size.width.get(),
-                surface.size.height.get(),
-                viewport,
-            )
-            .expect("selected resize page has valid fit scale");
-            let scene_scale = fit_scale * app.zoom;
-            let page_width = surface.size.width.get() as f32 * scene_scale;
-            let page_height = surface.size.height.get() as f32 * scene_scale;
-            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
-            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
-            egui::pos2(
-                page_left + target_document_point.x.get() as f32 * scene_scale,
-                page_top + target_document_point.y.get() as f32 * scene_scale,
-            )
-        };
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(object_center),
-            egui::Event::PointerButton {
-                pos: object_center,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-            egui::Event::PointerButton {
-                pos: object_center,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        harness.step();
-
-        let handle_bounds = harness
-            .get_by_label("Resize bottom-right handle")
-            .raw_bounds()
-            .expect("selected resizable object exposes bottom-right handle");
-        let start = egui::pos2(
-            ((handle_bounds.x0 + handle_bounds.x1) / 2.0) as f32,
-            ((handle_bounds.y0 + handle_bounds.y1) / 2.0) as f32,
-        );
-        let end = start + egui::vec2(18.0, 12.0);
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(start),
-            egui::Event::PointerButton {
-                pos: start,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            0,
-            "resize pointer-down/preview must not emit an Editor operation"
-        );
-
-        harness
-            .input_mut()
-            .events
-            .push(egui::Event::PointerMoved(end));
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            0,
-            "resize pointer motion must remain transient"
-        );
-
-        harness.input_mut().events.push(egui::Event::PointerButton {
-            pos: end,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        harness.step();
-
-        let (node_id, before, after) = {
-            let editor = harness.state().editor.as_ref().expect("editor");
-            assert_eq!(
-                editor.operations().len(),
-                1,
-                "handle release must emit exactly one ResizeNode"
-            );
-            match editor.operations().last().expect("resize operation") {
-                pub_editor::EditOperation::ResizeNode {
-                    node_id,
-                    before,
-                    after,
-                } => (*node_id, *before, *after),
-                other => panic!("resize handle emitted unexpected operation: {other:?}"),
-            }
-        };
-        assert_ne!(before.width, after.width);
-        assert_ne!(before.height, after.height);
-
-        harness
-            .get_all_by_label("Undo")
-            .next()
-            .expect("Undo command")
-            .click();
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .graph()
-                .nodes[&node_id]
-                .header
-                .bounds,
-            before,
-            "GUI Undo restores exact pre-resize bounds"
-        );
-
-        harness
-            .get_all_by_label("Redo")
-            .next()
-            .expect("Redo command")
-            .click();
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .graph()
-                .nodes[&node_id]
-                .header
-                .bounds,
-            after,
-            "GUI Redo restores exact resized bounds"
-        );
-        assert_eq!(
-            fs::read(&fixture).expect("read immutable source after resize"),
-            original,
-            "GUI resize must not mutate source PUB bytes"
-        );
     }
 
     #[test]
@@ -9091,1282 +7949,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(not(feature = "reader-only"))]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn gui_direct_text_session_edits_real_story_without_inspector_apply() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
-        let root =
-            std::env::temp_dir().join(format!("chaptera-gui-direct-text-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("create direct-text GUI temp directory");
-        let fixture = root.join("SampleNewsletter.pub");
-        fs::write(&fixture, &original).expect("write direct-text GUI PUB fixture");
-
-        let fixture_for_app = fixture.clone();
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(32)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
-            });
-        harness.step();
-
-        let (page_label, target_document_point, target_story_id, target_frame_id, before_fragment) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-            visual
-                .text_fragments
-                .iter()
-                .find_map(|fragment| {
-                    text_session::enter_explicit_text_mode(
-                        editor,
-                        fragment.story_id,
-                        fragment.frame_id,
-                    )
-                    .ok()?;
-                    let node = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .find(|node| node.origin == fragment.frame_id)?;
-                    let page = visual
-                        .document
-                        .pages
-                        .iter()
-                        .find(|page| node.parent_origin == page.id.into_canonical())?;
-                    let page_id_text = page.id.as_canonical().to_string();
-                    let page_nodes = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|candidate| candidate.parent_origin == page.id.into_canonical())
-                        .collect::<Vec<_>>();
-                    let hit_index = SceneHitTestIndex::new(
-                        page_nodes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(paint_order, candidate)| {
-                                let instance =
-                                    direct_scene_instance(editor, &page_id_text, candidate.origin)?;
-                                Some(SceneHitEntry {
-                                    instance_id: instance.instance_id,
-                                    node_id: candidate.origin,
-                                    bounds: candidate.bounds,
-                                    z_order: 0,
-                                    paint_order: u32::try_from(paint_order).unwrap_or(u32::MAX),
-                                })
-                            })
-                            .collect(),
-                    );
-                    let point = pub_interaction::DocumentPoint::new(
-                        pub_editor::LengthEmu::new(
-                            node.bounds.x.get() + node.bounds.width.get() / 2,
-                        ),
-                        pub_editor::LengthEmu::new(
-                            node.bounds.y.get() + node.bounds.height.get() / 2,
-                        ),
-                    );
-                    hit_index
-                        .topmost_at(point)
-                        .filter(|top| top.node_id == fragment.frame_id)
-                        .map(|_| {
-                            (
-                                format!("Page {}", page.index),
-                                point,
-                                fragment.story_id,
-                                fragment.frame_id,
-                                fragment.text.clone(),
-                            )
-                        })
-                })
-                .expect("real fixture exposes one topmost capability-safe TextFrame")
-        };
-
-        harness.get_by_label(&page_label).click();
-        harness.step();
-
-        let frame_center = {
-            let canvas = harness
-                .get_by_label("Document canvas")
-                .raw_bounds()
-                .expect("document canvas has screen bounds");
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let page = visual
-                .document
-                .pages
-                .get(app.selected_page)
-                .expect("selected direct-text page remains available");
-            let surface = visual
-                .scene
-                .surfaces
-                .iter()
-                .find(|surface| surface.origin == page.id)
-                .expect("selected direct-text page has a scene surface");
-            let viewport = egui::vec2(
-                (canvas.x1 - canvas.x0) as f32,
-                (canvas.y1 - canvas.y0) as f32,
-            );
-            let fit_scale = fitted_scale(
-                surface.size.width.get(),
-                surface.size.height.get(),
-                viewport,
-            )
-            .expect("selected direct-text page has valid fit scale");
-            let scene_scale = fit_scale * app.zoom;
-            let page_width = surface.size.width.get() as f32 * scene_scale;
-            let page_height = surface.size.height.get() as f32 * scene_scale;
-            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
-            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
-            egui::pos2(
-                page_left + target_document_point.x.get() as f32 * scene_scale,
-                page_top + target_document_point.y.get() as f32 * scene_scale,
-            )
-        };
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(frame_center),
-            egui::Event::PointerButton {
-                pos: frame_center,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-            egui::Event::PointerButton {
-                pos: frame_center,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        harness.step();
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.get_by_label("Edit Text").click();
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .text_mode
-                .as_ref()
-                .expect("explicit Edit Text enters a session")
-                .story_id,
-            target_story_id
-        );
-        assert_eq!(
-            harness
-                .state()
-                .text_mode
-                .as_ref()
-                .expect("direct text mode")
-                .frame_id,
-            target_frame_id
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "entering direct text mode is transient"
-        );
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(frame_center),
-            egui::Event::PointerButton {
-                pos: frame_center,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-            egui::Event::PointerButton {
-                pos: frame_center,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        harness
-            .input_mut()
-            .events
-            .push(egui::Event::Text("X".to_owned()));
-        harness.step();
-        harness.step();
-
-        {
-            let app = harness.state();
-            let editor = app.editor.as_ref().expect("editor");
-            assert_eq!(editor.operations().len(), operations_before + 1);
-            assert!(matches!(
-                editor.operations().last(),
-                Some(pub_editor::EditOperation::ReplaceStoryRange { .. })
-            ));
-            let after_fragment = app
-                .visual
-                .as_ref()
-                .expect("visual")
-                .text_fragments
-                .iter()
-                .find(|fragment| fragment.frame_id == target_frame_id)
-                .expect("edited frame remains projected");
-            assert_ne!(
-                after_fragment.text, before_fragment,
-                "canvas paint projection must reflect the current Story after direct typing"
-            );
-        }
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert!(harness.state().text_mode.is_none());
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before + 1,
-            "Escape exits without a second document mutation"
-        );
-        assert_eq!(
-            fs::read(&fixture).expect("re-read source PUB"),
-            original,
-            "GUI direct text editing must not mutate source PUB bytes"
-        );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(not(feature = "reader-only"))]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn gui_canvas_keyboard_nudge_select_all_escape_and_delete_fail_closed_on_real_pub() {
-        use egui_kittest::Harness;
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture), cc.storage)
-            });
-        harness.step();
-        harness.step();
-
-        let (page_index, instance_id, node_id, before) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-            visual
-                .document
-                .pages
-                .iter()
-                .enumerate()
-                .find_map(|(page_index, page)| {
-                    let page_origin = page.id.into_canonical();
-                    let page_id_text = page.id.as_canonical().to_string();
-                    visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|node| node.parent_origin == page_origin)
-                        .find_map(|node| {
-                            let instance =
-                                direct_scene_instance(editor, &page_id_text, node.origin)?;
-                            let admission =
-                                admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
-                            if !admission.admitted
-                                || admission.origin_node_id.as_deref()
-                                    != Some(node.origin.as_canonical().to_string().as_str())
-                            {
-                                return None;
-                            }
-                            let bounds = editor.graph().nodes.get(&node.origin)?.header.bounds;
-                            editor
-                                .can_move_node_to(node.origin, bounds.x, bounds.y)
-                                .ok()?;
-                            Some((page_index, instance.instance_id, node.origin, bounds))
-                        })
-                })
-                .expect("real fixture exposes one direct movable object")
-        };
-
-        {
-            let app = harness.state_mut();
-            app.selected_page = page_index;
-            app.canvas_selection.select_only(instance_id);
-        }
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::ArrowRight,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        harness.step();
-
-        let after = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .graph()
-            .nodes[&node_id]
-            .header
-            .bounds;
-        assert_eq!(
-            after.x.get() - before.x.get(),
-            selection_keyboard::BASE_NUDGE_EMU
-        );
-        assert_eq!(after.y, before.y);
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before + 1,
-            "one Arrow key must emit exactly one MoveNode"
-        );
-        assert!(matches!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .last(),
-            Some(pub_editor::EditOperation::MoveNode { node_id: moved, .. }) if *moved == node_id
-        ));
-
-        let expected_select_all = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual");
-            let editor = app.editor.as_ref().expect("editor");
-            let page = &visual.document.pages[page_index];
-            let page_origin = page.id.into_canonical();
-            let page_id_text = page.id.as_canonical().to_string();
-            visual
-                .scene
-                .nodes
-                .iter()
-                .filter(|node| node.parent_origin == page_origin)
-                .filter_map(|node| direct_scene_instance(editor, &page_id_text, node.origin))
-                .map(|instance| instance.instance_id)
-                .collect::<BTreeSet<_>>()
-        };
-        let operations_after_nudge = operations_before + 1;
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-        });
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .canvas_selection
-                .iter()
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>(),
-            expected_select_all
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_after_nudge,
-            "canvas Ctrl+A must remain transient"
-        );
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_after_nudge,
-            "object Delete remains deliberately unavailable in this slice"
-        );
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 0);
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_after_nudge,
-            "Escape selection clear must not create a document revision"
-        );
-    }
-
-    #[cfg(not(feature = "reader-only"))]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pub() {
-        use egui_kittest::Harness;
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(16)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture), cc.storage)
-            });
-        harness.step();
-        harness.step();
-
-        let (page_index, instance_id, node_id, before) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-            visual
-                .document
-                .pages
-                .iter()
-                .enumerate()
-                .find_map(|(page_index, page)| {
-                    let page_origin = page.id.into_canonical();
-                    let page_id_text = page.id.as_canonical().to_string();
-                    visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|node| node.parent_origin == page_origin)
-                        .find_map(|node| {
-                            let instance =
-                                direct_scene_instance(editor, &page_id_text, node.origin)?;
-                            let admission =
-                                admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
-                            if !admission.admitted {
-                                return None;
-                            }
-                            let bounds = editor.graph().nodes.get(&node.origin)?.header.bounds;
-                            editor
-                                .can_move_node_to(node.origin, bounds.x, bounds.y)
-                                .ok()?;
-                            Some((page_index, instance.instance_id, node.origin, bounds))
-                        })
-                })
-                .expect("real fixture exposes one direct movable object")
-        };
-
-        let pointer_start = pub_interaction::DocumentPoint::new(
-            pub_editor::LengthEmu::ZERO,
-            pub_editor::LengthEmu::ZERO,
-        );
-        {
-            let app = harness.state_mut();
-            app.selected_page = page_index;
-            app.canvas_selection.select_only(instance_id);
-            app.canvas_drag = Some(
-                MoveTransaction::begin(node_id, before, pointer_start)
-                    .expect("valid transient move gesture"),
-            );
-        }
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-
-        assert!(
-            harness.state().canvas_drag.is_none(),
-            "first Escape must cancel the active object gesture"
-        );
-        assert_eq!(
-            harness.state().canvas_selection.len(),
-            1,
-            "gesture-owning Escape must not also clear selection"
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "gesture cancellation is transient"
-        );
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-
-        assert_eq!(
-            harness.state().canvas_selection.len(),
-            0,
-            "second Escape reaches the final selection-clearing fallback"
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "selection clearing is transient"
-        );
-    }
-
-    #[cfg(not(feature = "reader-only"))]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub() {
-        use egui_kittest::Harness;
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture), cc.storage)
-            });
-        harness.step();
-        harness.step();
-
-        let (page_index, instance_id, story_id, frame_id, before) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-            visual
-                .text_fragments
-                .iter()
-                .find_map(|fragment| {
-                    text_session::enter_explicit_text_mode(
-                        editor,
-                        fragment.story_id,
-                        fragment.frame_id,
-                    )
-                    .ok()?;
-                    let node = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .find(|node| node.origin == fragment.frame_id)?;
-                    let (page_index, page) = visual
-                        .document
-                        .pages
-                        .iter()
-                        .enumerate()
-                        .find(|(_, page)| node.parent_origin == page.id.into_canonical())?;
-                    let page_id_text = page.id.as_canonical().to_string();
-                    let instance = direct_scene_instance(editor, &page_id_text, fragment.frame_id)?;
-                    let admission =
-                        admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
-                    if !admission.admitted
-                        || admission.origin_node_id.as_deref()
-                            != Some(fragment.frame_id.as_canonical().to_string().as_str())
-                    {
-                        return None;
-                    }
-                    let bounds = editor.graph().nodes.get(&fragment.frame_id)?.header.bounds;
-                    editor
-                        .can_move_node_to(fragment.frame_id, bounds.x, bounds.y)
-                        .ok()?;
-                    Some((
-                        page_index,
-                        instance.instance_id,
-                        fragment.story_id,
-                        fragment.frame_id,
-                        bounds,
-                    ))
-                })
-                .expect("real fixture exposes one editable movable direct TextFrame")
-        };
-
-        {
-            let app = harness.state_mut();
-            app.selected_page = page_index;
-            app.canvas_selection.select_only(instance_id);
-            app.enter_canvas_text_mode(story_id, frame_id);
-        }
-        assert!(harness.state().text_mode.is_some());
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::ArrowLeft,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "ordinary Story Arrow must stay transient text navigation"
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .graph()
-                .nodes[&frame_id]
-                .header
-                .bounds,
-            before,
-            "ordinary Story Arrow must not move the owning object"
-        );
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::ArrowRight,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers {
-                alt: true,
-                ..Default::default()
-            },
-        });
-        harness.step();
-        harness.step();
-
-        let after = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .graph()
-            .nodes[&frame_id]
-            .header
-            .bounds;
-        assert_eq!(
-            after.x.get() - before.x.get(),
-            selection_keyboard::BASE_NUDGE_EMU
-        );
-        assert_eq!(after.y, before.y);
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before + 1,
-            "Alt+Arrow must emit exactly one MoveNode for the owning TextFrame"
-        );
-        {
-            let app = harness.state();
-            let editor = app.editor.as_ref().expect("editor");
-            let mode = app.text_mode.as_ref().expect("Story mode remains active");
-            assert_eq!(
-                mode.session.revision_id,
-                editor.project().state_id_v1(),
-                "active Story selection must rebind to the post-MoveNode revision"
-            );
-        }
-
-        let operations_after_nudge = operations_before + 1;
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-        });
-        harness.step();
-        {
-            let app = harness.state();
-            let mode = app.text_mode.as_ref().expect("Story mode");
-            assert_eq!(mode.session.selection.anchor_scalar, 0);
-            assert_eq!(
-                mode.session.selection.focus_scalar,
-                mode.domain.raw_scalar_len
-            );
-            assert_eq!(
-                app.editor.as_ref().expect("editor").operations().len(),
-                operations_after_nudge,
-                "Story Ctrl+A must remain transient"
-            );
-        }
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert!(harness.state().text_mode.is_none());
-        assert_eq!(
-            harness.state().canvas_selection.len(),
-            1,
-            "the same Escape that exits Story mode must not also clear object selection"
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_after_nudge
-        );
-
-        harness.input_mut().events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        });
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 0);
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_after_nudge
-        );
-    }
-
-    struct GoldenPageOnlyApp {
-        visual: ViewerGeometryDocument,
-        page_index: usize,
-        image_textures: BTreeMap<String, CachedImageTexture>,
-        texture_upload_enabled: bool,
-        painted_text_nodes: usize,
-        clipped_text_nodes: usize,
-        source_typography_sections: usize,
-        fallback_typography_sections: usize,
-        shared_resolved_layout_frames: usize,
-        backend_fallback_frames: usize,
-        projected_text_metrics: BTreeMap<String, render_backend::TextPaintMetrics>,
-    }
-
-    impl GoldenPageOnlyApp {
-        fn new(visual: ViewerGeometryDocument, page_index: usize) -> Self {
-            Self {
-                visual,
-                page_index,
-                image_textures: BTreeMap::new(),
-                texture_upload_enabled: false,
-                painted_text_nodes: 0,
-                clipped_text_nodes: 0,
-                source_typography_sections: 0,
-                fallback_typography_sections: 0,
-                shared_resolved_layout_frames: 0,
-                backend_fallback_frames: 0,
-                projected_text_metrics: BTreeMap::new(),
-            }
-        }
-
-        fn enable_texture_upload(&mut self) {
-            self.texture_upload_enabled = true;
-        }
-
-        fn ensure_image_textures(&mut self, ctx: &egui::Context) {
-            if !self.texture_upload_enabled {
-                return;
-            }
-            let max_texture_side = ctx.input(|input| input.max_texture_side);
-            for embedded in &self.visual.images {
-                let key = format!("{:?}", embedded.resource_id);
-                if self.image_textures.contains_key(&key) {
-                    continue;
-                }
-                let expected_sha256 = image_decode_adapter::exact_sha256_hex(&embedded.bytes);
-                let admitted = image_decode_adapter::decode_texture_image_v1(
-                    &embedded.bytes,
-                    &embedded.mime,
-                    &expected_sha256,
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "clean golden image decode failed for {} / {}: {error}",
-                        key, embedded.mime
-                    )
-                });
-                let [width, height] = admitted.color_image.size;
-                assert!(
-                    width <= max_texture_side && height <= max_texture_side,
-                    "Carlton golden image {width}x{height} exceeds active egui texture limit {max_texture_side}"
-                );
-                let texture = ctx.load_texture(
-                    format!("carlton-golden-{key}"),
-                    admitted.color_image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.image_textures.insert(
-                    key,
-                    CachedImageTexture {
-                        texture,
-                        _cache_identity_sha256: admitted.cache_identity_sha256,
-                    },
-                );
-            }
-        }
-    }
-
-    impl eframe::App for GoldenPageOnlyApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            self.ensure_image_textures(ctx);
-            let render_plan = build_desktop_page_render_plan(&self.visual, self.page_index)
-                .expect("clean golden page render plan");
-            let scene_scale = 144.0_f32 / 914_400.0_f32;
-            self.painted_text_nodes = 0;
-            self.clipped_text_nodes = 0;
-            self.source_typography_sections = 0;
-            self.fallback_typography_sections = 0;
-            self.shared_resolved_layout_frames = 0;
-            self.backend_fallback_frames = 0;
-            self.projected_text_metrics.clear();
-
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE)
-                .show(ctx, |ui| {
-                    let page_rect = ui.max_rect();
-                    let painter = ui.painter_at(page_rect);
-                    painter.rect_filled(page_rect, 0.0, egui::Color32::WHITE);
-
-                    for node in &render_plan.nodes {
-                        let Some(node_rect) = render_backend::physical_rect_to_egui(
-                            page_rect,
-                            scene_scale,
-                            node.bounds.x.get(),
-                            node.bounds.y.get(),
-                            node.bounds.width.get(),
-                            node.bounds.height.get(),
-                        ) else {
-                            continue;
-                        };
-                        let texture = node.image.as_ref().and_then(|image| {
-                            let key = format!("{:?}", image.resource_id);
-                            self.image_textures.get(&key)
-                        });
-                        render_backend::paint_document_node_base(
-                            &painter,
-                            node,
-                            node_rect,
-                            texture.map(|cached| cached.texture.id()),
-                        );
-                        let outcome = render_backend::paint_document_node_foreground(
-                            &painter,
-                            node,
-                            node_rect,
-                            scene_scale,
-                        );
-                        if let Some(metrics) = outcome.text_metrics {
-                            if let Some(instance) = node.projected_scene_instance.as_ref() {
-                                self.projected_text_metrics
-                                    .insert(instance.instance_id.clone(), metrics.clone());
-                            }
-                            self.painted_text_nodes += 1;
-                            self.source_typography_sections += metrics.source_typography_sections;
-                            self.fallback_typography_sections += metrics.fallback_sections;
-                            if metrics.shared_resolved_layout {
-                                self.shared_resolved_layout_frames += 1;
-                            } else {
-                                self.backend_fallback_frames += 1;
-                            }
-                            if outcome.text_clipped {
-                                self.clipped_text_nodes += 1;
-                            }
-                        }
-                    }
-                });
-        }
-    }
-
-    #[test]
-    #[ignore = "requires CHAPTERA_GOLDEN_CARLTON_MARCH and CHAPTERA_GOLDEN_CARLTON_OUT"]
-    fn golden_carlton_march_clean_pages_use_current_reader_render_backend() {
-        use egui_kittest::Harness;
-        use sha2::{Digest, Sha256};
-
-        const RASTER_DPI: f64 = 144.0;
-        const EMU_PER_INCH: f64 = 914_400.0;
-
-        let fixture = std::env::var_os("CHAPTERA_GOLDEN_CARLTON_MARCH")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_GOLDEN_CARLTON_MARCH");
-        let output_dir = std::env::var_os("CHAPTERA_GOLDEN_CARLTON_OUT")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_GOLDEN_CARLTON_OUT");
-        fs::create_dir_all(&output_dir).expect("create Carlton golden output directory");
-
-        let bytes = fs::read(&fixture).expect("read exact Carlton March PUB");
-        let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
-        assert_eq!(
-            source_sha256, "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
-            "Carlton March source identity drifted"
-        );
-
-        let visual = diagnostic_sweep::open_for_product(&bytes)
-            .expect("exact Carlton March must open through current product Reader");
-        assert_eq!(visual.document.pages.len(), 3, "Carlton product page count");
-        assert_eq!(
-            visual.scene.surfaces.len(),
-            3,
-            "Carlton product surface count"
-        );
-        assert!(
-            visual.document.diagnostics.iter().any(
-                |diagnostic| diagnostic.code == "viewer.page_projection.family_profile_applied"
-            ),
-            "exact Carlton family presentation profile must be active before visual rendering"
-        );
-        assert_eq!(
-            visual.projected_instances.len(),
-            4,
-            "exact March must admit exactly four visible canonical Cmo scene instances"
-        );
-        let projected_instance_ids = visual
-            .projected_instances
-            .iter()
-            .map(|projected| projected.scene_instance.instance_id.clone())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            projected_instance_ids.len(),
-            4,
-            "canonical projected SceneInstance identities must be distinct"
-        );
-        assert!(visual.projected_instances.iter().all(|projected| {
-            projected.scene_instance.projection_kind
-                == chaptera_scene_instance::SceneProjectionKindV1::CmoStorySlot
-        }));
-        let direct_scene_origins = visual
-            .scene
-            .nodes
-            .iter()
-            .map(|node| node.origin.as_canonical().to_string())
-            .collect::<BTreeSet<_>>();
-        assert!(
-            visual.projected_instances.iter().all(|projected| {
-                !direct_scene_origins.contains(&projected.scene_instance.origin_node_id)
-            }),
-            "projected Cmo carriers must not be reparented into direct customer scene nodes"
-        );
-        let projected_page_counts = visual
-            .document
-            .pages
-            .iter()
-            .map(|page| {
-                let page_id = page.id.as_canonical().to_string();
-                visual
-                    .projected_instances
-                    .iter()
-                    .filter(|projected| projected.scene_instance.target_page_id == page_id)
-                    .count()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            projected_page_counts,
-            vec![1, 2, 1],
-            "exact March projected Cmo distribution must stay 1/2/1"
-        );
-
-        let mut page_receipts = Vec::new();
-        for (page_index, expected_projected_node_count) in
-            projected_page_counts.iter().copied().enumerate()
-        {
-            let plan = build_desktop_page_render_plan(&visual, page_index)
-                .expect("current Reader page render plan");
-            let projected_node_count = plan
-                .nodes
-                .iter()
-                .filter(|node| node.projected_scene_instance.is_some())
-                .count();
-            assert_eq!(
-                projected_node_count, expected_projected_node_count,
-                "render-plan projected instance count must match canonical Viewer adapter"
-            );
-            assert!(
-                plan.nodes
-                    .iter()
-                    .filter_map(|node| node.text.as_ref())
-                    .all(|fragment| !fragment.text.contains('\u{FFFC}')),
-                "admitted projected object markers must not paint as U+FFFC missing-glyph boxes"
-            );
-            let width_px = ((plan.page_size.width.get() as f64 * RASTER_DPI / EMU_PER_INCH)
-                .round()
-                .max(1.0)) as u32;
-            let height_px = ((plan.page_size.height.get() as f64 * RASTER_DPI / EMU_PER_INCH)
-                .round()
-                .max(1.0)) as u32;
-
-            let visual_for_app = visual.clone();
-            let mut harness = Harness::builder()
-                .with_size(egui::vec2(width_px as f32, height_px as f32))
-                .with_pixels_per_point(1.0)
-                .with_max_steps(12)
-                .wgpu()
-                .build_eframe(move |cc| {
-                    fallback_font::install(&cc.egui_ctx)
-                        .expect("pinned Chaptera fallback font resource must validate");
-                    GoldenPageOnlyApp::new(visual_for_app, page_index)
-                });
-            // Harness construction executes initial frames with RawInput's portable
-            // 2048px texture ceiling. Carlton contains a proven 2480x2835 image,
-            // so delay exact texture upload until the next frame after raising only
-            // this headless input capability; source pixels remain unmodified.
-            harness.input_mut().max_texture_side = Some(4096);
-            harness.state_mut().enable_texture_upload();
-            harness.step();
-
-            let image = harness
-                .render()
-                .expect("headless clean Reader page render must succeed");
-            assert_eq!(image.width(), width_px, "golden raster width drift");
-            assert_eq!(image.height(), height_px, "golden raster height drift");
-            let executed = harness.state();
-            let (planned_shared_resolved_layout_frames, planned_backend_fallback_frames) =
-                text_layout_disposition_counts(&plan);
-            let projected_instance_receipts = plan
-                .nodes
-                .iter()
-                .filter_map(|node| {
-                    let instance = node.projected_scene_instance.as_ref()?;
-                    let viewer_projected = visual
-                        .projected_instances
-                        .iter()
-                        .find(|projected| {
-                            projected.scene_instance.instance_id == instance.instance_id
-                        })
-                        .expect("render-plan projected instance must come from Viewer adapter");
-                    let target_frame = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .find(|candidate| candidate.origin == viewer_projected.target_frame_node_id)
-                        .expect("projected target frame remains in resolved customer scene");
-                    Some(serde_json::json!({
-                        "instance_id": instance.instance_id,
-                        "origin_node_id": instance.origin_node_id,
-                        "target_frame_node_id": viewer_projected
-                            .target_frame_node_id
-                            .as_canonical()
-                            .to_string(),
-                        "cmo_slot_index": instance.cmo_slot_index,
-                        "cmo_scalar_index": instance.cmo_scalar_index,
-                        "target_frame_paint_scalar_end": viewer_projected
-                            .target_frame_paint_scalar_end,
-                        "story_authority_present": instance.story_authority_id.is_some(),
-                        "target_frame_bounds_emu": [
-                            target_frame.bounds.x.get(),
-                            target_frame.bounds.y.get(),
-                            target_frame.bounds.width.get(),
-                            target_frame.bounds.height.get(),
-                        ],
-                        "projected_bounds_emu": [
-                            node.bounds.x.get(),
-                            node.bounds.y.get(),
-                            node.bounds.width.get(),
-                            node.bounds.height.get(),
-                        ],
-                        "carrier_extent_emu": [
-                            node.bounds.width.get(),
-                            node.bounds.height.get(),
-                        ],
-                        "text_scalar_count": node
-                            .text
-                            .as_ref()
-                            .map(|text| text.text.chars().count())
-                            .unwrap_or(0),
-                        "executed_text_metrics": executed
-                            .projected_text_metrics
-                            .get(&instance.instance_id),
-                    }))
-                })
-                .collect::<Vec<_>>();
-            let filename = format!("carlton-march-reader-page-{:03}.png", page_index + 1);
-            image
-                .save(output_dir.join(&filename))
-                .expect("write Carlton clean Reader page PNG");
-
-            let typography_sections = plan
-                .nodes
-                .iter()
-                .filter_map(|node| node.text.as_ref())
-                .map(|text| text.typography.len())
-                .sum::<usize>();
-            page_receipts.push(serde_json::json!({
-                "page_number": page_index + 1,
-                "page_id": visual.document.pages[page_index].id,
-                "width_emu": plan.page_size.width.get(),
-                "height_emu": plan.page_size.height.get(),
-                "raster_width_px": width_px,
-                "raster_height_px": height_px,
-                "node_count": plan.nodes.len(),
-                "projected_scene_instance_count": projected_node_count,
-                "projected_instances": projected_instance_receipts,
-                "fill_node_count": plan.nodes.iter().filter(|node| node.solid_fill_rgb.is_some()).count(),
-                "line_node_count": plan.nodes.iter().filter(|node| node.solid_line.is_some()).count(),
-                "image_node_count": plan.nodes.iter().filter(|node| node.image.is_some()).count(),
-                "text_node_count": plan.nodes.iter().filter(|node| node.text.is_some()).count(),
-                "typography_sections": typography_sections,
-                "planned_shared_resolved_layout_frames": planned_shared_resolved_layout_frames,
-                "planned_backend_fallback_frames": planned_backend_fallback_frames,
-                "executed_text_node_count": executed.painted_text_nodes,
-                "executed_source_typography_sections": executed.source_typography_sections,
-                "executed_fallback_typography_sections": executed.fallback_typography_sections,
-                "shared_resolved_layout_frames": executed.shared_resolved_layout_frames,
-                "backend_fallback_frames": executed.backend_fallback_frames,
-                "clipped_text_node_count": executed.clipped_text_nodes,
-                "png": filename,
-            }));
-        }
-
-        let receipt = serde_json::json!({
-            "schema": "chaptera.reader-golden-carlton-march.v1",
-            "source_sha256": source_sha256,
-            "page_count": visual.document.pages.len(),
-            "scene_surface_count": visual.scene.surfaces.len(),
-            "raster_dpi": RASTER_DPI as u32,
-            "render_backend": "chaptera-desktop-egui-document-paint",
-            "shell_ui_rendered": false,
-            "selection_overlay_rendered": false,
-            "preview_warning_overlay_rendered": false,
-            "family_profile_applied": true,
-            "source_font_face_claimed": false,
-            "publisher_exact_reflow_claimed": false,
-            "text_layout_authority": "shared_resolved_when_admitted_else_backend_fallback",
-            "viewer_diagnostic_codes": visual
-                .document
-                .diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.code.clone())
-                .collect::<Vec<_>>(),
-            "projected_scene_instance_ids": projected_instance_ids,
-            "projected_page_counts": projected_page_counts,
-            "pages": page_receipts,
-        });
-        fs::write(
-            output_dir.join("carlton-march-reader-golden-receipt.json"),
-            serde_json::to_vec_pretty(&receipt).expect("serialize Carlton golden receipt"),
-        )
-        .expect("write Carlton golden receipt");
-    }
-
     #[cfg(all(feature = "embedded-fixture-tests", target_os = "windows"))]
     #[test]
     fn windows_source_font_real_pub_receipt_compares_shared_layouts() {
@@ -10554,151 +8136,6 @@ mod tests {
             .expect("write real-PUB source-font receipt");
         }
         println!("{}", serde_json::to_string(&receipt).expect("receipt json"));
-    }
-
-    #[test]
-    #[ignore = "requires CHAPTERA_GOLDEN_SAMPLE_NEWSLETTER and CHAPTERA_GOLDEN_OUT"]
-    fn golden_sample_newsletter_reference_customer_page_1_uses_shared_typography_render_plan() {
-        use egui_kittest::Harness;
-        use sha2::{Digest, Sha256};
-
-        let fixture = std::env::var_os("CHAPTERA_GOLDEN_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_GOLDEN_SAMPLE_NEWSLETTER");
-        let output_dir = std::env::var_os("CHAPTERA_GOLDEN_OUT")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_GOLDEN_OUT");
-        fs::create_dir_all(&output_dir).expect("create golden output directory");
-
-        let bytes = fs::read(&fixture).expect("read pinned SampleNewsletter");
-        let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
-        assert_eq!(
-            source_sha256, "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            "golden fixture identity drifted"
-        );
-
-        let visual = diagnostic_sweep::open_for_product(&bytes)
-            .expect("pinned SampleNewsletter must open through product Reader path");
-        assert!(
-            !visual.typography_runs.is_empty(),
-            "Reader must expose bounded source typography"
-        );
-        let full_family_typography_run_count = visual
-            .typography_runs
-            .iter()
-            .filter(|run| !run.source_font_name.trim().is_empty())
-            .count();
-        let inherited_full_family_run_count = visual
-            .typography_runs
-            .iter()
-            .filter(|run| {
-                !run.source_font_name.trim().is_empty()
-                    && (run.font_inherited || run.size_inherited)
-            })
-            .count();
-        let size_only_typography_run_count = visual
-            .typography_runs
-            .iter()
-            .filter(|run| {
-                run.source_font_name.trim().is_empty()
-                    && !run.font_inherited
-                    && run.size_inherited
-                    && run.text_size_emu > 0
-            })
-            .count();
-        assert_eq!(
-            full_family_typography_run_count, 106,
-            "the pre-size-only source authority must preserve all 106 full-family SampleNewsletter typography runs"
-        );
-        assert_eq!(
-            inherited_full_family_run_count, 88,
-            "the pre-size-only authority must preserve all 88 explicit-FDPP-selector inherited full-family runs"
-        );
-        assert_eq!(
-            size_only_typography_run_count, 17,
-            "bounded implicit style-zero size authority adds exactly 17 family-absent SampleNewsletter size-only runs on this pinned fixture"
-        );
-        assert_eq!(
-            visual.typography_runs.len(),
-            full_family_typography_run_count + size_only_typography_run_count,
-            "SampleNewsletter typography must contain only proven full-family or bounded size-only runs"
-        );
-        assert!(
-            visual
-                .typography_runs
-                .iter()
-                .any(|run| run.source_font_name == "Rockwell Condensed"
-                    && run.text_size_emu == 24 * 12_700),
-            "proven Rockwell Condensed 24pt anchor must reach Viewer"
-        );
-
-        // Fixture-only crosswalk: raw Viewer Page 2 is Publisher customer page 1 for this exact pinned SHA.
-        // This must never be reused as generic PAGE-role logic.
-        let page_offset = 1_usize;
-        let plan = build_desktop_page_render_plan(&visual, page_offset)
-            .expect("reference customer page 1 shared render plan");
-        let typography_sections = plan
-            .nodes
-            .iter()
-            .filter_map(|node| node.text.as_ref())
-            .map(|text| text.typography.len())
-            .sum::<usize>();
-        assert!(
-            typography_sections > 0,
-            "source typography must reach shared Reader render plan"
-        );
-        let (shared_resolved_layout_frames, backend_fallback_frames) =
-            text_layout_disposition_counts(&plan);
-        assert!(
-            shared_resolved_layout_frames > 0,
-            "SampleNewsletter must exercise at least one shared resolved text-layout frame"
-        );
-
-        let fixture_for_app = fixture.clone();
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .wgpu()
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                let mut app = ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage);
-                app.selected_page = page_offset;
-                app
-            });
-        harness.step();
-
-        let image = harness
-            .render()
-            .expect("headless Reader render must succeed");
-        let png_path = output_dir.join("samplenewsletter-reference-customer-page-001-reader.png");
-        image.save(&png_path).expect("write Reader golden PNG");
-
-        let receipt = serde_json::json!({
-            "schema": "chaptera.reader-golden-samplenewsletter.v3",
-            "source_sha256": source_sha256,
-            "viewer_page_number": 2,
-            "publisher_reference_customer_page_number": 1,
-            "page_selection_basis": "pinned_same_source_crosswalk_only",
-            "generic_page_role_claimed": false,
-            "typography_run_count": visual.typography_runs.len(),
-            "full_family_typography_run_count": full_family_typography_run_count,
-            "inherited_full_family_run_count": inherited_full_family_run_count,
-            "size_only_typography_run_count": size_only_typography_run_count,
-            "render_plan_typography_sections": typography_sections,
-            "shared_resolved_layout_frames": shared_resolved_layout_frames,
-            "backend_fallback_frames": backend_fallback_frames,
-            "source_font_face_claimed": false,
-            "publisher_exact_reflow_claimed": false,
-            "text_layout_authority": "shared_resolved_when_admitted_else_backend_fallback",
-            "png": "samplenewsletter-reference-customer-page-001-reader.png"
-        });
-        fs::write(
-            output_dir.join("samplenewsletter-reader-receipt.json"),
-            serde_json::to_vec_pretty(&receipt).expect("serialize golden receipt"),
-        )
-        .expect("write golden receipt");
     }
 
     #[test]

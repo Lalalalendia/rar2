@@ -7,28 +7,75 @@
 //! CFB, Contents, Quill, Escher, byte offsets, and writer mutation state are not
 //! part of the Viewer contract.
 
+mod authoring_projection;
+mod borderart;
+mod bridge_diagnostics;
+mod images;
+mod mature_emf_preview;
+mod mature_wmf_preview;
+mod tables;
+mod typography;
+mod viewer_shape_preset;
+
+pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
+
+pub use authoring_projection::bounded_authoring_slice_from_resolved;
+pub use authoring_projection::bounded_authoring_slice_from_resolved_pages;
+pub use authoring_projection::bounded_authoring_slice_from_resolved_story_payload;
+use authoring_projection::{
+    bounded_legacy_noquill_authoring_slice_from_resolved_pages,
+    legacy_noquill_structural_point_group_ids,
+};
+pub use borderart::{
+    ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
+    ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
+};
+use bridge_diagnostics::map_bridge_diagnostic;
+pub use images::{
+    VIEWER_IMAGE_SOURCE_Q16_ONE, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageRecolorV1,
+    ViewerImageSourceWindowV1,
+};
+use images::{
+    resolved_page_for_node_v1, retain_viewer_image_uses_for_selected_pages_v1,
+    viewer_image_recolor_v1, viewer_image_source_window_v1,
+};
+use mature_emf_preview::viewer_mature_officeart_emf_bitmap_preview_images;
+use mature_wmf_preview::viewer_mature_officeart_wmf_preview_images;
+
+use tables::viewer_tables_from_resolved;
+pub use tables::{ViewerTable, ViewerTableBorderSegment, ViewerTableCell};
+#[cfg(test)]
+use tables::{unique_table_column_boundary, unique_table_row_boundary};
+use viewer_shape_preset::viewer_preset_shape_from_canonical;
+
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
 use chaptera_layout_projection::{
     CarrierExtentV1, CmoStorySlotFlowInputV1, resolve_cmo_slot_flow_v1,
 };
 #[cfg(feature = "cmo-slot-compose")]
-use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1};
-use pub_layout::{
-    BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
-    BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
-    ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
-    resolve_bounded_uniform_table_cells,
+use chaptera_scene_instance::{
+    SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1,
+    inherited_master_instance_v1,
 };
+#[cfg(test)]
+use pub_layout::{BoundedAuthoringSlice, BoundedNodeGeometryInput};
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
+use pub_layout::{
+    BoundedParagraphFlowConstraint, BoundedParagraphFlowRun, BoundedTextFlowEnvironment,
+    BoundedTextMetrics, ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic,
+    ResolvedPhysicalNode, project_bounded, resolve_bounded_geometry,
+    resolve_bounded_text_flow_with_paragraph_flow,
+};
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
-    TableCellAddress, TableCellId, derive_source_canonical_id,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryId,
+    derive_source_canonical_id,
 };
+#[cfg(test)]
+use pub_model::{StoryFrame, TableCellAddress, TableCellId};
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
     PubEffectivePaintSourceSpanV1, PubEffectivePaintValueV1, PubEffectiveShapePaintSourceV1,
@@ -54,8 +101,6 @@ use pub_presentation_profile::{
 };
 #[cfg(test)]
 use pub_reader::LegacyOleCachedPresentation;
-#[cfg(feature = "cmo-slot-compose")]
-use pub_reader::build_mature_0x2c_cmo_projection_bridge_v1;
 pub use pub_reader::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
     FailureIntakeClassification, FailureIntakeConfidence, FailureIntakeReason,
@@ -66,23 +111,27 @@ pub use pub_reader::{
     ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
     ReaderSalvageTrigger, build_reader_partial_source_graph, classify_failure_candidate,
     classify_pub_family, exact_file_intake_eligible, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger,
+    probe_reader_salvage_candidate_with_trigger, recovered_resource,
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    PubParagraphAlignment, PubParagraphFlowConstraint, PubParagraphFlowRun,
+    PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
+    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
+    PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
+};
+#[cfg(feature = "cmo-slot-compose")]
+use pub_reader::{
+    build_mature_0x2c_cmo_projection_bridge_v1, build_mature_0x2c_master_projection_bridge_v1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -215,7 +264,8 @@ pub struct ViewerProjectedSceneInstanceV1 {
     /// Canonical visual identity/projection semantics from chaptera-scene-instance.
     pub scene_instance: SceneInstanceV1,
     /// Paint placement metadata only; not an identity authority.
-    pub target_frame_node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_frame_node_id: Option<NodeId>,
     /// Story-global direct-paint cutoff from native Cmo slot-flow.
     /// Scalars at or after this authoritative first-nonfitting boundary remain
     /// canonical source text but are overset and must not paint in the target frame.
@@ -245,6 +295,10 @@ pub struct ViewerGeometryDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_flow_runs: Vec<ViewerParagraphFlowRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<ViewerTable>,
@@ -253,6 +307,10 @@ pub struct ViewerGeometryDocument {
     pub projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ViewerEmbeddedImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_border_resources: Vec<ViewerDecorativeBorderResourceV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_borders: Vec<ViewerDecorativeBorderV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +334,17 @@ struct ViewerSourcePaintOrderApplicationStatsV1 {
 /// covered by ViewerPagePaintOrderV1. Nodes outside that bounded authority keep
 /// their exact slots, so no relative ordering is invented for projected,
 /// inherited, grouped, or otherwise unsupported classes.
+#[cfg(feature = "cmo-slot-compose")]
+fn retain_viewer_paints_for_admitted_origins_v1(
+    paints: &mut Vec<ViewerNodePaint>,
+    direct_scene_origins: &BTreeSet<NodeId>,
+    projected_origins: &BTreeSet<NodeId>,
+) {
+    paints.retain(|paint| {
+        direct_scene_origins.contains(&paint.node_id) || projected_origins.contains(&paint.node_id)
+    });
+}
+
 fn apply_known_source_page_paint_orders_to_scene_nodes_v1(
     nodes: &mut [ResolvedPhysicalNode],
     source_orders: &[ViewerPagePaintOrderV1],
@@ -365,7 +434,20 @@ impl ViewerGeometryDocument {
             .collect::<Vec<_>>();
         let authoring = bounded_authoring_slice_from_resolved_pages(graph, &effective_page_ids)?;
         let projection = project_bounded(authoring);
-        let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+        let applicable_paragraph_flow_runs = self
+            .paragraph_flow_runs
+            .iter()
+            .filter(|run| {
+                graph
+                    .stories
+                    .get(&run.story_id)
+                    .is_some_and(|story| run.applies_to_story_text(&story.text))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let paragraph_flow = viewer_paragraph_flow_for_layout(&applicable_paragraph_flow_runs);
+        let (text_fragments, text_flow_diagnostics) =
+            resolve_viewer_text_fragments_with_paragraph_flow(&projection, &paragraph_flow)?;
         let (tables, table_diagnostics) = viewer_tables_from_resolved(graph, &projection);
 
         let stories = graph
@@ -387,6 +469,11 @@ impl ViewerGeometryDocument {
             .retain(|diagnostic| !is_refreshable_text_flow_diagnostic(diagnostic.code.as_str()));
         diagnostics.extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
         diagnostics.extend(table_diagnostics);
+        if !paragraph_flow.is_empty() {
+            diagnostics.push(viewer_paragraph_flow_policy_applied_diagnostic(
+                paragraph_flow.len(),
+            ));
+        }
         if !text_fragments.is_empty() {
             diagnostics.push(viewer_fallback_flow_metrics_diagnostic());
         }
@@ -530,131 +617,6 @@ impl ViewerGeometryDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTable {
-    pub node_id: NodeId,
-    pub story_id: StoryId,
-    pub rows: u32,
-    pub columns: u32,
-    pub cells: Vec<ViewerTableCell>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub borders: Vec<ViewerTableBorderSegment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTableBorderSegment {
-    pub x1_emu: i64,
-    pub y1_emu: i64,
-    pub x2_emu: i64,
-    pub y2_emu: i64,
-    pub rgb: [u8; 3],
-    pub width_emu: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTableCell {
-    pub id: TableCellId,
-    pub address: TableCellAddress,
-    #[serde(
-        default = "default_table_span",
-        skip_serializing_if = "table_span_is_one"
-    )]
-    pub row_span: u32,
-    #[serde(
-        default = "default_table_span",
-        skip_serializing_if = "table_span_is_one"
-    )]
-    pub column_span: u32,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bounds: Option<RectEmu>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill_rgb: Option<[u8; 3]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill_visible: Option<bool>,
-}
-
-fn viewer_table_border_segments(
-    source: &pub_reader::PubTableSource,
-    cells: &[ViewerTableCell],
-) -> Vec<ViewerTableBorderSegment> {
-    let boundary_x = |column: u32| -> Option<i64> {
-        if column > source.columns || source.columns == 0 {
-            return None;
-        }
-        if column == source.columns {
-            let cell = cells
-                .iter()
-                .find(|cell| cell.address.row == 0 && cell.address.column + 1 == source.columns)?;
-            let bounds = cell.bounds?;
-            return bounds.x.get().checked_add(bounds.width.get());
-        }
-        cells
-            .iter()
-            .find(|cell| cell.address.row == 0 && cell.address.column == column)
-            .and_then(|cell| cell.bounds)
-            .map(|bounds| bounds.x.get())
-    };
-    let boundary_y = |row: u32| -> Option<i64> {
-        if row > source.rows || source.rows == 0 {
-            return None;
-        }
-        if row == source.rows {
-            let cell = cells
-                .iter()
-                .find(|cell| cell.address.column == 0 && cell.address.row + 1 == source.rows)?;
-            let bounds = cell.bounds?;
-            return bounds.y.get().checked_add(bounds.height.get());
-        }
-        cells
-            .iter()
-            .find(|cell| cell.address.column == 0 && cell.address.row == row)
-            .and_then(|cell| cell.bounds)
-            .map(|bounds| bounds.y.get())
-    };
-
-    source
-        .border_segments
-        .iter()
-        .filter_map(|segment| match segment.axis {
-            pub_reader::PubTableBorderAxis::Horizontal => {
-                let y = boundary_y(segment.row_start)?;
-                let x1 = boundary_x(segment.column_start)?;
-                let x2 = boundary_x(segment.column_end)?;
-                (x1 < x2).then_some(ViewerTableBorderSegment {
-                    x1_emu: x1,
-                    y1_emu: y,
-                    x2_emu: x2,
-                    y2_emu: y,
-                    rgb: segment.rgb,
-                    width_emu: segment.width_emu,
-                })
-            }
-            pub_reader::PubTableBorderAxis::Vertical => {
-                let x = boundary_x(segment.column_start)?;
-                let y1 = boundary_y(segment.row_start)?;
-                let y2 = boundary_y(segment.row_end)?;
-                (y1 < y2).then_some(ViewerTableBorderSegment {
-                    x1_emu: x,
-                    y1_emu: y1,
-                    x2_emu: x,
-                    y2_emu: y2,
-                    rgb: segment.rgb,
-                    width_emu: segment.width_emu,
-                })
-            }
-        })
-        .collect()
-}
-
-fn default_table_span() -> u32 {
-    1
-}
-
-fn table_span_is_one(value: &u32) -> bool {
-    *value == 1
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerNodePaint {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -669,6 +631,10 @@ pub struct ViewerNodePaint {
 #[serde(rename_all = "snake_case")]
 pub enum ViewerPresetShape {
     RoundRect,
+    Ellipse,
+    Line,
+    LineDashGel,
+    HorizontalLine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -687,7 +653,7 @@ fn fence_semantic_table_container_fill(
     is_semantic_table: bool,
     mut paint: ViewerNodePaint,
 ) -> ViewerNodePaint {
-    if is_semantic_table {
+    if is_semantic_table || paint.preset_shape == Some(ViewerPresetShape::HorizontalLine) {
         paint.solid_fill_rgb = None;
     }
     paint
@@ -725,21 +691,6 @@ fn bridge_effective_value<T: Clone>(
                 len: source.len,
             }),
     }
-}
-
-fn viewer_preset_shape_from_canonical(
-    node: &Node<PubResolvedNodePayload>,
-) -> Option<ViewerPresetShape> {
-    node.header
-        .source_refs
-        .iter()
-        .any(|source_ref| {
-            source_ref.path.as_deref() == Some("SpContainer/FSP/default-roundrect")
-                && source_ref.authority == AuthorityClass::Authoritative
-                && source_ref.confidence == Some(ReadConfidence::Exact)
-                && matches!(source_ref.role, SourceRole::Projection)
-        })
-        .then_some(ViewerPresetShape::RoundRect)
 }
 
 fn viewer_node_paint_from_canonical_bridge(
@@ -865,17 +816,25 @@ pub enum ViewerTextVerticalAlignment {
     Bottom,
 }
 
-fn uniform_text_content_bounds(bounds: RectEmu, inset_emu: u32) -> Option<RectEmu> {
-    let inset = i64::from(inset_emu);
-    let double = inset.checked_mul(2)?;
-    let width = bounds.width.get().checked_sub(double)?;
-    let height = bounds.height.get().checked_sub(double)?;
+fn text_content_bounds(
+    bounds: RectEmu,
+    top_emu: u32,
+    left_emu: u32,
+    bottom_emu: u32,
+    right_emu: u32,
+) -> Option<RectEmu> {
+    let top = i64::from(top_emu);
+    let left = i64::from(left_emu);
+    let bottom = i64::from(bottom_emu);
+    let right = i64::from(right_emu);
+    let width = bounds.width.get().checked_sub(left.checked_add(right)?)?;
+    let height = bounds.height.get().checked_sub(top.checked_add(bottom)?)?;
     if width <= 0 || height <= 0 {
         return None;
     }
     Some(RectEmu::new(
-        LengthEmu::new(bounds.x.get().checked_add(inset)?),
-        LengthEmu::new(bounds.y.get().checked_add(inset)?),
+        LengthEmu::new(bounds.x.get().checked_add(left)?),
+        LengthEmu::new(bounds.y.get().checked_add(top)?),
         LengthEmu::new(width),
         LengthEmu::new(height),
     ))
@@ -894,7 +853,13 @@ fn viewer_story_frame_from_projection(
                 .map(|inset| (node, inset))
         })
         .and_then(|(node, inset)| {
-            uniform_text_content_bounds(node.header.bounds, inset.uniform_emu)
+            text_content_bounds(
+                node.header.bounds,
+                inset.top_emu,
+                inset.left_emu,
+                inset.bottom_emu,
+                inset.right_emu,
+            )
         });
     let vertical_alignment = node
         .and_then(|node| node.payload.story_frame.as_ref())
@@ -981,131 +946,51 @@ impl ViewerParagraphAlignmentRun {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewerParagraphLineSpacing {
+    Proportional { point_equivalent_emu: u32 },
+    Absolute { spacing_emu: u32 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerTypographyRun {
+pub struct ViewerParagraphLineSpacingRun {
     pub story_id: StoryId,
     pub scalar_start: u32,
     pub scalar_end: u32,
-    pub source_font_name: String,
-    pub text_size_emu: u32,
-    pub font_inherited: bool,
-    pub size_inherited: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color_rgb: Option<[u8; 3]>,
-    #[serde(default)]
-    pub color_inherited: bool,
+    pub line_spacing: ViewerParagraphLineSpacing,
+    pub source_value: Option<u32>,
     pub source_story_text_sha256: Sha256Digest,
 }
 
-impl ViewerTypographyRun {
+impl ViewerParagraphLineSpacingRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
 }
 
-pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
-    let digest = Sha256::digest(text.as_bytes());
-    let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(&digest);
-    Sha256Digest::from_bytes(bytes)
-}
-
-pub const VIEWER_IMAGE_SOURCE_Q16_ONE: i64 = 1 << 16;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerImageSourceWindowV1 {
-    /// Normalized source-image viewport edges in signed Q16 units.
-    ///
-    /// Values may extend outside 0..1 for Publisher Fit/pan states. The
-    /// backend clips the persisted source window against the real image
-    /// domain instead of clamping the crop itself.
-    pub left_q16: i64,
-    pub top_q16: i64,
-    pub right_q16: i64,
-    pub bottom_q16: i64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerParagraphFlowConstraint {
+    StartInNextTextBox,
+    KeepLinesTogether,
+    KeepWithNext,
+    WidowControl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerImageRecolorV1 {
-    pub target_rgb: [u8; 3],
-    pub preserve_grays: bool,
+pub struct ViewerParagraphFlowRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub constraint: ViewerParagraphFlowConstraint,
+    pub source_value: u32,
+    pub source_story_text_sha256: Sha256Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerImagePlacementV1 {
-    pub node_id: NodeId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_window: Option<ViewerImageSourceWindowV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_rotation_degrees: Option<i16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recolor: Option<ViewerImageRecolorV1>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewerEmbeddedImage {
-    pub resource_id: ResourceId,
-    pub mime: String,
-    pub node_ids: Vec<NodeId>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub placements: Vec<ViewerImagePlacementV1>,
-    #[serde(skip)]
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct ViewerImagePageAdmissionStatsV1 {
-    dropped_node_uses: usize,
-    dropped_placements: usize,
-    dropped_resources: usize,
-}
-
-fn retain_viewer_image_uses_for_selected_pages_v1<F>(
-    images: &mut Vec<ViewerEmbeddedImage>,
-    selected_pages: &BTreeSet<PageId>,
-    mut page_for_node: F,
-) -> ViewerImagePageAdmissionStatsV1
-where
-    F: FnMut(NodeId) -> Option<PageId>,
-{
-    let mut stats = ViewerImagePageAdmissionStatsV1::default();
-
-    for image in images.iter_mut() {
-        let node_use_count = image.node_ids.len();
-        image.node_ids.retain(|node_id| {
-            page_for_node(*node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
-        });
-        stats.dropped_node_uses += node_use_count.saturating_sub(image.node_ids.len());
-
-        let placement_count = image.placements.len();
-        image.placements.retain(|placement| {
-            page_for_node(placement.node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
-        });
-        stats.dropped_placements += placement_count.saturating_sub(image.placements.len());
-    }
-
-    let resource_count = images.len();
-    images.retain(|image| !image.node_ids.is_empty() || !image.placements.is_empty());
-    stats.dropped_resources = resource_count.saturating_sub(images.len());
-    stats
-}
-
-fn resolved_page_for_node_v1(graph: &PubResolvedGraph, node_id: NodeId) -> Option<PageId> {
-    let mut current = graph.nodes.get(&node_id)?.header.parent_id;
-    let mut seen = BTreeSet::new();
-    loop {
-        if !seen.insert(current) {
-            return None;
-        }
-        let page_id = PageId::from_canonical(current);
-        if graph.pages.contains_key(&page_id) {
-            return Some(page_id);
-        }
-        current = graph
-            .nodes
-            .get(&NodeId::from_canonical(current))?
-            .header
-            .parent_id;
+impl ViewerParagraphFlowRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
 }
 
@@ -1333,13 +1218,12 @@ fn viewer_legacy_ole_preview_image_from_scan(
         }
     };
 
-    Some(ViewerEmbeddedImage {
+    Some(ViewerEmbeddedImage::preview_png(
         resource_id,
-        mime: "image/png".to_owned(),
-        node_ids: node_ids.to_vec(),
-        placements: Vec::new(),
-        bytes: png,
-    })
+        node_ids.to_vec(),
+        Vec::new(),
+        png,
+    ))
 }
 
 fn legacy_image_preview_resource_id(
@@ -1504,223 +1388,12 @@ fn viewer_legacy_image_preview_images(
                 continue;
             }
         };
-        images.push(ViewerEmbeddedImage {
+        images.push(ViewerEmbeddedImage::preview_png(
             resource_id,
-            mime: "image/png".to_owned(),
-            node_ids: vec![node.header.id],
-            placements: Vec::new(),
-            bytes: png,
-        });
-    }
-
-    images
-}
-
-fn mature_officeart_wmf_preview_resource_id(
-    source_hash: &Sha256Digest,
-    slot: u32,
-    wmf_bytes: &[u8],
-) -> Result<ResourceId> {
-    let digest = Sha256::digest(wmf_bytes);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
-        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    let source_object_key = format!(
-        "mature-officeart-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}/{}",
-        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
-    );
-    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
-        source_hash,
-        adapter_id: "pub-viewer",
-        source_object_key: &source_object_key,
-        semantic_role: "viewer.mature-officeart-wmf-preview-v1",
-    })
-    .map_err(|error| anyhow!("derive mature OfficeArt WMF preview identity: {error:?}"))?;
-    Ok(ResourceId::from_canonical(canonical))
-}
-
-#[cfg(test)]
-mod mature_officeart_wmf_preview_identity_tests {
-    use super::*;
-
-    #[test]
-    fn preview_resource_identity_is_source_slot_and_wmf_bound() {
-        let source_hash = Sha256Digest::from_bytes([0x11; 32]);
-        let first = mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
-            .expect("preview resource id");
-        let repeated =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
-                .expect("repeat preview resource id");
-        let other_slot =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 4, b"normalized-wmf-a")
-                .expect("other slot preview resource id");
-        let other_wmf =
-            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-b")
-                .expect("other WMF preview resource id");
-
-        assert_eq!(first, repeated);
-        assert_ne!(first, other_slot);
-        assert_ne!(first, other_wmf);
-    }
-}
-
-fn viewer_mature_officeart_wmf_preview_images(
-    bytes: &[u8],
-    source_hash: &Sha256Digest,
-    source: &PubSourceGraphBuild,
-    resolved: &PubResolvedGraph,
-    scene: &BoundedResolvedScene,
-    diagnostics: &mut Vec<ViewerDiagnostic>,
-) -> Vec<ViewerEmbeddedImage> {
-    let bundle = match build_mature_0x2c_wmf_preview_bundle_from_bytes(bytes, &source.graph) {
-        Ok(bundle) => bundle,
-        Err(_) => {
-            diagnostics.push(ViewerDiagnostic {
-                code: "viewer.mature_officeart_wmf.preview_source_unavailable".to_owned(),
-                severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message:
-                    "Source-backed mature OfficeArt WMF images could not be materialized through the bounded preview bridge."
-                        .to_owned(),
-            });
-            return Vec::new();
-        }
-    };
-
-    if bundle.rejected_source_count > 0 {
-        diagnostics.push(ViewerDiagnostic {
-            code: "viewer.mature_officeart_wmf.preview_source_rejected".to_owned(),
-            severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: format!(
-                "{} mature OfficeArt WMF source(s) remain outside the bounded preview profile.",
-                bundle.rejected_source_count
-            ),
-        });
-    }
-
-    let renderable_node_ids = scene
-        .nodes
-        .iter()
-        .map(|node| node.origin)
-        .collect::<BTreeSet<_>>();
-    let mut images = Vec::new();
-
-    for preview_source in bundle.sources {
-        let mut node_ids = preview_source
-            .uses
-            .iter()
-            .map(|usage| usage.node_id)
-            .filter(|node_id| renderable_node_ids.contains(node_id))
-            .collect::<Vec<_>>();
-        node_ids.sort();
-        node_ids.dedup();
-        if node_ids.is_empty() {
-            continue;
-        }
-
-        let preview = match rasterize_wmf_preview(
-            &preview_source.wmf_bytes,
-            preview_source.width_hint,
-            preview_source.height_hint,
-        ) {
-            Ok(preview) => preview,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A structurally valid mature OfficeArt WMF is outside the existing bounded Viewer raster profile."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-        let png = match encode_wmf_preview_png(&preview) {
-            Ok(png) => png,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_encode_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A bounded mature OfficeArt WMF preview could not be encoded as a Viewer image resource."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-        let resource_id = match mature_officeart_wmf_preview_resource_id(
-            source_hash,
-            preview_source.slot,
-            &preview_source.wmf_bytes,
-        ) {
-            Ok(resource_id) => resource_id,
-            Err(_) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.mature_officeart_wmf.preview_identity_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message:
-                        "A bounded mature OfficeArt WMF preview could not receive a deterministic Viewer resource identity."
-                            .to_owned(),
-                });
-                continue;
-            }
-        };
-
-        let mut placements = Vec::new();
-        for node_id in &node_ids {
-            let resolved_node = resolved.nodes.get(node_id);
-            let source_window = match resolved_node.map(|node| {
-                viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
-            }) {
-                Some(Ok(source_window)) => source_window,
-                Some(Err(reason)) => {
-                    diagnostics.push(ViewerDiagnostic {
-                        code: "viewer.image.crop_partial".to_owned(),
-                        severity: ViewerDiagnosticSeverity::FidelityWarning,
-                        message: format!(
-                            "Image crop for node {} is present but cannot be projected exactly ({reason}); the bounded WMF preview remains available as the full-image fallback.",
-                            node_id.as_canonical()
-                        ),
-                    });
-                    None
-                }
-                None => None,
-            };
-            let content_rotation_degrees = resolved_node
-                .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
-            let recolor = source.graph.nodes.get(node_id).and_then(|node| {
-                viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
-            });
-            if source_window.is_some() || content_rotation_degrees.is_some() || recolor.is_some() {
-                placements.push(ViewerImagePlacementV1 {
-                    node_id: *node_id,
-                    source_window,
-                    content_rotation_degrees,
-                    recolor,
-                });
-            }
-        }
-
-        images.push(ViewerEmbeddedImage {
-            resource_id,
-            mime: "image/png".to_owned(),
-            node_ids,
-            placements,
-            bytes: png,
-        });
-    }
-
-    if !images.is_empty() {
-        diagnostics.push(ViewerDiagnostic {
-            code: "viewer.mature_officeart_wmf.preview_applied".to_owned(),
-            severity: ViewerDiagnosticSeverity::Info,
-            message: format!(
-                "{} bounded source-backed mature OfficeArt WMF preview resource(s) admitted through the shared Viewer image path.",
-                images.len()
-            ),
-        });
+            vec![node.header.id],
+            Vec::new(),
+            png,
+        ));
     }
 
     images
@@ -1884,57 +1557,6 @@ fn select_legacy22_viewer_pages(
 /// writer/mutation plan. Unsupported or ambiguous source observations that do
 /// not make the bounded adapter fail are translated to stable Viewer
 /// diagnostics instead of being silently discarded.
-fn viewer_image_source_window_v1(
-    crop: Option<&PubExplicitImageCropSource>,
-) -> Result<Option<ViewerImageSourceWindowV1>, &'static str> {
-    let Some(crop) = crop else {
-        return Ok(None);
-    };
-    if crop.ambiguous {
-        return Err("ambiguous_crop_properties");
-    }
-    if crop.top_raw.is_none()
-        && crop.bottom_raw.is_none()
-        && crop.left_raw.is_none()
-        && crop.right_raw.is_none()
-    {
-        return Ok(None);
-    }
-
-    let signed_q16 = |raw: Option<u32>| -> i64 { raw.map_or(0, |value| i64::from(value as i32)) };
-    let left_q16 = signed_q16(crop.left_raw);
-    let top_q16 = signed_q16(crop.top_raw);
-    let right_q16 = VIEWER_IMAGE_SOURCE_Q16_ONE - signed_q16(crop.right_raw);
-    let bottom_q16 = VIEWER_IMAGE_SOURCE_Q16_ONE - signed_q16(crop.bottom_raw);
-
-    if right_q16 <= left_q16 || bottom_q16 <= top_q16 {
-        return Err("non_positive_source_window");
-    }
-    if right_q16 <= 0
-        || bottom_q16 <= 0
-        || left_q16 >= VIEWER_IMAGE_SOURCE_Q16_ONE
-        || top_q16 >= VIEWER_IMAGE_SOURCE_Q16_ONE
-    {
-        return Err("source_window_outside_image");
-    }
-
-    Ok(Some(ViewerImageSourceWindowV1 {
-        left_q16,
-        top_q16,
-        right_q16,
-        bottom_q16,
-    }))
-}
-
-fn viewer_image_recolor_v1(
-    recolor: Option<&pub_reader::PubExplicitImageRecolorSource>,
-) -> Option<ViewerImageRecolorV1> {
-    recolor.map(|recolor| ViewerImageRecolorV1 {
-        target_rgb: recolor.target_rgb,
-        preserve_grays: recolor.preserve_grays,
-    })
-}
-
 pub fn open_mature_0x2c(bytes: &[u8]) -> Result<ViewerDocument> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
     viewer_document_from_pipeline(bytes.len(), &pipeline)
@@ -1988,7 +1610,7 @@ pub fn open_pub_or_salvage_with_trigger(
         Ok(document) => Ok(ViewerProductOpenOutcome::Normal(Box::new(document))),
         Err(normal_error) => {
             let probe = probe_reader_salvage_candidate_with_trigger(bytes, trigger);
-            if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
+            if probe.eligibility.is_eligible() {
                 match build_reader_partial_source_graph(bytes, &probe) {
                     Ok(graph) => Ok(ViewerProductOpenOutcome::Salvage(graph)),
                     Err(_) => Err(normal_error),
@@ -2161,11 +1783,15 @@ fn open_legacy_0x22_noquill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
+        paragraph_flow_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2288,11 +1914,15 @@ fn open_legacy_0x22_quill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        paragraph_line_spacings: Vec::new(),
+        paragraph_flow_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2350,10 +1980,23 @@ fn open_mature_0x2c_bundle(
         .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
         .collect::<Vec<_>>();
 
-    let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+    let paragraph_flow_runs = viewer_paragraph_flow_runs_from_source(
+        &pipeline.source.paragraph_flow_runs,
+        &pipeline.resolved.graph,
+    );
+    let paragraph_flow = viewer_paragraph_flow_for_layout(&paragraph_flow_runs);
+    let (text_fragments, text_flow_diagnostics) =
+        resolve_viewer_text_fragments_with_paragraph_flow(&projection, &paragraph_flow)?;
     document
         .diagnostics
         .extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
+    if !paragraph_flow.is_empty() {
+        document
+            .diagnostics
+            .push(viewer_paragraph_flow_policy_applied_diagnostic(
+                paragraph_flow.len(),
+            ));
+    }
     if !text_fragments.is_empty() {
         document
             .diagnostics
@@ -2371,11 +2014,22 @@ fn open_mature_0x2c_bundle(
                 scalar_start: run.story_scalar_start,
                 scalar_end: run.story_scalar_end,
                 source_font_name: run.source_font_name.clone(),
+                source_font_index: Some(run.source_font_index),
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| ViewerTypographyBooleanV1 {
+                    local_toggle: value.local_toggle,
+                    inherited_value: value.inherited_value,
+                    effective_value: value.effective_value,
+                }),
+                italic: run.italic.map(|value| ViewerTypographyBooleanV1 {
+                    local_toggle: value.local_toggle,
+                    inherited_value: value.inherited_value,
+                    effective_value: value.effective_value,
+                }),
                 source_story_text_sha256: viewer_story_text_sha256(&story.text),
             })
         })
@@ -2392,11 +2046,14 @@ fn open_mature_0x2c_bundle(
                     scalar_start: run.story_scalar_start,
                     scalar_end: run.story_scalar_end,
                     source_font_name: String::new(),
+                    source_font_index: None,
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: run.size_inherited,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                     source_story_text_sha256: viewer_story_text_sha256(&story.text),
                 })
             }),
@@ -2463,6 +2120,33 @@ fn open_mature_0x2c_bundle(
             ),
         });
     }
+
+    let paragraph_line_spacings = pipeline
+        .source
+        .paragraph_line_spacings
+        .iter()
+        .filter_map(|run| {
+            let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+            let line_spacing = match run.line_spacing {
+                PubParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                } => ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                },
+                PubParagraphLineSpacing::Absolute { spacing_emu } => {
+                    ViewerParagraphLineSpacing::Absolute { spacing_emu }
+                }
+            };
+            Some(ViewerParagraphLineSpacingRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                line_spacing,
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
 
     let script_font_maps = pipeline
         .source
@@ -2596,14 +2280,14 @@ fn open_mature_0x2c_bundle(
                         });
                     }
                 }
-
-                images.push(ViewerEmbeddedImage {
-                    resource_id: file.resource_id,
-                    mime: entry.mime.clone(),
-                    node_ids: entry.uses.iter().map(|usage| usage.node_id).collect(),
+                images.push(ViewerEmbeddedImage::exact_with_verified_source_sha256(
+                    file.resource_id,
+                    entry.mime.clone(),
+                    entry.uses.iter().map(|usage| usage.node_id).collect(),
                     placements,
-                    bytes: file.bytes,
-                });
+                    entry.sha256,
+                    file.bytes,
+                ));
             }
             images
         }
@@ -2643,12 +2327,85 @@ fn open_mature_0x2c_bundle(
         &scene,
         &mut document.diagnostics,
     ));
+    images.extend(viewer_mature_officeart_emf_bitmap_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.source,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
 
     let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
-    let image_admission =
-        retain_viewer_image_uses_for_selected_pages_v1(&mut images, &selected_pages, |node_id| {
-            resolved_page_for_node_v1(&pipeline.resolved.graph, node_id)
-        });
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut story_frames = story_frames;
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut text_fragments = text_fragments;
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut tables = tables;
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let master_projection = match project_mature_inherited_master_instances_v1(
+        bytes,
+        &pipeline,
+        &selected_pages,
+        scene.environment.clone(),
+    ) {
+        Ok(bundle) => {
+            if !bundle.projected_instances.is_empty() {
+                document.diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.master.projection_applied".to_owned(),
+                    severity: ViewerDiagnosticSeverity::Info,
+                    message: format!(
+                        "{} canonical read-only InheritedMaster SceneInstanceV1 projection(s) admitted.",
+                        bundle.projected_instances.len()
+                    ),
+                });
+            }
+            bundle
+        }
+        Err(error) => {
+            document.diagnostics.push(ViewerDiagnostic {
+                code: "viewer.master.projection_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: format!(
+                    "Canonical InheritedMaster projection rejected ({error}); source truth preserved."
+                ),
+            });
+            ViewerMasterProjectionBundleV1 {
+                projected_instances: Vec::new(),
+                master_page_ids: BTreeSet::new(),
+                story_frames: Vec::new(),
+                text_fragments: Vec::new(),
+                tables: Vec::new(),
+                diagnostics: Vec::new(),
+            }
+        }
+    };
+    #[cfg(feature = "cmo-slot-compose")]
+    {
+        document
+            .diagnostics
+            .extend(master_projection.diagnostics.clone());
+        story_frames.extend(master_projection.story_frames.clone());
+        text_fragments.extend(master_projection.text_fragments.clone());
+        tables.extend(master_projection.tables.clone());
+    }
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let image_admitted_pages = selected_pages
+        .union(&master_projection.master_page_ids)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    #[cfg(not(feature = "cmo-slot-compose"))]
+    let image_admitted_pages = selected_pages.clone();
+
+    let image_admission = retain_viewer_image_uses_for_selected_pages_v1(
+        &mut images,
+        &image_admitted_pages,
+        |node_id| resolved_page_for_node_v1(&pipeline.resolved.graph, node_id),
+    );
     if image_admission.dropped_node_uses > 0
         || image_admission.dropped_placements > 0
         || image_admission.dropped_resources > 0
@@ -2666,7 +2423,11 @@ fn open_mature_0x2c_bundle(
     }
 
     #[cfg(feature = "cmo-slot-compose")]
-    let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
+    let mut projected_instances = master_projection.projected_instances.clone();
+    #[cfg(feature = "cmo-slot-compose")]
+    let cmo_projected_instances = match project_carlton_march_cmo_instances(
+        bytes, &pipeline, &scene,
+    ) {
         Ok(instances) => {
             if !instances.is_empty() {
                 document.diagnostics.push(ViewerDiagnostic {
@@ -2691,6 +2452,35 @@ fn open_mature_0x2c_bundle(
             Vec::new()
         }
     };
+    #[cfg(feature = "cmo-slot-compose")]
+    projected_instances.extend(cmo_projected_instances);
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut paints = paints;
+    #[cfg(feature = "cmo-slot-compose")]
+    {
+        let direct_scene_origins = scene
+            .nodes
+            .iter()
+            .map(|node| node.origin)
+            .collect::<BTreeSet<_>>();
+        let projected_origins = projected_instances
+            .iter()
+            .filter_map(|projected| {
+                projected
+                    .scene_instance
+                    .origin_node_id
+                    .parse::<CanonicalId>()
+                    .ok()
+                    .map(NodeId::from_canonical)
+            })
+            .collect::<BTreeSet<_>>();
+        retain_viewer_paints_for_admitted_origins_v1(
+            &mut paints,
+            &direct_scene_origins,
+            &projected_origins,
+        );
+    }
 
     let source_page_paint_orders = pipeline
         .source
@@ -2715,6 +2505,14 @@ fn open_mature_0x2c_bundle(
         });
     }
 
+    let (decorative_borders, decorative_border_resources, borderart_diagnostics) =
+        borderart::viewer_decorative_borders_v1(
+            bytes,
+            &pipeline.source_hash,
+            &pipeline.resolved.graph,
+        );
+    document.diagnostics.extend(borderart_diagnostics);
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
@@ -2734,11 +2532,15 @@ fn open_mature_0x2c_bundle(
         text_fragments,
         typography_runs,
         paragraph_alignments,
+        paragraph_line_spacings,
+        paragraph_flow_runs,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
+        decorative_border_resources,
+        decorative_borders,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2770,6 +2572,16 @@ fn viewer_fallback_flow_metrics_diagnostic() -> ViewerDiagnostic {
     }
 }
 
+fn viewer_paragraph_flow_policy_applied_diagnostic(count: usize) -> ViewerDiagnostic {
+    ViewerDiagnostic {
+        code: "viewer.text.paragraph_flow_policy_applied".to_owned(),
+        severity: ViewerDiagnosticSeverity::Info,
+        message: format!(
+            "{count} explicit source paragraph-flow constraint(s) participate in bounded fallback linked-frame allocation. Fallback font metrics remain non-authoritative for Publisher-exact line breaks."
+        ),
+    }
+}
+
 fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
     matches!(
         code,
@@ -2779,22 +2591,34 @@ fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
             | "viewer.text.frame_capacity_partial"
             | "viewer.text.fallback_metrics_unavailable"
             | "viewer.text.fallback_flow_metrics"
+            | "viewer.text.paragraph_flow_policy_applied"
     )
 }
 
 fn resolve_viewer_text_fragments(
     projection: &pub_layout::BoundedLayoutProjection,
 ) -> Result<(Vec<ViewerTextFragment>, Vec<ResolveDiagnostic>)> {
-    let flow = resolve_bounded_text_flow(projection, viewer_fallback_text_flow_environment_v0_1())
-        .map_err(|blocked| {
-            let codes = blocked
-                .projection_errors
-                .iter()
-                .map(|diagnostic| diagnostic.code.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow!("Viewer text-flow resolution blocked by layout projection errors: {codes}")
-        })?;
+    resolve_viewer_text_fragments_with_paragraph_flow(projection, &[])
+}
+
+fn resolve_viewer_text_fragments_with_paragraph_flow(
+    projection: &pub_layout::BoundedLayoutProjection,
+    paragraph_flow: &[BoundedParagraphFlowRun],
+) -> Result<(Vec<ViewerTextFragment>, Vec<ResolveDiagnostic>)> {
+    let flow = resolve_bounded_text_flow_with_paragraph_flow(
+        projection,
+        viewer_fallback_text_flow_environment_v0_1(),
+        paragraph_flow,
+    )
+    .map_err(|blocked| {
+        let codes = blocked
+            .projection_errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow!("Viewer text-flow resolution blocked by layout projection errors: {codes}")
+    })?;
 
     let fragments = flow
         .text_fragments
@@ -2810,6 +2634,77 @@ fn resolve_viewer_text_fragments(
         .collect::<Vec<_>>();
 
     Ok((fragments, flow.diagnostics))
+}
+
+fn viewer_paragraph_flow_runs_from_source(
+    runs: &[PubParagraphFlowRun],
+    graph: &PubResolvedGraph,
+) -> Vec<ViewerParagraphFlowRun> {
+    let mut projected = runs
+        .iter()
+        .filter_map(|run| {
+            let story = graph.stories.get(&run.story_id)?;
+            Some(ViewerParagraphFlowRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                constraint: match run.constraint {
+                    PubParagraphFlowConstraint::StartInNextTextBox => {
+                        ViewerParagraphFlowConstraint::StartInNextTextBox
+                    }
+                    PubParagraphFlowConstraint::KeepLinesTogether => {
+                        ViewerParagraphFlowConstraint::KeepLinesTogether
+                    }
+                    PubParagraphFlowConstraint::KeepWithNext => {
+                        ViewerParagraphFlowConstraint::KeepWithNext
+                    }
+                    PubParagraphFlowConstraint::WidowControl => {
+                        ViewerParagraphFlowConstraint::WidowControl
+                    }
+                },
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
+    projected.sort_by_key(|run| (run.story_id, run.scalar_start, run.scalar_end));
+    projected
+}
+
+fn viewer_paragraph_flow_for_layout(
+    runs: &[ViewerParagraphFlowRun],
+) -> Vec<BoundedParagraphFlowRun> {
+    let mut projected = runs
+        .iter()
+        .map(|run| BoundedParagraphFlowRun {
+            story_origin: run.story_id,
+            scalar_start: run.scalar_start,
+            scalar_end: run.scalar_end,
+            constraint: match run.constraint {
+                ViewerParagraphFlowConstraint::StartInNextTextBox => {
+                    BoundedParagraphFlowConstraint::StartInNextTextBox
+                }
+                ViewerParagraphFlowConstraint::KeepLinesTogether => {
+                    BoundedParagraphFlowConstraint::KeepLinesTogether
+                }
+                ViewerParagraphFlowConstraint::KeepWithNext => {
+                    BoundedParagraphFlowConstraint::KeepWithNext
+                }
+                ViewerParagraphFlowConstraint::WidowControl => {
+                    BoundedParagraphFlowConstraint::WidowControl
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+    projected.sort_by_key(|run| {
+        (
+            run.story_origin,
+            run.scalar_start,
+            run.scalar_end,
+            run.constraint,
+        )
+    });
+    projected
 }
 
 /// Explicit deterministic environment profile for the geometry-only Viewer
@@ -3220,295 +3115,6 @@ fn viewer_document_from_graph(
     })
 }
 
-/// Creates only the grounded semantic subset already accepted by pub-layout.
-///
-/// Viewer remains the semantic owner of this resolved-graph -> bounded-authoring
-/// bridge. Desktop shaped-flow is the second concrete consumer, so the mapping
-/// is public instead of being copied into another engine adapter.
-pub fn bounded_authoring_slice_from_resolved(
-    graph: &PubResolvedGraph,
-) -> Result<BoundedAuthoringSlice> {
-    bounded_authoring_slice_from_resolved_pages(graph, &graph.document.pages)
-}
-
-fn legacy_noquill_structural_point_group_ids(
-    graph: &PubResolvedGraph,
-    page_ids: &[PageId],
-) -> BTreeSet<NodeId> {
-    let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
-    graph
-        .nodes
-        .values()
-        .filter(|node| node.kind == NodeKind::Group)
-        .filter(|node| selected_pages.contains(&PageId::from_canonical(node.header.parent_id)))
-        .filter(|node| node.header.bounds.width.get() == 0 && node.header.bounds.height.get() == 0)
-        .filter(|node| node.header.transform == Affine2D::identity())
-        .map(|node| node.header.id)
-        .collect()
-}
-
-fn legacy_noquill_image_page(
-    graph: &PubResolvedGraph,
-    node: &Node<PubResolvedNodePayload>,
-    selected_pages: &BTreeSet<PageId>,
-) -> Option<PageId> {
-    if node.kind != NodeKind::ImageFrame {
-        return None;
-    }
-
-    let mut current = node.header.parent_id;
-    let mut seen = BTreeSet::new();
-    loop {
-        if !seen.insert(current) {
-            return None;
-        }
-
-        let page_id = PageId::from_canonical(current);
-        if graph.pages.contains_key(&page_id) {
-            return selected_pages.contains(&page_id).then_some(page_id);
-        }
-
-        let parent = graph.nodes.get(&NodeId::from_canonical(current))?;
-        if parent.kind != NodeKind::Group {
-            return None;
-        }
-        current = parent.header.parent_id;
-    }
-}
-
-fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
-    graph: &PubResolvedGraph,
-    page_ids: &[PageId],
-) -> Result<BoundedAuthoringSlice> {
-    let mut authoring = bounded_authoring_slice_from_resolved_pages(graph, page_ids)?;
-    let structural_point_groups = legacy_noquill_structural_point_group_ids(graph, page_ids);
-    authoring
-        .node_geometry
-        .retain(|node| !structural_point_groups.contains(&node.node_id));
-
-    let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
-    let mut projected_ids = authoring
-        .node_geometry
-        .iter()
-        .map(|node| node.node_id)
-        .collect::<BTreeSet<_>>();
-
-    for node in graph.nodes.values() {
-        if projected_ids.contains(&node.header.id) {
-            continue;
-        }
-        let Some(page_id) = legacy_noquill_image_page(graph, node, &selected_pages) else {
-            continue;
-        };
-
-        authoring.node_geometry.push(BoundedNodeGeometryInput {
-            node_id: node.header.id,
-            parent_origin: page_id.into_canonical(),
-            bounds: node.header.bounds,
-            transform: node.header.transform.clone(),
-        });
-        projected_ids.insert(node.header.id);
-    }
-
-    authoring.node_geometry.sort_by_key(|node| node.node_id);
-    Ok(authoring)
-}
-
-fn bounded_authoring_slice_from_resolved_pages(
-    graph: &PubResolvedGraph,
-    page_ids: &[PageId],
-) -> Result<BoundedAuthoringSlice> {
-    let pages = page_ids
-        .iter()
-        .map(|page_id| {
-            graph
-                .pages
-                .get(page_id)
-                .cloned()
-                .with_context(|| format!("layout projection missing document page {page_id:?}"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let page_origins = page_ids
-        .iter()
-        .map(|page_id| page_id.into_canonical())
-        .collect::<BTreeSet<_>>();
-
-    let node_geometry = graph
-        .nodes
-        .values()
-        .filter(|node| page_origins.contains(&node.header.parent_id))
-        .map(|node| BoundedNodeGeometryInput {
-            node_id: node.header.id,
-            parent_origin: node.header.parent_id,
-            bounds: node.header.bounds,
-            transform: node.header.transform.clone(),
-        })
-        .collect();
-
-    let stories = graph.stories.values().cloned().collect();
-
-    let story_frames = graph
-        .nodes
-        .values()
-        .filter(|node| page_origins.contains(&node.header.parent_id))
-        .filter_map(|node| {
-            let frame = node.payload.story_frame.as_ref()?;
-            let story_id = frame.story_id?;
-            Some(StoryFrame {
-                story_id,
-                frame_id: node.header.id,
-                ordinal: frame.ordinal,
-                previous: frame.previous_frame,
-                next: frame.next_frame,
-            })
-        })
-        .collect();
-
-    let tables = graph
-        .nodes
-        .values()
-        .filter(|node| page_origins.contains(&node.header.parent_id))
-        .filter_map(|node| {
-            let table = node.payload.table.as_ref()?.simple_table.as_ref()?.clone();
-            Some(BoundedTableInput {
-                node_id: node.header.id,
-                table,
-            })
-        })
-        .collect();
-
-    Ok(BoundedAuthoringSlice {
-        pages,
-        node_geometry,
-        stories,
-        story_frames,
-        tables,
-        guides: Vec::new(),
-        unknown_layout_state: Vec::new(),
-    })
-}
-
-fn viewer_tables_from_resolved(
-    graph: &PubResolvedGraph,
-    projection: &BoundedLayoutProjection,
-) -> (Vec<ViewerTable>, Vec<ViewerDiagnostic>) {
-    let mut tables = Vec::new();
-    let mut diagnostics = Vec::new();
-    let visible_node_ids = projection
-        .node_geometry
-        .iter()
-        .map(|geometry| geometry.origin)
-        .collect::<BTreeSet<_>>();
-
-    for node in graph.nodes.values() {
-        let node_id = node.header.id;
-        if !visible_node_ids.contains(&node_id) {
-            continue;
-        }
-        let Some(source) = node.payload.table.as_ref() else {
-            continue;
-        };
-        let Some(story_id) = source.story_id else {
-            continue;
-        };
-        let Some(story) = graph.stories.get(&story_id) else {
-            continue;
-        };
-
-        let materialized = match materialize_bounded_table_cells(source, story) {
-            Ok(cells) => cells,
-            Err(error) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.table.cell_text_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: format!(
-                        "Bounded table cells could not be materialized safely ({error:?})."
-                    ),
-                });
-                continue;
-            }
-        };
-
-        let needs_fallback_geometry = materialized.iter().any(|cell| cell.bounds.is_none());
-        let projected = projection
-            .tables
-            .iter()
-            .find(|table| table.origin == node_id);
-        let resolved_bounds = if needs_fallback_geometry {
-            source
-                .layout_metrics
-                .as_ref()
-                .zip(projected)
-                .and_then(|(metrics, projected)| {
-                    let mut table_projection = projection.clone();
-                    table_projection
-                        .tables
-                        .retain(|table| table.origin == projected.origin);
-                    table_projection
-                        .node_geometry
-                        .retain(|geometry| geometry.origin == projected.origin);
-                    table_projection.diagnostics.clear();
-
-                    resolve_bounded_uniform_table_cells(
-                        &table_projection,
-                        &[BoundedUniformTableMetrics {
-                            table_origin: projected.origin,
-                            cell_width: metrics.cell_width,
-                            row_pitch: metrics.row_pitch,
-                        }],
-                    )
-                    .ok()
-                })
-        } else {
-            None
-        };
-
-        if needs_fallback_geometry && source.layout_metrics.is_some() && resolved_bounds.is_none() {
-            diagnostics.push(ViewerDiagnostic {
-                code: "viewer.table.cell_geometry_unavailable".to_owned(),
-                severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message: "Exact table track geometry was unavailable and the bounded fallback cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
-            });
-        }
-
-        let cells: Vec<ViewerTableCell> = materialized
-            .into_iter()
-            .map(|cell| ViewerTableCell {
-                id: cell.id,
-                address: cell.address,
-                row_span: cell.row_span,
-                column_span: cell.column_span,
-                text: cell.text,
-                bounds: cell.bounds.or_else(|| {
-                    resolved_bounds.as_ref().and_then(|resolved| {
-                        resolved
-                            .cells
-                            .iter()
-                            .find(|candidate| candidate.origin == cell.id)
-                            .map(|candidate| candidate.bounds)
-                    })
-                }),
-                fill_rgb: cell.fill_rgb,
-                fill_visible: cell.fill_visible,
-            })
-            .collect();
-
-        let borders = viewer_table_border_segments(source, &cells);
-        tables.push(ViewerTable {
-            node_id,
-            story_id,
-            rows: source.rows,
-            columns: source.columns,
-            cells,
-            borders,
-        });
-    }
-
-    tables.sort_by_key(|table| table.node_id);
-    (tables, diagnostics)
-}
-
 fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest> {
     let digest = Sha256::digest(bytes);
     let hex = digest
@@ -3517,214 +3123,6 @@ fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest> {
         .collect::<String>();
     hex.parse()
         .map_err(|error| anyhow!("invalid internally computed SHA-256: {error:?}"))
-}
-
-fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
-    use PubBridgeDiagnostic::*;
-
-    let (code, severity, message) = match diagnostic {
-        PageListSpecialEntry { .. } => (
-            "viewer.page_list.special_entry",
-            ViewerDiagnosticSeverity::Info,
-            "The document page list contains a special non-page entry.",
-        ),
-        PageListUnknownEntry { .. } => (
-            "viewer.page_list.unknown_entry",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The document page list contains an entry the Viewer cannot classify.",
-        ),
-        OpaqueContentsTail { .. } => (
-            "viewer.object.opaque_data",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Some object data is not understood by the current Viewer model.",
-        ),
-        MissingEscherGeometry { .. } => (
-            "viewer.geometry.missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has no confirmed display geometry.",
-        ),
-        AmbiguousEscherGeometry { .. } => (
-            "viewer.geometry.ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has more than one possible display geometry.",
-        ),
-        AmbiguousImageSlot { .. } => (
-            "viewer.image.identity_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "An image reference cannot be resolved to one confirmed embedded image.",
-        ),
-        IncompleteEscherAnchor { .. } => (
-            "viewer.geometry.incomplete",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has incomplete position or size information.",
-        ),
-        InvalidEscherAnchor { .. } => (
-            "viewer.geometry.invalid",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A placed object has invalid position or size information.",
-        ),
-        MissingQuillStory { .. } => (
-            "viewer.text.story_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A text frame refers to text that the Viewer could not recover.",
-        ),
-        LegacyObjectNotMaterialized { .. } => (
-            "viewer.legacy.object_not_materialized",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A legacy Publisher page contains an object outside the currently admitted old-0x22 Reader profile.",
-        ),
-        LegacyTextEncodingUnresolved { .. } => (
-            "viewer.text.legacy_encoding_unresolved",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
-        ),
-        McldRecordCountMismatch { .. } => (
-            "viewer.table.mcld_layout_metrics_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A Quill layout-metrics table uses a structure outside the bounded MCLD profile; core document content remains available.",
-        ),
-        FdppExactStoryFallback { .. } => (
-            "viewer.text.fdpp_exact_story_fallback",
-            ViewerDiagnosticSeverity::Info,
-            "Story text was recovered from exact persisted Contents identity, FDPP boundaries, and TEXT bytes because the ordinary Quill Story service plane is sentinel-filled.",
-        ),
-        EquivalentMarginsPageExtents { .. } => (
-            "viewer.page_extent.equivalent_source_records",
-            ViewerDiagnosticSeverity::Info,
-            "Multiple source page-extent records agree exactly; the Viewer uses their shared page size.",
-        ),
-        ScenarioPageOrderObserved { .. } => (
-            "viewer.page_projection.scenario_order_observed",
-            ViewerDiagnosticSeverity::Info,
-            "A persisted scenario/design page-identity order was recovered. It is retained as evidence only and is not used to suppress physical pages.",
-        ),
-        ScenarioPageOrderUnavailable { .. } => (
-            "viewer.page_projection.scenario_order_unavailable",
-            ViewerDiagnosticSeverity::Info,
-            "Scenario/design page-order metadata could not be resolved safely; it is not used for physical page filtering.",
-        ),
-        PageRoleClassificationUnresolved { .. } => (
-            "viewer.page_projection.roles_unresolved",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Generic customer/master/service page-role filtering is not proven for this file family, so the Viewer preserves all recovered physical PAGE records.",
-        ),
-        LinkedFrameNotMaterialized { .. } => (
-            "viewer.text.link_target_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A linked text frame refers to another frame that is not materialized.",
-        ),
-        GroupedStoryProjected { .. } => (
-            "viewer.geometry.grouped_story_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped text shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedStoryProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_story_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped text shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedImageProjected { .. } => (
-            "viewer.geometry.grouped_image_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped image shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedImageProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_image_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped image shape falls outside the bounded group geometry profile.",
-        ),
-        GroupedTableProjected { .. } => (
-            "viewer.geometry.grouped_table_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped table was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedTableProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_table_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped table falls outside the bounded group geometry profile.",
-        ),
-        TableMissingRequiredField { .. } => (
-            "viewer.table.required_data_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table is missing data required for the bounded table model.",
-        ),
-        TableMissingTcd { .. } => (
-            "viewer.table.text_map_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's text mapping could not be recovered.",
-        ),
-        TableAmbiguousTcd { .. } => (
-            "viewer.table.text_map_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table has more than one possible text mapping.",
-        ),
-        TableMissingCellsObject { .. } => (
-            "viewer.table.cells_missing",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table refers to a cell collection that is not available.",
-        ),
-        TableCellsWrongRawType { .. } => (
-            "viewer.table.cells_unexpected_kind",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell collection has an unexpected object kind.",
-        ),
-        TableCellsWrongParent { .. } => (
-            "viewer.table.cells_parent_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell collection has an unexpected ownership relation.",
-        ),
-        TableCellCountMismatch { .. } => (
-            "viewer.table.cell_count_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's recovered cell counts disagree.",
-        ),
-        TableCellTextRangeInvalid { .. } => (
-            "viewer.table.cell_text_range_invalid",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table cell points outside the recovered text range.",
-        ),
-        TableStoryLengthMismatch { .. } => (
-            "viewer.table.story_length_mismatch",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table's cell text boundaries disagree with the recovered story length.",
-        ),
-        TableCellCoordinatesAmbiguous { .. } => (
-            "viewer.table.cell_coordinates_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A table cell does not have one confirmed row and column position.",
-        ),
-        TableLayoutMetricsUnavailable { .. } => (
-            "viewer.table.layout_metrics_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Exact table layout metrics are not available.",
-        ),
-        TypographyProjectionUnavailable { .. } => (
-            "viewer.text.typography_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Some source typography could not be projected safely; pinned fallback text rendering remains in use.",
-        ),
-        TypographyUnknownFixedBlockTypes { .. } => (
-            "viewer.text.typography_unknown_block_type",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The typography stream contains unproven fixed block widths; affected typography promotion fails closed.",
-        ),
-        ColorSchemeProjectionUnavailable { .. } => (
-            "viewer.paint.color_scheme_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "The current publication color scheme could not be resolved safely; scheme-indexed shape colors remain unavailable.",
-        ),
-        AmbiguousOfficeArtDggDefaults { .. } => (
-            "viewer.paint.dgg_defaults_ambiguous",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "Document-wide OfficeArt drawing-group defaults are ambiguous; affected effective paint remains unresolved.",
-        ),
-    };
-
-    ViewerDiagnostic {
-        code: code.to_owned(),
-        severity,
-        message: message.to_owned(),
-    }
 }
 
 fn map_resolve_diagnostic(diagnostic: &PubResolveDiagnostic) -> ViewerDiagnostic {
@@ -3820,6 +3218,185 @@ fn page_for_resolved_node(graph: &PubResolvedGraph, node_id: NodeId) -> Result<P
         })?;
         current = parent.header.parent_id;
     }
+}
+
+#[cfg(feature = "cmo-slot-compose")]
+#[derive(Debug)]
+struct ViewerMasterProjectionBundleV1 {
+    projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
+    master_page_ids: BTreeSet<PageId>,
+    story_frames: Vec<ViewerStoryFrame>,
+    text_fragments: Vec<ViewerTextFragment>,
+    tables: Vec<ViewerTable>,
+    diagnostics: Vec<ViewerDiagnostic>,
+}
+
+#[cfg(feature = "cmo-slot-compose")]
+fn project_mature_inherited_master_instances_v1(
+    bytes: &[u8],
+    pipeline: &Mature0x2cPipeline,
+    selected_pages: &BTreeSet<PageId>,
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerMasterProjectionBundleV1> {
+    let bridge = build_mature_0x2c_master_projection_bridge_v1(
+        bytes,
+        pipeline.source_hash,
+        &pipeline.source.graph,
+    )
+    .context("build active Reader master projection authority bridge")?;
+    if !bridge.active_graph_identity_parity {
+        return Err(anyhow!(
+            "active Reader master bridge did not prove identity parity"
+        ));
+    }
+
+    let relations = bridge
+        .output
+        .context
+        .master_relations
+        .iter()
+        .filter_map(|relation| {
+            let source_page = relation.source_page_id.parse::<CanonicalId>().ok()?;
+            let source_page = PageId::from_canonical(source_page);
+            selected_pages
+                .contains(&source_page)
+                .then_some(relation.clone())
+        })
+        .collect::<Vec<_>>();
+    if relations.is_empty() {
+        return Ok(ViewerMasterProjectionBundleV1 {
+            projected_instances: Vec::new(),
+            master_page_ids: BTreeSet::new(),
+            story_frames: Vec::new(),
+            text_fragments: Vec::new(),
+            tables: Vec::new(),
+            diagnostics: Vec::new(),
+        });
+    }
+
+    let master_page_ids = relations
+        .iter()
+        .map(|relation| {
+            relation
+                .master_page_id
+                .parse::<CanonicalId>()
+                .map(PageId::from_canonical)
+                .context("master relation PAGE identity is not canonical")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let master_pages = master_page_ids.iter().copied().collect::<Vec<_>>();
+
+    let authoring =
+        bounded_authoring_slice_from_resolved_pages(&pipeline.resolved.graph, &master_pages)?;
+    let projection = project_bounded(authoring);
+    let mut diagnostics = projection
+        .diagnostics
+        .iter()
+        .map(map_projection_diagnostic)
+        .collect::<Vec<_>>();
+    let mut master_scene =
+        resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
+            let codes = blocked
+                .projection_errors
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "master Viewer geometry resolution blocked by layout projection errors: {codes}"
+            )
+        })?;
+    diagnostics.extend(
+        master_scene
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code != "story_text_layout_not_implemented")
+            .map(map_scene_diagnostic),
+    );
+
+    let master_orders = pipeline
+        .source
+        .source_page_paint_orders
+        .iter()
+        .filter(|order| master_page_ids.contains(&order.page_id))
+        .map(viewer_page_paint_order_from_source)
+        .collect::<Vec<_>>();
+    apply_known_source_page_paint_orders_to_scene_nodes_v1(&mut master_scene.nodes, &master_orders);
+
+    let story_frames = projection
+        .story_frames
+        .iter()
+        .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
+        .collect::<Vec<_>>();
+    let (text_fragments, text_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+    diagnostics.extend(text_diagnostics.iter().map(map_scene_diagnostic));
+    let (tables, table_diagnostics) =
+        viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
+    diagnostics.extend(table_diagnostics);
+
+    let story_frame_by_node = story_frames
+        .iter()
+        .map(|frame| (frame.frame_id, frame))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut projected_instances = Vec::new();
+    for relation in &relations {
+        let source_page = relation
+            .source_page_id
+            .parse::<CanonicalId>()
+            .map(PageId::from_canonical)
+            .context("master relation source PAGE identity is not canonical")?;
+        let master_page = relation
+            .master_page_id
+            .parse::<CanonicalId>()
+            .map(PageId::from_canonical)
+            .context("master relation target PAGE identity is not canonical")?;
+
+        for node in master_scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == master_page.into_canonical())
+        {
+            let origin_node_id = node.origin;
+            let scene_instance = inherited_master_instance_v1(
+                &origin_node_id.as_canonical().to_string(),
+                &master_page.as_canonical().to_string(),
+                &source_page.as_canonical().to_string(),
+                relation,
+            )
+            .context("materialize inherited-master SceneInstanceV1")?;
+            let story_authority_id = pipeline
+                .resolved
+                .graph
+                .nodes
+                .get(&origin_node_id)
+                .and_then(|resolved| resolved.payload.story_frame.as_ref())
+                .and_then(|frame| frame.story_id)
+                .map(|story_id| story_id.as_canonical().to_string());
+            let mut scene_instance = scene_instance;
+            scene_instance.story_authority_id = story_authority_id;
+
+            projected_instances.push(ViewerProjectedSceneInstanceV1 {
+                scene_instance,
+                target_frame_node_id: None,
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: story_frame_by_node
+                    .get(&origin_node_id)
+                    .and_then(|frame| frame.text_content_bounds),
+                bounds: node.bounds,
+                transform: node.transform.clone(),
+            });
+        }
+    }
+
+    Ok(ViewerMasterProjectionBundleV1 {
+        projected_instances,
+        master_page_ids,
+        story_frames,
+        text_fragments,
+        tables,
+        diagnostics,
+    })
 }
 
 #[cfg(feature = "cmo-slot-compose")]
@@ -4104,20 +3681,13 @@ fn project_carlton_march_cmo_instances(
                     .text_frame_inset
                     .as_ref()
                     .and_then(|source| {
-                        let inset = i64::from(source.uniform_emu);
-                        let double = inset.checked_mul(2)?;
-                        let content_x = bounds.x.get().checked_add(inset)?;
-                        let content_y = bounds.y.get().checked_add(inset)?;
-                        let content_width = bounds.width.get().checked_sub(double)?;
-                        let content_height = bounds.height.get().checked_sub(double)?;
-                        (content_width > 0 && content_height > 0).then(|| {
-                            RectEmu::new(
-                                LengthEmu::new(content_x),
-                                LengthEmu::new(content_y),
-                                LengthEmu::new(content_width),
-                                LengthEmu::new(content_height),
-                            )
-                        })
+                        text_content_bounds(
+                            bounds,
+                            source.top_emu,
+                            source.left_emu,
+                            source.bottom_emu,
+                            source.right_emu,
+                        )
                     });
 
             let relation = relations.get(slot.slot_index).copied().with_context(|| {
@@ -4146,7 +3716,7 @@ fn project_carlton_march_cmo_instances(
 
             projected.push(ViewerProjectedSceneInstanceV1 {
                 scene_instance,
-                target_frame_node_id,
+                target_frame_node_id: Some(target_frame_node_id),
                 target_frame_paint_scalar_end,
                 bounds,
                 text_content_bounds,
@@ -4249,6 +3819,43 @@ mod tests {
     use pub_reader::{PubResolvedNodePayload, PubResolvedStoryFrame};
     use std::collections::BTreeMap;
 
+    #[cfg(feature = "cmo-slot-compose")]
+    #[test]
+    fn paint_admission_keeps_only_direct_or_projected_origins() {
+        let direct = NodeId::from_canonical(CanonicalId::from_bytes([0x11; 16]));
+        let projected = NodeId::from_canonical(CanonicalId::from_bytes([0x22; 16]));
+        let excluded = NodeId::from_canonical(CanonicalId::from_bytes([0x33; 16]));
+        let mut paints = vec![
+            ViewerNodePaint {
+                node_id: direct,
+                preset_shape: None,
+                solid_fill_rgb: Some([1, 2, 3]),
+                solid_line: None,
+            },
+            ViewerNodePaint {
+                node_id: projected,
+                preset_shape: None,
+                solid_fill_rgb: Some([4, 5, 6]),
+                solid_line: None,
+            },
+            ViewerNodePaint {
+                node_id: excluded,
+                preset_shape: None,
+                solid_fill_rgb: Some([7, 8, 9]),
+                solid_line: None,
+            },
+        ];
+        retain_viewer_paints_for_admitted_origins_v1(
+            &mut paints,
+            &BTreeSet::from([direct]),
+            &BTreeSet::from([projected]),
+        );
+        assert_eq!(
+            paints.iter().map(|paint| paint.node_id).collect::<Vec<_>>(),
+            vec![direct, projected]
+        );
+    }
+
     #[test]
     fn local_failure_report_exposes_structural_class_without_source_content() {
         let bytes = b"<!DOCTYPE html><html><body>private-customer-text-8271</body></html>";
@@ -4263,29 +3870,6 @@ mod tests {
         assert!(!json.contains("\"filename\""));
         assert!(!json.contains("\"source_hash\""));
         assert!(!json.contains("\"sha256\""));
-    }
-
-    #[test]
-    fn salvage_product_outcome_carries_partial_source_graph_not_probe() {
-        let graph = ReaderPartialSourceGraph {
-            schema_version: READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1.to_owned(),
-            source_sha256: "a".repeat(64),
-            contents_family: None,
-            subsystems: ReaderSalvageSubsystemProbe {
-                contents: ReaderSalvageStreamState::Readable,
-                quill: ReaderSalvageStreamState::Absent,
-                escher: ReaderSalvageStreamState::Absent,
-                escher_delay: ReaderSalvageStreamState::Absent,
-            },
-            facts: Vec::new(),
-            gaps: vec![
-                ReaderPartialSourceGap::TextUnavailable,
-                ReaderPartialSourceGap::ImageFactsUnavailable,
-                ReaderPartialSourceGap::GeometryFactsUnavailable,
-            ],
-        };
-        let outcome = ViewerProductOpenOutcome::Salvage(graph.clone());
-        assert_eq!(outcome, ViewerProductOpenOutcome::Salvage(graph));
     }
 
     #[test]
@@ -4317,99 +3901,6 @@ mod tests {
     }
 
     #[test]
-    fn image_uses_compose_only_with_known_page_exclusion() {
-        let admitted = NodeId::from_canonical(id(61));
-        let excluded = NodeId::from_canonical(id(62));
-        let excluded_only = NodeId::from_canonical(id(63));
-        let unresolved = NodeId::from_canonical(id(64));
-        let selected_page = PageId::from_canonical(id(81));
-        let excluded_page = PageId::from_canonical(id(82));
-        let first_resource = ResourceId::from_canonical(id(71));
-        let second_resource = ResourceId::from_canonical(id(72));
-        let third_resource = ResourceId::from_canonical(id(73));
-        let mut images = vec![
-            ViewerEmbeddedImage {
-                resource_id: first_resource,
-                mime: "image/png".to_owned(),
-                node_ids: vec![admitted, excluded],
-                placements: vec![
-                    ViewerImagePlacementV1 {
-                        node_id: admitted,
-                        source_window: None,
-                        content_rotation_degrees: Some(90),
-                        recolor: None,
-                    },
-                    ViewerImagePlacementV1 {
-                        node_id: excluded,
-                        source_window: None,
-                        content_rotation_degrees: None,
-                        recolor: Some(ViewerImageRecolorV1 {
-                            target_rgb: [1, 2, 3],
-                            preserve_grays: false,
-                        }),
-                    },
-                ],
-                bytes: vec![1, 2, 3],
-            },
-            ViewerEmbeddedImage {
-                resource_id: second_resource,
-                mime: "image/jpeg".to_owned(),
-                node_ids: vec![excluded_only],
-                placements: vec![ViewerImagePlacementV1 {
-                    node_id: excluded_only,
-                    source_window: None,
-                    content_rotation_degrees: None,
-                    recolor: None,
-                }],
-                bytes: vec![4, 5, 6],
-            },
-            ViewerEmbeddedImage {
-                resource_id: third_resource,
-                mime: "image/png".to_owned(),
-                node_ids: vec![unresolved],
-                placements: vec![ViewerImagePlacementV1 {
-                    node_id: unresolved,
-                    source_window: None,
-                    content_rotation_degrees: None,
-                    recolor: None,
-                }],
-                bytes: vec![7, 8, 9],
-            },
-        ];
-        let selected_pages = BTreeSet::from([selected_page]);
-        let page_by_node = BTreeMap::from([
-            (admitted, selected_page),
-            (excluded, excluded_page),
-            (excluded_only, excluded_page),
-        ]);
-
-        let stats = retain_viewer_image_uses_for_selected_pages_v1(
-            &mut images,
-            &selected_pages,
-            |node_id| page_by_node.get(&node_id).copied(),
-        );
-
-        assert_eq!(
-            stats,
-            ViewerImagePageAdmissionStatsV1 {
-                dropped_node_uses: 2,
-                dropped_placements: 2,
-                dropped_resources: 1,
-            }
-        );
-        assert_eq!(images.len(), 2);
-        assert_eq!(images[0].resource_id, first_resource);
-        assert_eq!(images[0].node_ids, vec![admitted]);
-        assert_eq!(images[0].placements.len(), 1);
-        assert_eq!(images[0].placements[0].node_id, admitted);
-        assert_eq!(images[0].bytes, vec![1, 2, 3]);
-        assert_eq!(images[1].resource_id, third_resource);
-        assert_eq!(images[1].node_ids, vec![unresolved]);
-        assert_eq!(images[1].placements.len(), 1);
-        assert_eq!(images[1].placements[0].node_id, unresolved);
-    }
-
-    #[test]
     fn legacy_noquill_point_group_is_structural_not_scene_geometry() {
         let mut graph = resolved_graph_fixture();
         let page_id = graph.document.pages[0];
@@ -4436,6 +3927,41 @@ mod tests {
             LengthEmu::new(1),
         );
         assert!(legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty());
+    }
+
+    #[test]
+    fn merged_table_boundaries_resolve_from_exact_spanning_cell_edges() {
+        let cell =
+            |byte, row, column, row_span, column_span, x, y, width, height| ViewerTableCell {
+                id: TableCellId::from_canonical(id(byte)),
+                address: TableCellAddress { row, column },
+                row_span,
+                column_span,
+                story_scalar_start: None,
+                story_scalar_end: None,
+                text: String::new(),
+                bounds: Some(RectEmu::new(
+                    LengthEmu::new(x),
+                    LengthEmu::new(y),
+                    LengthEmu::new(width),
+                    LengthEmu::new(height),
+                )),
+                fill_rgb: None,
+                fill_visible: None,
+            };
+
+        let cells = vec![
+            cell(1, 0, 0, 1, 2, 100, 200, 400, 100),
+            cell(2, 1, 0, 1, 1, 100, 300, 200, 100),
+            cell(3, 1, 1, 1, 1, 300, 300, 200, 100),
+        ];
+
+        assert_eq!(unique_table_column_boundary(&cells, 0, 2), Some(100));
+        assert_eq!(unique_table_column_boundary(&cells, 1, 2), Some(300));
+        assert_eq!(unique_table_column_boundary(&cells, 2, 2), Some(500));
+        assert_eq!(unique_table_row_boundary(&cells, 0, 2), Some(200));
+        assert_eq!(unique_table_row_boundary(&cells, 1, 2), Some(300));
+        assert_eq!(unique_table_row_boundary(&cells, 2, 2), Some(400));
     }
 
     #[test]
@@ -4906,64 +4432,6 @@ mod tests {
     }
 
     #[test]
-    fn image_source_window_projects_signed_q16_crop_without_intrinsic_size_guessing() {
-        let fill = PubExplicitImageCropSource {
-            top_raw: Some(0x0000_5988),
-            bottom_raw: Some(0x0000_5988),
-            left_raw: Some(0),
-            right_raw: Some(0),
-            ambiguous: false,
-        };
-        assert_eq!(
-            viewer_image_source_window_v1(Some(&fill)).expect("fill crop"),
-            Some(ViewerImageSourceWindowV1 {
-                left_q16: 0,
-                top_q16: 0x5988,
-                right_q16: VIEWER_IMAGE_SOURCE_Q16_ONE,
-                bottom_q16: VIEWER_IMAGE_SOURCE_Q16_ONE - 0x5988,
-            })
-        );
-
-        let fit = PubExplicitImageCropSource {
-            top_raw: Some(0),
-            bottom_raw: Some(0),
-            left_raw: Some(0xFFFE_D618),
-            right_raw: Some(0xFFFE_D618),
-            ambiguous: false,
-        };
-        let fit_window = viewer_image_source_window_v1(Some(&fit))
-            .expect("fit crop")
-            .expect("fit source window");
-        assert!(fit_window.left_q16 < 0);
-        assert!(fit_window.right_q16 > VIEWER_IMAGE_SOURCE_Q16_ONE);
-        assert_eq!(
-            fit_window.right_q16 - VIEWER_IMAGE_SOURCE_Q16_ONE,
-            -fit_window.left_q16
-        );
-    }
-
-    #[test]
-    fn image_source_window_fails_closed_on_ambiguous_or_empty_windows() {
-        let ambiguous = PubExplicitImageCropSource {
-            top_raw: Some(0),
-            bottom_raw: None,
-            left_raw: None,
-            right_raw: None,
-            ambiguous: true,
-        };
-        assert!(viewer_image_source_window_v1(Some(&ambiguous)).is_err());
-
-        let collapsed = PubExplicitImageCropSource {
-            top_raw: None,
-            bottom_raw: None,
-            left_raw: Some(40_000),
-            right_raw: Some(40_000),
-            ambiguous: false,
-        };
-        assert!(viewer_image_source_window_v1(Some(&collapsed)).is_err());
-    }
-
-    #[test]
     fn normative_effective_paint_bridge_precedes_explicit_fopt_projection() {
         let mut graph = resolved_graph_fixture();
         let node_id = *graph.nodes.keys().next().expect("fixture node");
@@ -5056,11 +4524,15 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         let page_id = graph.document.pages[0];
@@ -5213,11 +4685,15 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.scene.nodes.clone();
 
@@ -5283,6 +4759,22 @@ mod tests {
         let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::McldRecordCountMismatch {
             record_count: 44,
             record_id_count: 4,
+        });
+
+        assert_eq!(mapped.code, "viewer.table.mcld_layout_metrics_unavailable");
+        assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
+        assert!(
+            mapped
+                .message
+                .contains("core document content remains available")
+        );
+    }
+
+    #[test]
+    fn out_of_bound_mcld_id_is_reported_as_bounded_fidelity_loss() {
+        let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::McldOuterBoundViolation {
+            outer_value: 9,
+            max_live_record_id: 10,
         });
 
         assert_eq!(mapped.code, "viewer.table.mcld_layout_metrics_unavailable");
@@ -5568,6 +5060,34 @@ mod tests {
     }
 
     #[test]
+    fn viewer_fallback_flow_consumes_source_neutral_start_next_policy() {
+        let mut projection = linked_text_projection(true);
+        projection.stories[0].text = "A\rBCDEF".to_owned();
+        let story_origin = projection.stories[0].origin;
+        let flow = [BoundedParagraphFlowRun {
+            story_origin,
+            scalar_start: 2,
+            scalar_end: 7,
+            constraint: BoundedParagraphFlowConstraint::StartInNextTextBox,
+        }];
+
+        let (fragments, diagnostics) =
+            resolve_viewer_text_fragments_with_paragraph_flow(&projection, &flow)
+                .expect("fallback paragraph flow should resolve");
+
+        assert_eq!(fragments[0].frame_id, NodeId::from_canonical(id(41)));
+        assert_eq!(fragments[0].text, "A\r");
+        assert_eq!(fragments[1].frame_id, NodeId::from_canonical(id(42)));
+        assert_eq!(fragments[1].scalar_start, 2);
+        assert_eq!(fragments[1].text, "BCDE");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "story_overset")
+        );
+    }
+
+    #[test]
     fn viewer_fallback_flow_does_not_invent_ordinal_only_chain() {
         let projection = linked_text_projection(false);
         let (fragments, diagnostics) =
@@ -5579,6 +5099,30 @@ mod tests {
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "shared_story_without_explicit_flow" })
         );
+    }
+
+    #[test]
+    fn viewer_paragraph_flow_contract_is_source_neutral_and_story_fenced() {
+        let source_text = "A\rBC";
+        let run = ViewerParagraphFlowRun {
+            story_id: StoryId::from_canonical(id(50)),
+            scalar_start: 2,
+            scalar_end: 4,
+            constraint: ViewerParagraphFlowConstraint::KeepWithNext,
+            source_value: 4,
+            source_story_text_sha256: viewer_story_text_sha256(source_text),
+        };
+        let json = serde_json::to_string(&run).expect("serialize Viewer paragraph flow");
+
+        assert!(json.contains("keep_with_next"));
+        assert!(run.applies_to_story_text(source_text));
+        assert!(!run.applies_to_story_text("changed"));
+        for forbidden in ["Quill", "FDPP", "BTEP", "Contents", "offset"] {
+            assert!(
+                !json.contains(forbidden),
+                "Viewer paragraph flow must not expose parser-private {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -5667,11 +5211,15 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5776,11 +5324,15 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5844,11 +5396,15 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            paragraph_line_spacings: Vec::new(),
+            paragraph_flow_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.clone();
         visual.document.source.source_hash = Sha256Digest::from_bytes([0xCD; 32]);
@@ -6373,7 +5929,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            [8, 8, 7, 8, 8, 9, 7, 8],
+            [8, 8, 8, 9, 9, 10, 8, 9],
         );
     }
 
@@ -6383,7 +5939,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_BROCHURE",
             "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
-            [5, 5, 5, 5, 6, 6, 5, 5],
+            [5, 5, 5, 5, 8, 8, 5, 5],
         );
     }
 }

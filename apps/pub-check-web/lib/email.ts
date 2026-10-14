@@ -1,4 +1,5 @@
 import type { CheckRecord, Compatibility } from './checks';
+import type { CanonicalState } from './canonical-report';
 import type { SupportedLocale } from './i18n';
 
 function html(value: string) {
@@ -161,12 +162,57 @@ const emailCopy:Record<SupportedLocale,EmailCopy>={
   'en-US':en,'en-GB':en,'fr-FR':fr,'es-ES':es,'it-IT':it,'de-DE':de,'ru-RU':ru,
 };
 
+const canonicalEmail: Record<SupportedLocale, {
+  states: Record<CanonicalState, string>;
+  next: Record<CanonicalState, string>;
+  nextLabel: string;
+  routesLabel: string;
+  notVerified: string;
+}> = {
+  'en-US': {states:{opens_normally:'Opens normally',needs_review:'Needs review',opens_with_salvage:'Opens with recovery',unsupported:'Unsupported'},next:{
+    opens_normally:'Review a migration preview before converting.',
+    needs_review:'Review the preview and limitations before migration.',
+    opens_with_salvage:'Request a recovery review. Original page placement is not proven.',
+    unsupported:'Manual review may be needed.',
+  },nextLabel:'Recommended next step',routesLabel:'Editable IDML / ODG',notVerified:'Not verified'},
+  'en-GB': {states:{opens_normally:'Opens normally',needs_review:'Needs review',opens_with_salvage:'Opens with recovery',unsupported:'Unsupported'},next:{
+    opens_normally:'Review a migration preview before converting.',
+    needs_review:'Review the preview and limitations before migration.',
+    opens_with_salvage:'Request a recovery review. Original page placement is not proven.',
+    unsupported:'Manual review may be needed.',
+  },nextLabel:'Recommended next step',routesLabel:'Editable IDML / ODG',notVerified:'Not verified'},
+  'fr-FR': {states:{opens_normally:'S’ouvre normalement',needs_review:'À vérifier',opens_with_salvage:'Ouverture avec récupération',unsupported:'Non pris en charge'},next:{
+    opens_normally:'Vérifiez un aperçu avant la migration.',needs_review:'Vérifiez les limites de l’aperçu.',
+    opens_with_salvage:'Demandez une analyse de récupération.',unsupported:'Une vérification manuelle peut être nécessaire.'
+  },nextLabel:'Étape suivante',routesLabel:'IDML / ODG modifiables',notVerified:'Non vérifié'},
+  'es-ES': {states:{opens_normally:'Se abre normalmente',needs_review:'Requiere revisión',opens_with_salvage:'Se abre con recuperación',unsupported:'No compatible'},next:{
+    opens_normally:'Revise una vista previa antes de migrar.',needs_review:'Revise las limitaciones de la vista previa.',
+    opens_with_salvage:'Solicite una revisión de recuperación.',unsupported:'Puede ser necesaria una revisión manual.'
+  },nextLabel:'Siguiente paso',routesLabel:'IDML / ODG editables',notVerified:'Sin verificar'},
+  'it-IT': {states:{opens_normally:'Si apre normalmente',needs_review:'Richiede verifica',opens_with_salvage:'Si apre in recupero',unsupported:'Non supportato'},next:{
+    opens_normally:'Controlla l’anteprima prima della migrazione.',needs_review:'Controlla le limitazioni dell’anteprima.',
+    opens_with_salvage:'Richiedi una verifica del recupero.',unsupported:'Potrebbe servire una verifica manuale.'
+  },nextLabel:'Prossimo passo',routesLabel:'IDML / ODG modificabili',notVerified:'Non verificato'},
+  'de-DE': {states:{opens_normally:'Öffnet normal',needs_review:'Überprüfung nötig',opens_with_salvage:'Öffnet mit Wiederherstellung',unsupported:'Nicht unterstützt'},next:{
+    opens_normally:'Vorschau vor der Migration prüfen.',needs_review:'Einschränkungen der Vorschau prüfen.',
+    opens_with_salvage:'Wiederherstellung prüfen lassen.',unsupported:'Manuelle Prüfung könnte nötig sein.'
+  },nextLabel:'Nächster Schritt',routesLabel:'IDML / ODG bearbeitbar',notVerified:'Nicht geprüft'},
+  'ru-RU': {states:{opens_normally:'Открывается',needs_review:'Нужна проверка',opens_with_salvage:'Открывается с восстановлением',unsupported:'Не поддерживается'},next:{
+    opens_normally:'Проверьте предварительный просмотр перед переносом.',needs_review:'Проверьте ограничения внешнего вида.',
+    opens_with_salvage:'Запросите проверку восстановленных данных. Геометрия страниц не подтверждена.',
+    unsupported:'Может потребоваться ручная проверка.'
+  },nextLabel:'Следующий шаг',routesLabel:'Редактируемые IDML / ODG',notVerified:'Не подтверждено'},
+};
+
 function copyFor(record:CheckRecord){
   return emailCopy[record.locale ?? 'en-US'] ?? en;
 }
 function localizedSummary(record:CheckRecord, copy:EmailCopy){
-  const code=record.result?.diagnosticsCode;
-  return (code && copy.summaries[code]) || record.result?.summary || copy.summaries['pub_check.internal_failure'];
+  const result=record.result;
+  if(!result) return copy.summaries['pub_check.internal_failure'];
+  if('canonical' in result) return canonicalEmail[record.locale ?? 'en-US'].next[result.canonical.state];
+  const code=result.diagnosticsCode;
+  return (code && copy.summaries[code]) || result.summary || copy.summaries['pub_check.internal_failure'];
 }
 
 export async function sendResultEmail(record: CheckRecord) {
@@ -177,19 +223,30 @@ export async function sendResultEmail(record: CheckRecord) {
 
   const result = record.result;
   const copy=copyFor(record);
+  const locale=record.locale ?? 'en-US';
+  const labels=canonicalEmail[locale];
+  const canonical='canonical' in result ? result.canonical : null;
+  const old='canonical' in result ? null : result;
   const summary=localizedSummary(record,copy);
+  const resultLabel=canonical ? labels.states[canonical.state] : copy.compatibilityLabels[old!.compatibility];
+  const pageCount=canonical ? canonical.contentSummary?.page_count : old?.pages;
+  const limits=canonical ? canonical.limitations.map(item=>item.message) : old?.limitations ?? [];
+  const family=old?.publisherFamily;
+  const routesText=canonical ? `${labels.routesLabel}: ${labels.notVerified}` : '';
+  const nextText=canonical ? `${labels.nextLabel}: ${labels.next[canonical.state]}` : '';
   const limitations =
-    result.limitations?.length
-      ? `<ul>${result.limitations.slice(0,12).map(item=>`<li>${html(item)}</li>`).join('')}</ul>`
+    limits.length
+      ? `<ul>${limits.slice(0,12).map(item=>`<li>${html(item)}</li>`).join('')}</ul>`
       : `<p>${html(copy.noLimitations)}</p>`;
 
   const text = [
     copy.title,'',
-    `${copy.compatibility}: ${copy.compatibilityLabels[result.compatibility]}`,
+    `${copy.compatibility}: ${resultLabel}`,
     `${copy.summary}: ${summary}`,
-    result.publisherFamily ? `${copy.publisherFamily}: ${result.publisherFamily}` : '',
-    typeof result.pages === 'number' ? `${copy.pages}: ${result.pages}` : '',
-    result.limitations?.length ? `${copy.limitations}: ${result.limitations.join('; ')}` : `${copy.limitations}: ${copy.noLimitations}`,
+    family ? `${copy.publisherFamily}: ${family}` : '',
+    typeof pageCount === 'number' ? `${copy.pages}: ${pageCount}` : '',
+    routesText,nextText,
+    limits.length ? `${copy.limitations}: ${limits.join('; ')}` : `${copy.limitations}: ${copy.noLimitations}`,
     '',copy.bounded,copy.retention,
   ].filter(Boolean).join('\n');
 
@@ -204,12 +261,13 @@ export async function sendResultEmail(record: CheckRecord) {
         <h1 style="font-size:28px;line-height:1.15;margin:12px 0 18px">${html(copy.title)}</h1>
         <div style="border:1px solid #dfe7df;border-radius:16px;padding:18px">
           <p style="margin:0 0 8px;color:#617064;font-size:12px">${html(copy.compatibility)}</p>
-          <p style="margin:0 0 18px;font-size:20px;font-weight:700">${html(copy.compatibilityLabels[result.compatibility])}</p>
+          <p style="margin:0 0 18px;font-size:20px;font-weight:700">${html(resultLabel)}</p>
           <p style="margin:0 0 8px;color:#617064;font-size:12px">${html(copy.summary)}</p>
           <p style="margin:0;line-height:1.55">${html(summary)}</p>
         </div>
-        ${result.publisherFamily ? `<p><b>${html(copy.publisherFamily)}:</b> ${html(result.publisherFamily)}</p>` : ''}
-        ${typeof result.pages === 'number' ? `<p><b>${html(copy.pages)}:</b> ${result.pages}</p>` : ''}
+        ${family ? `<p><b>${html(copy.publisherFamily)}:</b> ${html(family)}</p>` : ''}
+        ${typeof pageCount === 'number' ? `<p><b>${html(copy.pages)}:</b> ${pageCount}</p>` : ''}
+        ${canonical ? `<p><b>${html(labels.routesLabel)}:</b> ${html(labels.notVerified)}</p><p><b>${html(labels.nextLabel)}:</b> ${html(labels.next[canonical.state])}</p>` : ''}
         <h2 style="font-size:17px;margin-top:24px">${html(copy.limitations)}</h2>
         ${limitations}
         <p style="font-size:12px;color:#617064;margin-top:26px;line-height:1.5">${html(copy.bounded)}</p>

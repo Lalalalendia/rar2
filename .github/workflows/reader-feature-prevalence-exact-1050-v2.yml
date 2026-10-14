@@ -1,0 +1,131 @@
+name: Reader feature prevalence exact 1050 V2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-feature-prevalence-exact-1050-v2
+  cancel-in-progress: false
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/producer-a
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Checkout retained corpus provenance
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: corpus-src
+          sparse-checkout: |
+            pub-corpus/data
+          sparse-checkout-cone-mode: true
+
+      - name: Verify exact 1050 identity
+        run: |
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+
+          rows=json.loads(Path("out/pinned1050/materialized/manifest.json").read_text())
+          shas=sorted(str(row["sha256"]).casefold() for row in rows)
+          expected="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode("ascii")).hexdigest()
+          assert len(shas)==len(set(shas))==1050,(len(shas),len(set(shas)))
+          assert digest==expected,(digest,expected)
+          print(json.dumps({"count":len(shas),"sha_list_digest":"sha256:"+digest},indent=2))
+          PY
+
+      - name: Build current source-free Reader receipt producer
+        run: |
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin corpus-reader-receipt
+
+      - name: Emit one current Reader receipt per exact PUB
+        env:
+          RECEIPT_EXE: ${{ env.CARGO_TARGET_DIR }}/release/corpus-reader-receipt
+        run: |
+          set -euo pipefail
+          mkdir -p out/prevalence/reader
+          find out/pinned1050/materialized/native -maxdepth 1 -type f -name '*.pub' -print0 |
+            xargs -0 -n1 -P8 bash -c '
+              p="$1"
+              sha="$(basename "$p" .pub)"
+              "$RECEIPT_EXE" "$p" "out/prevalence/reader/$sha.json"
+            ' _
+          test "$(find out/prevalence/reader -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 1050
+
+      - name: Build exact-SHA provenance join
+        run: |
+          python tools/corpus/artifact_family_provenance_join.py \
+            --materialized-manifest out/pinned1050/materialized/manifest.json \
+            --lalamu-manifest-jsonl corpus-src/pub-corpus/data/manifest.jsonl \
+            --legacy-seed tools/corpus/public_legacy_seed.csv \
+            --out out/prevalence/rich-provenance.json \
+            --summary-out out/prevalence/provenance-summary.json
+
+      - name: Aggregate current Reader feature prevalence
+        run: |
+          python tools/corpus/reader_feature_prevalence.py \
+            --reader-records out/prevalence/reader \
+            --provenance out/prevalence/rich-provenance.json \
+            --out out/prevalence/reader-feature-prevalence.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          p=json.loads(Path("out/prevalence/reader-feature-prevalence.json").read_text())
+          assert p["schema"]=="chaptera.reader-feature-prevalence.v2",p
+          assert p["corpus_sha_count"]==1050,p["corpus_sha_count"]
+          assert p["opened_file_count"]+p["failed_or_unopened_file_count"]==1050,p
+          for feature,row in p["overall"].items():
+              assert row["denominator"]==1050,(feature,row)
+              assert row["known_file_count"]+row["unknown_file_count"]==1050,(feature,row)
+              assert row["present_file_count"]+row["absent_file_count"]==row["known_file_count"],(feature,row)
+          print(json.dumps({
+              "corpus_sha_count":p["corpus_sha_count"],
+              "opened_file_count":p["opened_file_count"],
+              "failed_or_unopened_file_count":p["failed_or_unopened_file_count"],
+              "overall":p["overall"],
+          },indent=2,sort_keys=True))
+          PY
+
+      - name: Upload source-free prevalence evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-feature-prevalence-exact-1050-v2-${{ github.run_id }}
+          path: |
+            out/prevalence/**
+          if-no-files-found: error
+          retention-days: 90

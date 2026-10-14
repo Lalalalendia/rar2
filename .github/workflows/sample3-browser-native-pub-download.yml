@@ -1,0 +1,442 @@
+name: Sample3 Publisher-approved browser PUB byte acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sample3-browser-native-pub-download.yml"
+      - "tools/native-pub-candidate-cli/examples/accepted_sample3_project.rs"
+      - "tools/native-pub-candidate-cli/examples/cross_fixture_story_probe.rs"
+      - "tools/native-pub-candidate-cli/examples/native_sample4_handoff.rs"
+      - "tools/build_sample4_story_viewer_receipt.py"
+      - "tools/test_sample3_browser_pub_download_service.py"
+      - "tools/test_sample3_browser_pub_download.mjs"
+      - "tools/test_sample3_editor_ui_acceptance.mjs"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "tools/test_story_line_endings_v1.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sample3-browser-pub-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  exact-publisher-pair-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install production service validator dependency
+        run: python -m pip install "jsonschema==4.23.0"
+
+      - name: Prove Python acceptance adapter syntax
+        run: python -m py_compile tools/test_sample3_browser_pub_download_service.py
+
+      - name: Build existing Rust Producer A
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a
+
+      - name: Materialize exact existing Publisher-accepted fixture and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .sample3-positive
+          python - <<'PY'
+          import base64, hashlib
+          from pathlib import Path
+          fixture = Path("vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64")
+          source = base64.b64decode("".join(fixture.read_text().split()))
+          assert len(source) == 72192
+          assert hashlib.sha256(source).hexdigest() == "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          Path(".sample3-positive/source.pub").write_bytes(source)
+          PY
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate \
+            --output-dir .sample3-positive/handoff
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/handoff/candidate.pub \
+            --manifest .sample3-positive/handoff/handoff.json
+          cmp .sample3-positive/source.pub .sample3-positive/handoff/source.pub
+          # Second, separately Publisher-accepted native candidate; no new oracle run.
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- generate-one-unit \
+            --output-dir .sample3-positive/handoff-one-unit
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/handoff-one-unit/candidate.pub \
+            --manifest .sample3-positive/handoff-one-unit/handoff.json
+          cmp .sample3-positive/source.pub .sample3-positive/handoff-one-unit/source.pub
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+          candidate = Path(".sample3-positive/handoff-one-unit/candidate.pub").read_bytes()
+          assert len(candidate) == 72192
+          assert sha256(candidate).hexdigest() == "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          print({"one_unit_writer": "exact_native_publisher_accepted_bytes"})
+          PY
+
+      - name: Recreate exact accepted EditorProject without broad writer permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example accepted_sample3_project -- \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/edited.json
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example accepted_sample3_project -- \
+            .sample3-positive/source.pub \
+            .sample3-positive/one-unit-baseline.json \
+            .sample3-positive/one-unit-edited.json --one-unit
+
+      - name: Discriminate independent public PUB Story Writer/Reader transfers (no native Publisher)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example cross_fixture_story_probe -- \
+            .sample3-positive/cross-fixture-story-preflight.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/cross-fixture-story-preflight.json").read_text())
+          assert receipt["schema"] == "chaptera.cross-fixture-story-preflight.v1"
+          assert receipt["positive_control"]["receipt"]["output_sha256"] == (
+              "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          )
+          assert receipt["positive_control"]["receipt"]["editor_project_replay_byte_equal"]
+          assert receipt["candidate_count"] == 4
+          assert receipt["native_publisher_acceptance"] == (
+              "not_evaluated_for_any_cross_fixture_candidate"
+          )
+          assert receipt["product_pub_download_authority"] is False
+          for candidate in receipt["candidates"]:
+              assert candidate["source_sha256"] != receipt["positive_control"]["source_sha256"]
+              assert not candidate["publisher_native_accepted"]
+              assert not candidate["product_download_authorized"]
+          print({"cross_fixture_candidates": [(r["fixture"], r["result"]) for r in receipt["candidates"]],
+                 "hosted_qualified": receipt["hosted_qualified_candidate_count"],
+                 "publisher_evaluated": False, "product_download": False})
+          PY
+
+      - name: Prove source Story separator roundtrip is byte-exact
+        run: node tools/test_story_line_endings_v1.mjs
+
+      - name: Install Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove real Chromium HTTP response equals native-approved exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_browser_pub_download.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/edited.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime
+          cmp .sample3-positive/runtime/accepted.pub .sample3-positive/handoff/candidate.pub
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          report = json.loads((root / "runtime/sample3-browser-pub-download.json").read_text())
+          assert report["result"] == "PASS_browser_http_exact_sha_only"
+          assert report["unauthorized_http_status"] == 403
+          assert report["source_sha256"] == hashlib.sha256((root / "source.pub").read_bytes()).hexdigest()
+          assert report["output_sha256"] == hashlib.sha256((root / "handoff/candidate.pub").read_bytes()).hexdigest()
+          print({"http_browser_bytes": "exact_match", "publisher_acceptance": "existing_external_exact_pair_only"})
+          PY
+
+      - name: Regenerate original Sample3 Viewer/Scene inputs from current Reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            resolved-graph .sample3-positive/source.pub \
+            > .sample3-positive/resolved-graph.json
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          source_hash = hashlib.sha256((root / "source.pub").read_bytes()).hexdigest()
+          graph = json.loads((root / "resolved-graph.json").read_text())
+          assert source_hash == "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+          assert graph["document"]["source_hash"] == source_hash, (
+              "resolved-graph producer misbound the actual source PUB identity",
+              graph["document"]["source_hash"],
+              source_hash,
+          )
+          print({"resolved_graph_source_identity": "exact_source_bytes"})
+          PY
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/source.pub \
+            > .sample3-positive/viewer-raw.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path(".sample3-positive")
+          raw = json.loads((root / "viewer-raw.json").read_text())
+          # Keep the original current Reader receipt intact on disk. Only
+          # admit a partial, visibly disclosed Scene if the edited Story has
+          # no relation to any table Story. Never flatten or reclassify cells.
+          tables = raw.pop("tables", [])
+          if not isinstance(tables, list):
+              raise SystemExit("Reader tables carrier is not an array")
+          stories = raw.get("document", {}).get("stories", [])
+          targets = [
+              item["id"] for item in stories
+              if isinstance(item, dict) and "345678" in item.get("text", "")
+          ]
+          if len(targets) != 1:
+              raise SystemExit("no unique real Reader Story marker in Sample3")
+          target = targets[0]
+          all_stories = {item["id"] for item in stories}
+          node_ids = {item["origin"] for item in raw["scene"]["nodes"]}
+          rows = []
+          for table in tables:
+              if (
+                  not isinstance(table, dict)
+                  or not isinstance(table.get("story_id"), str)
+                  or table["story_id"] not in all_stories
+                  or not isinstance(table.get("node_id"), str)
+                  or table["node_id"] not in node_ids
+                  or not isinstance(table.get("cells"), list)
+                  or not isinstance(table.get("rows"), int)
+                  or not isinstance(table.get("columns"), int)
+              ):
+                  raise SystemExit("Reader table identity/topology is not verifiable")
+              if table["story_id"] == target:
+                  raise SystemExit(
+                      "target SYID Story belongs to an actual Table; generic Story "
+                      "editor must not bypass table cell boundaries"
+                  )
+              rows.append({
+                  "node_id": table["node_id"],
+                  "story_id": table["story_id"],
+                  "rows": table["rows"],
+                  "columns": table["columns"],
+                  "cell_count": len(table["cells"]),
+              })
+          if tables:
+              # The current source-neutral Scene has no cell carrier. Mark
+              # explicit Partial fidelity; Writer still preserves all CFB
+              # contents and is separately Publisher-SHA fenced.
+              raw.setdefault("document", {}).setdefault("diagnostics", []).append({
+                  "code": "viewer.table.unprojected_in_sample3_story_ui",
+                  "severity": "fidelity_warning",
+                  "message": "Source table cells are not rendered by this bounded Story editing view.",
+              })
+          (root / "sample3-table-dependency.json").write_text(
+              json.dumps({
+                  "source": "exact_public_Sample3",
+                  "target_story_id": target,
+                  "tables": rows,
+                  "target_table_dependency": False,
+                  "browser_table_projection": "partial_not_rendered" if rows else "not_applicable",
+              }, indent=2),
+              encoding="utf-8",
+          )
+          (root / "viewer-geometry.json").write_text(
+              json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          print({"viewer_extra_tables": len(rows), "edited_story_table_owned": False,
+                 "browser_fidelity": "partial" if rows else "unchanged"})
+          PY
+          python tools/validate_viewer_geometry_receipt.py \
+            .sample3-positive/viewer-geometry.json
+
+      - name: Prove real Chaptera UI Story edit through Publisher-approved Download PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime
+          cmp .sample3-positive/runtime/ui-edited.pub \
+            .sample3-positive/handoff/candidate.pub
+
+      - name: Prove one-unit Story through real Chromium editor and approved Publisher bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/one-unit-baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime-one-unit --one-unit
+          cmp .sample3-positive/runtime-one-unit/ui-edited.pub \
+            .sample3-positive/handoff-one-unit/candidate.pub
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/runtime-one-unit/sample3-ui-pub-download.json").read_text())
+          assert receipt["variant"] == "one_unit"
+          assert receipt["pub_sha256"] == "b9b789f35a34e016faceb27acf50bf0621273a7d612762ecc17c56ca450fe715"
+          assert receipt["undo_revoked_download"] and receipt["redo_restored_exact_bytes"]
+          assert receipt["fresh_reopen"] and receipt["browser_reload_preserved_story"]
+          PY
+
+      - name: Reject adjacent unapproved two-unit Story on exact same source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/source.pub \
+            .sample3-positive/baseline.json \
+            .sample3-positive/resolved-graph.json \
+            .sample3-positive/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/runtime-two-unit --two-unit-negative
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/runtime-two-unit/sample3-negative-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_unapproved_sample3_two_unit_download_denied"
+          assert receipt["can_serialize"] and not receipt["can_download"]
+          assert receipt["http_download_status"] == 409
+          PY
+
+      - name: Materialize independent Publisher-approved Sample4 source and exact Writer candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/native-pub-candidate-cli/Cargo.toml \
+            --example native_sample4_handoff -- \
+            --output-dir .sample3-positive/sample4-native
+          cargo run --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-writer --bin pub_story_native_handoff -- verify \
+            --pub .sample3-positive/sample4-native/candidate/candidate.pub \
+            --manifest .sample3-positive/sample4-native/candidate/handoff.json
+
+      - name: Rebuild Sample4 current Reader/Viewer scene with explicit table-fidelity boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .sample3-positive/sample4-reader
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            resolved-graph .sample3-positive/sample4-native/control/source.pub \
+            > .sample3-positive/sample4-reader/resolved-graph.json
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-native/control/source.pub \
+            > .sample3-positive/sample4-reader/viewer-raw.json
+          python tools/build_sample4_story_viewer_receipt.py \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-raw.json \
+            .sample3-positive/sample4-native/candidate/handoff.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            .sample3-positive/sample4-reader/sample4-table-dependency.json
+          python tools/validate_viewer_geometry_receipt.py \
+            .sample3-positive/sample4-reader/viewer-geometry.json
+
+      - name: Prove real Sample4 Chromium Story edit → exact Publisher-approved Download and Undo/Redo/Reopen
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-native/baseline-project.json \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-ui-positive \
+            --sample4-positive \
+            .sample3-positive/sample4-native/candidate/handoff.json
+          cmp .sample3-positive/sample4-ui-positive/ui-edited.pub \
+            .sample3-positive/sample4-native/candidate/candidate.pub
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/sample4-ui-positive/sample4-ui-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_real_ui_story_to_native_pub_download"
+          assert receipt["variant"] == "sample4_one_unit"
+          assert receipt["source_sha256"] == "42195f7ad23d911219fea3ec88e66e867e9b9a6821a16dd1b535e2aa9d57a11b"
+          assert receipt["pub_sha256"] == "2f7795a3c4307716565c7accf4636a80b7947f8921c60a87b51e1a48ee529509"
+          assert receipt["byte_len"] == 72192
+          assert receipt["undo_revoked_download"] and receipt["redo_restored_exact_bytes"]
+          assert receipt["fresh_reopen"] and receipt["browser_reload_preserved_story"]
+          assert receipt["immutable_source"] and receipt["release_ready"] is False
+          PY
+
+      - name: Same-source Sample4 unapproved text variant must be HTTP409, not Reader authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/test_sample3_editor_ui_acceptance.mjs \
+            .sample3-positive/sample4-native/control/source.pub \
+            .sample3-positive/sample4-native/baseline-project.json \
+            .sample3-positive/sample4-reader/resolved-graph.json \
+            .sample3-positive/sample4-reader/viewer-geometry.json \
+            vendor/producer-a/target/debug/chaptera-producer-a \
+            .sample3-positive/sample4-ui-negative \
+            --sample4-negative \
+            .sample3-positive/sample4-native/candidate/handoff.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path(".sample3-positive/sample4-ui-negative/sample4-negative-pub-download.json").read_text())
+          assert receipt["result"] == "PASS_unapproved_sample4_same_source_download_denied"
+          assert receipt["can_serialize"] and not receipt["can_download"]
+          assert receipt["http_download_status"] == 409
+          assert receipt["immutable_source"] and receipt["release_ready"] is False
+          PY
+
+      - name: Prove pinned Newsletter still rejects unauthorized native PUB download
+        run: python tools/run_local_real_editor.py --smoke
+
+      - name: Keep legacy real-Newsletter browser denial gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("tools/run_local_real_editor.py").read_text()
+          assert 'native_pub_download_not_authorized' in source
+          assert 'error.code != 409' in source
+          print("legacy Newsletter 409 negative smoke remains in existing real-browser workflow")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sample3-approved-browser-http-receipt
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .sample3-positive/runtime/sample3-browser-pub-download.json
+            .sample3-positive/runtime/sample3-ui-pub-download.json
+            .sample3-positive/runtime-one-unit/sample3-ui-pub-download.json
+            .sample3-positive/runtime-two-unit/sample3-negative-pub-download.json
+            .sample3-positive/cross-fixture-story-preflight.json
+            .sample3-positive/handoff-one-unit/handoff.json
+            .sample3-positive/sample4-native/source-safe-receipt.json
+            .sample3-positive/sample4-reader/sample4-table-dependency.json
+            .sample3-positive/sample4-ui-positive/sample4-ui-pub-download.json
+            .sample3-positive/sample4-ui-negative/sample4-negative-pub-download.json
+            .sample3-positive/runtime/accepted.json
+            .sample3-positive/runtime/baseline.json
+            .sample3-positive/sample3-table-dependency.json

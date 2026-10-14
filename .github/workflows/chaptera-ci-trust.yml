@@ -26,5 +26,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Self-test CI trust/admission guard
+        run: python3 tools/ci/check_chaptera_ci_trust.py --self-test
       - name: Audit protected release/package workflows
         run: python3 tools/ci/check_chaptera_ci_trust.py

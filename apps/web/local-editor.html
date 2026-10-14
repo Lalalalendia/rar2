@@ -3,38 +3,162 @@
 <title>Chaptera Local Editor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:dark}
-*{box-sizing:border-box}html,body{margin:0;height:100%;background:#111317;color:#eef1f5}
-body{display:grid;grid-template-rows:auto 1fr}
-header{background:#171b21;border-bottom:1px solid #2b323d;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-h1{font-size:16px;margin:0 10px 0 0}
-button,select{border:1px solid #394352;background:#252b34;color:#eef1f5;border-radius:7px;padding:7px 10px}
-button{cursor:pointer}button:hover{background:#303845}
-#state{font-size:12px;color:#9aa4b2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:200px}
-#disclosure{font-size:12px;color:#aeb8c6;display:flex;gap:12px;flex-wrap:wrap;width:100%}
-#host-wrap{overflow:auto;background:#d9d9d9;position:relative}
-#host{width:1200px;height:3600px;position:relative;touch-action:none;background:#e9e9e9}
-.bad{color:#ff8d8d}.ok{color:#70e5a3}.warn{color:#ffd166}
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;color-scheme:dark;--bg:#101620;--surface:#161e2b;--panel:#1a2331;--border:#303b4c;--text:#ebeff7;--muted:#9aa8ba;--focus:#81aaff}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;height:100%;background:var(--bg);color:var(--text)}
+body{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}
+button,select,textarea{font:inherit}
+button,select{border:1px solid var(--border);background:#252f40;color:var(--text);border-radius:8px;padding:9px 12px;min-height:36px}
+button{cursor:pointer;font-size:12px;font-weight:600;transition:background .15s,border-color .15s}
+button:hover:not(:disabled){background:#354257;border-color:#7189a6}
+button:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button:disabled{cursor:not-allowed;opacity:.46}
+header{min-height:72px;background:#131a26;border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:22px}
+.brand{display:flex;align-items:center;gap:12px;min-width:192px;flex:none}
+.brand-mark{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:#4769ba;color:#fff;font-size:20px;font-weight:800;letter-spacing:-1px}
+.brand-titles{display:flex;flex-direction:column;gap:1px}
+h1{font-size:19px;font-weight:740;line-height:1.15;letter-spacing:-.45px;margin:0}
+.brand-subtitle{font-size:11px;color:var(--muted);white-space:nowrap}
+#actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
+#actions .action-divider{height:26px;width:1px;background:#344052;margin:0 4px}
+#actions select{font-size:12px;min-width:72px}
+#state{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:96px;max-width:220px;text-align:right}
+#workspace{display:grid;grid-template-columns:minmax(0,1fr) 354px;min-height:0;overflow:hidden}
+#host-wrap{overflow:auto;position:relative;background:#d5dae2;min-width:0;min-height:0;scrollbar-color:#a3afbe #d5dae2}
+#host{width:1200px;height:3600px;position:relative;touch-action:none;background:#d5dae2}
+.stage-caption{position:sticky;top:16px;left:18px;width:max-content;max-width:calc(100% - 36px);pointer-events:none;z-index:3;padding:9px 13px;background:rgba(255,255,255,.96);color:#414b5c;box-shadow:0 4px 16px rgba(20,40,60,.13);border:1px solid #cbd3e0;border-radius:10px;line-height:1.4;font-size:11px}
+.stage-caption strong{display:block;color:#1d2b40;font-size:12px}
+#inspector{background:var(--surface);border-left:1px solid var(--border);overflow:auto;min-height:0;padding:22px 20px 28px;scrollbar-color:#40506a #161e2b}
+.eyebrow{font-size:10px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:#97abd0}
+#inspector h2{font-size:20px;letter-spacing:-.5px;margin:5px 0 7px}
+.description{font-size:12px;color:var(--muted);line-height:1.55;margin:0 0 20px}
+.panel-section{padding:17px 0;border-top:1px solid var(--border)}
+.panel-section h3{font-size:12px;font-weight:750;margin:0 0 12px;letter-spacing:.1px}
+#font-tools{display:flex;flex-direction:column;gap:10px;width:100%}
+#font-tools label{font-size:11px;color:#bdcadd;font-weight:650}
+#font-choice,#font-story-target{display:block;width:100%;max-width:100%;font-size:12px;text-overflow:ellipsis}
+#preview-physical-font{align-self:stretch;background:#33435c}
+#font-sample{display:grid;place-items:center;min-height:74px;font-size:28px;letter-spacing:1px;background:#101724;border:1px solid #324052;border-radius:10px;color:#f2f5fa;white-space:nowrap;overflow:hidden}
+#font-message{font-size:11px;line-height:1.55;color:#b8c7dc;min-height:32px}
+#font-metrics{font-size:11px;line-height:1.55;color:#cbd5e5;padding:9px 11px;border-left:2px solid #788cb1;background:#192537;min-height:36px}
+#font-flow{font-size:11px;line-height:1.55;color:#cbd5e5;padding:9px 11px;border-left:2px solid #788cb1;background:#192537;min-height:36px}
+#text-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+#text-tools[hidden]{display:none}
+#text-tools label{grid-column:1 / -1;font-size:11px;color:#bdcadd;font-weight:650}
+#text-value{grid-column:1 / -1;width:100%;min-height:148px;max-height:340px;resize:vertical;outline:none;border:1px solid #42516a;background:#101724;color:var(--text);border-radius:9px;padding:12px;font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+#apply-font{grid-column:1 / -1;background:#466ed0;border-color:#6c8de3;color:white;font-size:12px}
+#apply-font:hover:not(:disabled){background:#587ee0}
+#cancel-text{grid-column:2}
+#apply-text{grid-column:1}
+#summary-fidelity{margin:0 0 6px;font-size:13px;font-weight:700}
+#summary-output{font-size:11px;color:var(--muted);line-height:1.55;margin:0}
+#disclosure{font-size:11px;color:var(--muted);line-height:1.7;overflow-wrap:anywhere}
+#disclosure summary{list-style-position:outside;cursor:pointer;color:#c7d3e5;font-size:12px;font-weight:650}
+#disclosure .detail-lines{padding:12px 0 0;display:flex;flex-direction:column;gap:7px}
+#disclosure .detail-lines span{display:block}
+.bad{color:#fc9a9a!important}.ok{color:#86d9b5!important}.warn{color:#f3c67a!important}
+@media(max-width:1100px){
+  header{gap:12px;flex-wrap:wrap;padding:10px 14px}
+  .brand{min-width:160px}
+  #state{min-width:120px}
+  #workspace{grid-template-columns:minmax(0,1fr) 310px}
+  #inspector{padding:17px 14px}
+}
+@media(max-width:730px){
+  body{display:flex;flex-direction:column;overflow:auto}
+  header{flex:none;gap:10px}
+  .brand{width:100%}
+  #state{max-width:100%;text-align:left}
+  #workspace{display:flex;flex-direction:column;overflow:visible;min-height:800px}
+  #host-wrap{height:58vh;min-height:350px;flex:none}
+  #inspector{overflow:visible;min-height:400px;border-left:0;border-top:1px solid var(--border)}
+}
 </style>
-<header>
-  <h1>Chaptera Local Editor</h1>
-  <button id="undo">Undo</button>
-  <button id="redo">Redo</button>
-  <button id="reopen">Reopen</button>
-  <select id="target"><option value="idml">IDML</option><option value="odg">ODG</option></select>
-  <button id="preview">Export preview</button>
-  <span id="state">connecting…</span>
-  <div id="disclosure">
-    <span id="fidelity"></span>
-    <span id="capabilities"></span>
-    <span id="loss"></span>
+<header aria-label="Chaptera editor toolbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">C</div>
+    <div class="brand-titles">
+      <h1>Chaptera</h1>
+      <span class="brand-subtitle">PUB editor · local verification</span>
+    </div>
   </div>
+  <nav id="actions" aria-label="Document commands">
+    <button id="undo">Undo</button>
+    <button id="redo">Redo</button>
+    <button id="reopen">Reopen</button>
+    <span class="action-divider" aria-hidden="true"></span>
+    <button id="edit-text" disabled>Edit text</button>
+    <button id="save-pub" disabled>Download PUB</button>
+    <select id="target" aria-label="Export target">
+      <option value="idml">IDML</option><option value="odg">ODG</option>
+    </select>
+    <button id="preview">Check export</button>
+  </nav>
+  <span id="state" role="status">Connecting to current revision…</span>
 </header>
-<div id="host-wrap"><div id="host" aria-label="Chaptera editor canvas"></div></div>
+<div id="workspace">
+  <main id="host-wrap" aria-label="Document page preview">
+    <div class="stage-caption">
+      <strong>Document preview</strong>
+      Source geometry · unverified text remains partial
+    </div>
+    <div id="host" aria-label="Chaptera editor canvas"></div>
+  </main>
+  <aside id="inspector" aria-label="Chaptera typography inspector">
+    <div class="eyebrow">Editor / Properties</div>
+    <h2>Typography</h2>
+    <p class="description">
+      Choose a Story, select characters and apply a server-approved font.
+      Layout and export remain blocked until Publisher fidelity is verified.
+    </p>
+    <section class="panel-section" aria-label="Physical font controls">
+      <h3>Font and text</h3>
+      <div id="font-tools" role="group" aria-label="Physical font authoring">
+        <label for="font-story-target">Text Story</label>
+        <select id="font-story-target" disabled aria-label="Choose font-editable text Story">
+          <option value="">Select Story...</option>
+        </select>
+        <label for="font-choice">Admitted font</label>
+        <select id="font-choice" disabled><option value="">No admitted fonts</option></select>
+        <button id="apply-font-story" disabled>Apply font to entire Story</button>
+        <button id="preview-physical-font" disabled>Verify font preview</button>
+        <span id="font-sample" aria-label="Font preview sample">Aa Bb 123</span>
+        <span id="font-message" role="status">Browser preview only; not an Editor font change.</span>
+        <span id="font-metrics" role="status" aria-live="polite">Choose a Story to inspect actual physical glyph coverage.</span>
+        <span id="font-flow" role="status" aria-live="polite">Source-font admission is required before line-fit preview.</span>
+      </div>
+      <div id="text-tools" hidden>
+        <label for="text-value">Selected Story text · select a range</label>
+        <textarea id="text-value" spellcheck="false" aria-label="Story text"></textarea>
+        <button id="apply-text">Apply text</button>
+        <button id="apply-font" disabled>Apply font to selection</button>
+        <button id="cancel-text">Cancel</button>
+      </div>
+    </section>
+    <section class="panel-section" aria-label="Document and output status">
+      <h3>Document status</h3>
+      <p id="summary-fidelity">Checking document fidelity…</p>
+      <p id="summary-output">Checking approved output…</p>
+    </section>
+    <section class="panel-section" aria-label="Technical diagnostics">
+      <details id="disclosure">
+        <summary>Technical diagnostics and capabilities</summary>
+        <div class="detail-lines">
+          <span id="fidelity"></span>
+          <span id="capabilities"></span>
+          <span id="loss"></span>
+          <span id="pubsave"></span>
+        </div>
+      </details>
+    </section>
+  </aside>
+</div>
 <script type="module">
 import {BrowserEditorShellV1} from "./editor-shell-v1.mjs";
 import {HttpEditorServiceV1} from "./editor-service-client-v1.mjs";
+import {projectAdmittedFontChoices,chooseAdmittedFontCandidate} from "./font-environment-v1.mjs";
 import {BrowserObservabilityV1} from "./observability-v1.mjs";
+import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea, mapUnchangedTextareaSelectionToSourceScalarRange} from "./story-line-endings-v1.mjs";
 
 const params=new URLSearchParams(location.search);
 const api=params.get("api") ?? "http://127.0.0.1:18765";
@@ -42,6 +166,24 @@ const emuPerCssPx=Number(params.get("emu_per_css_px") ?? "12700");
 const panYCssPx=Number(params.get("pan_y_css_px") ?? "-2600");
 const stateEl=document.querySelector("#state");
 const host=document.querySelector("#host");
+const editTextButton=document.querySelector("#edit-text");
+const savePubButton=document.querySelector("#save-pub");
+const textTools=document.querySelector("#text-tools");
+const textValue=document.querySelector("#text-value");
+const applyFontButton=document.querySelector("#apply-font");
+const applyFontStoryButton=document.querySelector("#apply-font-story");
+const fontChoice=document.querySelector("#font-choice");
+const fontStoryTarget=document.querySelector("#font-story-target");
+const previewFontButton=document.querySelector("#preview-physical-font");
+const fontMessage=document.querySelector("#font-message");
+const fontMetrics=document.querySelector("#font-metrics");
+const fontFlow=document.querySelector("#font-flow");
+const fontSample=document.querySelector("#font-sample");
+let currentFontContext=null;
+let editingStory=null;
+let editableStoryIds=new Set();
+let fontStoryMap=new Map();
+let fontScopeRevision=null;
 let seq=0;
 const observability=new BrowserObservabilityV1({
   sessionIncarnation:"session:local-editor",
@@ -53,28 +195,537 @@ let shell=null;
 
 function opId(kind){return "local-"+kind+"-"+crypto.randomUUID();}
 function showError(error){stateEl.className="bad";stateEl.textContent=String(error?.message??error);}
+function selectedStory(){
+  if(!shell?.snapshot) return null;
+  // Explicit author-authorized Story choice resolves otherwise ambiguous
+  // pointer hits without pretending an unknown z-order is authoritative.
+  const explicit=fontStoryTarget.value;
+  if(explicit && fontStoryMap.has(explicit) &&
+     fontScopeRevision===shell.snapshot.revision_id){
+    const frame=shell.snapshot.story_frames.find(x=>x.story_id===explicit);
+    const story=shell.snapshot.stories.find(x=>x.story_id===explicit);
+    if(frame&&story) return {node_id:frame.node_id,frame,story};
+  }
+  if(!shell.selection.nodeId) return null;
+  const frame=shell.snapshot.story_frames.find(x=>x.node_id===shell.selection.nodeId);
+  if(!frame) return null;
+  const story=shell.snapshot.stories.find(x=>x.story_id===frame.story_id);
+  return story?{node_id:shell.selection.nodeId,frame,story}:null;
+}
+function syncTextControls(){
+  const selected=selectedStory();
+  editTextButton.disabled=!selected||
+    !(editableStoryIds.has(selected.story.story_id)||fontStoryMap.has(selected.story.story_id));
+  applyFontButton.disabled=!editingStory||!fontStoryMap.has(editingStory.story_id)||
+    !currentFontContext||fontScopeRevision!==shell?.snapshot?.revision_id||
+    currentFontContext.scene_snapshot_id!==shell?.snapshot?.snapshot_id;
+  applyFontStoryButton.disabled=!selected||!fontStoryMap.has(selected.story.story_id)||
+    !currentFontContext||fontScopeRevision!==shell?.snapshot?.revision_id||
+    currentFontContext.scene_snapshot_id!==shell?.snapshot?.snapshot_id||
+    (editingStory?.story_id===selected.story.story_id &&
+     textValue.value!==editingStory.text_at_open);
+  if(editingStory && (!selected || selected.story.story_id!==editingStory.story_id)){
+    editingStory=null;
+    textTools.hidden=true;
+  }
+}
 function showState(state){
+  if(state.reason==="gesture_started" && fontStoryTarget.value){
+    // Real canvas selection supersedes an earlier explicit Story choice.
+    const frame=shell?.snapshot?.story_frames.find(
+      x=>x.node_id===state.selected_node_id
+    );
+    if(frame && fontStoryMap.has(frame.story_id)) fontStoryTarget.value="";
+  }
+  if(state.reason==="hit_test_ambiguous"&&!fontStoryTarget.value){
+    fontMessage.className="warn";
+    fontMessage.textContent="Overlapping objects: choose the exact text Story from the list.";
+  }
   stateEl.className="";
   stateEl.textContent="revision "+state.revision_id+(state.selected_node_id?" · selected "+state.selected_node_id:"");
+  syncTextControls();
+  if(state.reason==="gesture_started"){
+    // A user who directly selects a nonoverlapping Story frame receives
+    // the same current Rust physical glyph coverage as the explicit picker.
+    refreshPhysicalGlyphCoverage().catch(showError);
+  }
+}
+
+async function refreshPhysicalGlyphCoverage(scene=shell?.snapshot){
+  fontMetrics.dataset.exactScalars="";
+  fontMetrics.dataset.unresolvedScalars="";
+  fontMetrics.dataset.exactGlyphs="";
+  fontFlow.dataset.flowState="";
+  fontFlow.dataset.lineCount="";
+  fontFlow.dataset.sourceGapScalars="";
+  fontFlow.textContent="Current physical font line-fit preview not available.";
+  const selected=selectedStory();
+  if(!scene||!selected||!fontStoryMap.has(selected.story.story_id)){
+    fontMetrics.className="";
+    fontMetrics.textContent="Choose a Story to inspect exact physical glyph coverage.";
+    return;
+  }
+  if(scene.revision_id!==fontScopeRevision){
+    fontMetrics.className="warn";
+    fontMetrics.textContent="Physical glyph evidence unavailable for this revision.";
+    return;
+  }
+  const storyId=selected.story.story_id;
+  fontMetrics.textContent="Verifying actual glyph runs from original font bytes…";
+  try{
+    const packet=await service.currentPhysicalFontSpans({
+      story_id:storyId,
+      revision_id:scene.revision_id,
+      snapshot_id:scene.snapshot_id,
+    });
+    if(shell.snapshot.revision_id!==scene.revision_id||
+       shell.snapshot.snapshot_id!==scene.snapshot_id||
+       selectedStory()?.story.story_id!==storyId) return;
+    const scope=fontStoryMap.get(storyId);
+    if(!scope||
+       packet.protocol_version!=="chaptera.current-physical-glyph-spans.v1"||
+       packet.source_hash!==scene.source_hash||
+       packet.document_id!==scene.document_id||
+       packet.story_id!==storyId||
+       packet.revision_id!==scene.revision_id||
+       packet.scene_snapshot_id!==scene.snapshot_id||
+       packet.story_scalar_len!==scope.story_scalar_len||
+       packet.story_format_state_hash!==scope.expected_state_hash||
+       packet.authoritative_line_breaks!==false||
+       packet.fixed_pdf_allowed!==false||
+       !Number.isInteger(packet.shaped_glyph_count)||
+       !Number.isInteger(packet.admitted_scalar_count)||
+       !Number.isInteger(packet.source_unresolved_scalar_count)||
+       packet.admitted_scalar_count+packet.source_unresolved_scalar_count!==
+         packet.story_scalar_len){
+      throw new Error("physical glyph packet disagrees with authoritative Story scope");
+    }
+    fontMetrics.dataset.exactScalars=String(packet.admitted_scalar_count);
+    fontMetrics.dataset.unresolvedScalars=String(packet.source_unresolved_scalar_count);
+    fontMetrics.dataset.exactGlyphs=String(packet.shaped_glyph_count);
+    fontMetrics.className=packet.source_unresolved_scalar_count===0?"ok":"warn";
+    fontMetrics.textContent=
+      "Exact physical glyphs: "+packet.shaped_glyph_count+
+      " for "+packet.admitted_scalar_count+" Story characters · "+
+      "unresolved source-font characters: "+packet.source_unresolved_scalar_count+
+      ". Native Publisher layout and PDF not verified.";
+    // The separate Rust line-fit consumer is read-only and uses a fixed
+    // server-owned preview advance. Its per-Story proof must agree with the
+    // glyph admission packet for the SAME exact source/revision/snapshot.
+    const linePacket=await service.currentPhysicalFontLineFit({
+      story_id:storyId,revision_id:scene.revision_id,snapshot_id:scene.snapshot_id,
+    });
+    if(shell.snapshot.revision_id!==scene.revision_id||
+       shell.snapshot.snapshot_id!==scene.snapshot_id||
+       selectedStory()?.story.story_id!==storyId) return;
+    const flow=linePacket.flow;
+    if(linePacket.protocol_version!=="chaptera.current-physical-line-fit.v1"||
+       linePacket.document_id!==packet.document_id||
+       linePacket.source_hash!==packet.source_hash||
+       linePacket.story_id!==packet.story_id||
+       linePacket.revision_id!==packet.revision_id||
+       linePacket.scene_snapshot_id!==packet.scene_snapshot_id||
+       linePacket.project_state_id!==packet.project_state_id||
+       linePacket.story_format_state_hash!==packet.story_format_state_hash||
+       !flow||flow.protocol_version!=="chaptera.current-mixed-font-line-fit.v1"||
+       flow.native_publisher_layout_authoritative!==false||
+       flow.fixed_pdf_allowed!==false||!Array.isArray(flow.source_gaps)||
+       !Array.isArray(flow.lines)){
+      throw new Error("physical line-fit differs from current admitted glyphs");
+    }
+    const gapScalars=flow.source_gaps.reduce((sum,part)=>
+      sum+part.end_scalar-part.start_scalar,0);
+    if(gapScalars!==packet.source_unresolved_scalar_count){
+      throw new Error("line-fit concealed original Publisher physical font gaps");
+    }
+    fontFlow.dataset.flowState=flow.state;
+    fontFlow.dataset.sourceGapScalars=String(gapScalars);
+    fontFlow.dataset.lineCount=String(flow.lines.length);
+    if(flow.state==="source_font_unresolved"){
+      if(gapScalars===0||flow.lines.length||
+         flow.overset_start_scalar!==null||flow.unicode_breaks_evaluated!==false){
+        throw new Error("unadmitted source font yielded fabricated frame lines");
+      }
+      fontFlow.className="warn";
+      fontFlow.textContent="Line-fit blocked: "+gapScalars+
+        " original font characters lack exact physical bytes. 0 invented lines; PDF blocked.";
+    }else if(flow.state==="physical_line_fit_preview"&&gapScalars===0&&
+             flow.unicode_breaks_evaluated===true){
+      fontFlow.className="warn";
+      fontFlow.textContent="Bounded physical-font line-fit: "+flow.lines.length+
+        " lines · preview overset start: "+
+        (flow.overset_start_scalar??"none")+
+        ". Publisher-native layout and PDF remain unverified.";
+    }else{
+      throw new Error("unsupported current line-fit authority state");
+    }
+  }catch(_error){
+    if(shell?.snapshot?.revision_id===scene.revision_id){
+      fontMetrics.className="warn";
+      fontMetrics.textContent="Exact font glyph evidence unavailable; line layout and PDF blocked.";
+    }
+  }
 }
 
 async function disclosure(){
   const scene=shell.snapshot;
-  const preview=await service.exportPreview(document.querySelector("#target").value);
+  // A new revision may make previously authorized PUB bytes ineligible.
+  // Fail closed while recalculating capability, including on HTTP failure.
+  savePubButton.disabled=true;
+  // Unsupported editable export must not suppress independent Story/PUB capability
+  // facts or leave the editor without bound commands.
+  const [exportResult,pubPreview,editorCaps,fontResult,fontScopeResult]=await Promise.all([
+    service.exportPreview(document.querySelector("#target").value)
+      .then(value=>({ok:true,value}),()=>({ok:false})),
+    service.nativePubPreview(),
+    service.editorCapabilities(),
+    Promise.all([service.fontEnvironment(),service.fontAuthoringAdmission()])
+      .then(([environment,admission])=>({ok:true,value:{environment,admission}}),
+            error=>({ok:false,error})),
+    service.fontFormatScope()
+      .then(value=>({ok:true,value}),error=>({ok:false,error})),
+  ]);
+  // Never admit a preview fetched for a different (possibly older) revision.
+  if(shell.snapshot.revision_id!==scene.revision_id||
+     pubPreview.revision_id!==scene.revision_id||
+     editorCaps.revision_id!==scene.revision_id){
+    throw new Error("PUB capability refresh is stale relative to current Editor revision");
+  }
+  editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
+  fontStoryMap=new Map();
+  fontScopeRevision=null;
+  if(fontScopeResult.ok){
+    const scope=fontScopeResult.value;
+    if(scope.protocol_version!=="chaptera.font-format-edit-scope.v1"||
+       scope.document_id!==scene.document_id||
+       scope.revision_id!==scene.revision_id||
+       scope.scene_snapshot_id!==scene.snapshot_id||
+       !Array.isArray(scope.stories)){
+      throw new Error("stale or invalid authoritative Story format state");
+    }
+    for(const story of scope.stories){
+      if(fontStoryMap.has(story.story_id)) throw new Error("duplicate font-capable Story");
+      fontStoryMap.set(story.story_id,story);
+    }
+    fontScopeRevision=scope.revision_id;
+  }
+  const oldStoryChoice=fontStoryTarget.value;
+  fontStoryTarget.replaceChildren(new Option("Select Story...", ""));
+  const visibleStories=new Map(scene.stories.map(story=>[story.story_id,story]));
+  const framedStories=new Set(scene.story_frames.map(frame=>frame.story_id));
+  const keys=[...fontStoryMap.keys()].filter(
+    id=>framedStories.has(id)&&visibleStories.has(id)
+  ).sort();
+  for(const [index,id] of keys.entries()){
+    const story=visibleStories.get(id);
+    const preview=story.text.slice(0,36).replace(/\s+/g," ").trim();
+    fontStoryTarget.append(new Option(
+      "Story "+(index+1)+" · "+id.slice(0,8)+
+      (preview?" · "+preview:""),id
+    ));
+  }
+  fontStoryTarget.disabled=keys.length===0;
+  fontStoryTarget.value=keys.includes(oldStoryChoice)?oldStoryChoice:"";
+  showFontChoices(scene,fontResult);
+  syncTextControls();
+  await refreshPhysicalGlyphCoverage(scene);
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
   document.querySelector("#capabilities").textContent="Capabilities: "+
     (caps.length?caps.map(x=>x.key+"="+x.state).join("; "):"none");
-  const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
   const loss=document.querySelector("#loss");
-  loss.className=preview.can_serialize?"ok":"bad";
-  loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
-    (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
-    " · losses="+losses.length;
+  if(exportResult.ok){
+    const preview=exportResult.value;
+    const losses=(preview.items??[]).filter(x=>x.disposition!=="preserved");
+    loss.className=preview.can_serialize?"ok":"bad";
+    loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
+      (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
+      " · losses="+losses.length;
+  }else{
+    loss.className="bad";
+    loss.textContent="Export: blocked (this target has no validated preview)";
+  }
+  const pub=document.querySelector("#pubsave");
+  pub.className=pubPreview.can_download===true?"ok":"warn";
+  pub.textContent="PUB: "+(pubPreview.can_download===true
+    ?"Exact-byte Publisher verified"
+    :pubPreview.can_serialize
+      ?"Writer candidate only · Publisher not verified"
+      :"Project-only · "+(pubPreview.blocker_code??"writer blocked"));
+  savePubButton.disabled=pubPreview.can_download!==true;
+  const fidelitySummary=document.querySelector("#summary-fidelity");
+  fidelitySummary.className=scene.fidelity.state==="complete"?"ok":"warn";
+  fidelitySummary.textContent=scene.fidelity.state==="complete"
+    ?"Verified current document layout"
+    :"Partial preview · exact text layout not verified";
+  const outputSummary=document.querySelector("#summary-output");
+  outputSummary.textContent=pubPreview.can_download===true
+    ?"Publisher-native PUB download approved"
+    :"Output restricted: "+(pubPreview.blocker_code??"unverified authoring");
+}
+
+function showFontChoices(scene, fontResult){
+  currentFontContext=null;
+  fontChoice.replaceChildren(new Option("No admitted fonts", ""));
+  fontChoice.disabled=true;
+  previewFontButton.disabled=true;
+  fontSample.style.fontFamily="";
+  fontMessage.className="warn";
+  fontMessage.textContent="No physical font permitted for browser preview.";
+  if(!fontResult.ok){
+    fontMessage.textContent="Font admission unavailable; no implicit substitution.";
+    return;
+  }
+  try{
+    const {environment,admission}=fontResult.value;
+    const choices=projectAdmittedFontChoices(scene,environment,admission);
+    // Only the same current Scene snapshot may produce an actionable choice.
+    if(shell.snapshot.revision_id!==scene.revision_id ||
+       shell.snapshot.snapshot_id!==scene.snapshot_id){
+      throw new Error("font picker response is stale");
+    }
+    if(!choices.length) return;
+    fontChoice.replaceChildren();
+    for(const choice of choices){
+      const option=new Option(
+        (choice.display_family??"Physical font")+" · "+
+        (choice.display_style??"Regular")+" · "+choice.resource_id.slice(0,8),
+        choice.resource_id
+      );
+      fontChoice.append(option);
+    }
+    currentFontContext={environment,admission,scene_snapshot_id:scene.snapshot_id};
+    fontChoice.disabled=false;
+    previewFontButton.disabled=false;
+    fontMessage.textContent="Exact font available for preview. No document edit or PDF relayout yet.";
+  }catch(error){
+    fontMessage.className="bad";
+    fontMessage.textContent="Font picker blocked: "+String(error?.message??error);
+  }
+}
+
+async function previewSelectedFont(){
+  if(!currentFontContext||!shell?.snapshot) return;
+  const scene=shell.snapshot;
+  if(scene.snapshot_id!==currentFontContext.scene_snapshot_id) {
+    throw new Error("selected font candidate belongs to a stale Scene");
+  }
+  const {environment,admission}=currentFontContext;
+  const candidate=chooseAdmittedFontCandidate(scene,environment,admission,fontChoice.value);
+  const physical=environment.fonts.find(
+    font=>font.resource_id===candidate.resource_id&&
+      font.content_hash===candidate.content_hash&&
+      font.face_index===candidate.face_index
+  );
+  if(!physical) throw new Error("selected font lacks exact delivery descriptor");
+  previewFontButton.disabled=true;
+  fontMessage.textContent="Checking exact physical font bytes…";
+  try{
+    const bytes=await service.exactFontResourceBytes(physical);
+    if(shell.snapshot.snapshot_id!==scene.snapshot_id ||
+       shell.snapshot.revision_id!==scene.revision_id) {
+      throw new Error("font delivery finished after the Scene changed");
+    }
+    const family="ChapteraPreview_"+candidate.content_hash.slice(0,16);
+    const fontFace=new FontFace(family,bytes,{style:"normal",weight:"400"});
+    await fontFace.load();
+    if(shell.snapshot.snapshot_id!==scene.snapshot_id) {
+      throw new Error("font preview became stale during font load");
+    }
+    document.fonts.add(fontFace);
+    fontSample.style.fontFamily='"'+family+'"';
+    fontMessage.className="warn";
+    fontMessage.textContent="Verified byte preview only — Story, layout, saved PUB and PDF unchanged.";
+  }finally{
+    previewFontButton.disabled=!currentFontContext ||
+      shell.snapshot.snapshot_id!==currentFontContext.scene_snapshot_id;
+  }
+}
+
+function openTextEditor(){
+  const selected=selectedStory();
+  if(!selected||!(editableStoryIds.has(selected.story.story_id)||fontStoryMap.has(selected.story.story_id))) return;
+  const original=selected.story.text;
+  // A textarea normalizes CR/CRLF to LF. Persist the exact source paragraph
+  // separator convention so a text-only mutation cannot rewrite other lines.
+  const sourceText=prepareStoryTextForTextarea(original);
+  editingStory={
+    story_id:selected.story.story_id,
+    node_id:selected.node_id,
+    original_text:original,
+    terminal_cr:sourceText.terminal_cr,
+    line_ending_kind:sourceText.line_ending_kind,
+    text_at_open:sourceText.value,
+  };
+  textValue.value=sourceText.value;
+  textTools.hidden=false;
+  document.querySelector("#apply-text").disabled=!editableStoryIds.has(editingStory.story_id);
+  syncTextControls();
+  textValue.focus();
+}
+function closeTextEditor(){
+  editingStory=null;
+  textTools.hidden=true;
+}
+async function applyTextEdit(){
+  if(!editingStory) return;
+  if(!editableStoryIds.has(editingStory.story_id)) throw new Error("plain Story text edit is not authorized");
+  const snapshot=shell.snapshot;
+  const current=snapshot.stories.find(x=>x.story_id===editingStory.story_id);
+  if(!current || current.text!==editingStory.original_text){
+    throw new Error("Story changed since text editor opened");
+  }
+  const replacement=restoreStoryTextFromTextarea(textValue.value,editingStory);
+  if(replacement===editingStory.original_text){
+    closeTextEditor();
+    return;
+  }
+  const request={
+    protocol_version:"chaptera.story-range-intent.v1",
+    document_id:snapshot.document_id,
+    source_hash:snapshot.source_hash,
+    base_revision_id:snapshot.revision_id,
+    client_operation_id:opId("story"),
+    command:{
+      kind:"replace_story_range",
+      story_id:editingStory.story_id,
+      start_scalar:0,
+      end_scalar:Array.from(editingStory.original_text).length,
+      expected_before:editingStory.original_text,
+      replacement_text:replacement,
+    },
+  };
+  savePubButton.disabled=true;
+  const accepted=await service.commit(request);
+  if(accepted.protocol_version!=="chaptera.commit-accepted.v1"){
+    throw new Error("Story edit rejected: "+JSON.stringify(accepted));
+  }
+  const scene=await service.sceneForRevision(accepted.revision_id);
+  closeTextEditor();
+  shell.loadSnapshot(scene,{preserveSelection:true});
+  await disclosure();
+}
+async function applySelectedFont(){
+  if(!editingStory||!currentFontContext||!shell?.snapshot) return;
+  const snapshot=shell.snapshot;
+  const scope=fontStoryMap.get(editingStory.story_id);
+  if(!scope||fontScopeRevision!==snapshot.revision_id||
+     currentFontContext.scene_snapshot_id!==snapshot.snapshot_id){
+    throw new Error("physical-font edit scope is stale or missing");
+  }
+  const story=snapshot.stories.find(x=>x.story_id===editingStory.story_id);
+  if(!story||story.text!==editingStory.original_text||
+     textValue.value!==editingStory.text_at_open){
+    throw new Error("font selection may not alter Story source text");
+  }
+  const range=mapUnchangedTextareaSelectionToSourceScalarRange(
+    story.text,editingStory,textValue.value,
+    textValue.selectionStart,textValue.selectionEnd,
+  );
+  const start=range.start_scalar;
+  const end=range.end_scalar;
+  if(start>=end||end>scope.story_scalar_len){
+    throw new Error("selected font range exceeds actual Publisher Story");
+  }
+  await commitAdmittedPhysicalFontRange({
+    storyId:editingStory.story_id,start,end,entireStory:false,
+  });
+}
+
+// Whole-Story authoring is an explicit user command. It uses Rust's exact
+// Unicode-scalar Story extent rather than textarea offsets (which omit the
+// terminal Publisher CR and normalize CRLF). No inferred source-font bytes.
+async function applyEntireStoryFont(){
+  const selected=selectedStory();
+  if(!selected) throw new Error("choose a source-authorized text Story");
+  const scalarLen=Array.from(selected.story.text).length;
+  await commitAdmittedPhysicalFontRange({
+    storyId:selected.story.story_id,start:0,end:scalarLen,entireStory:true,
+  });
+}
+
+async function commitAdmittedPhysicalFontRange({storyId,start,end,entireStory}){
+  const snapshot=shell?.snapshot;
+  const selected=selectedStory();
+  const scope=fontStoryMap.get(storyId);
+  if(!snapshot||!selected||selected.story.story_id!==storyId||!scope||
+     fontScopeRevision!==snapshot.revision_id||
+     currentFontContext?.scene_snapshot_id!==snapshot.snapshot_id||
+     Array.from(selected.story.text).length!==scope.story_scalar_len||
+     !Number.isInteger(start)||!Number.isInteger(end)||
+     start<0||end<=start||end>scope.story_scalar_len||
+     (entireStory&&(start!==0||end!==scope.story_scalar_len))){
+    throw new Error("physical-font authoring requires exact current Story extent");
+  }
+  if(editingStory && (editingStory.story_id!==storyId||
+      editingStory.original_text!==selected.story.text||
+      textValue.value!==editingStory.text_at_open)){
+    throw new Error("finish or cancel pending source text changes before applying font");
+  }
+  const candidate=chooseAdmittedFontCandidate(
+    snapshot,currentFontContext.environment,currentFontContext.admission,fontChoice.value
+  );
+  applyFontButton.disabled=true;
+  applyFontStoryButton.disabled=true;
+  savePubButton.disabled=true;
+  try{
+    const response=await service.commit({
+      protocol_version:"chaptera.font-resource-intent.v1",
+      document_id:snapshot.document_id,
+      source_hash:snapshot.source_hash,
+      base_revision_id:snapshot.revision_id,
+      client_operation_id:opId("font"),
+      command:{
+        kind:"set_admitted_font_resource",
+        story_id:storyId,
+        start_scalar:start,end_scalar:end,
+        expected_state_hash:scope.expected_state_hash,
+        candidate,
+      },
+    });
+    if(response.protocol_version!=="chaptera.commit-accepted.v1"||
+       response.canonical_operation?.kind!=="set_text_format_property"||
+       response.canonical_operation?.property!=="font_resource"||
+       response.canonical_operation?.story_id!==storyId||
+       response.canonical_operation?.start_scalar!==start||
+       response.canonical_operation?.end_scalar!==end||
+       response.consequences?.[0]?.state!=="partial"){
+      throw new Error("server did not commit exact physical-font Story range");
+    }
+    const scene=await service.sceneForRevision(response.revision_id);
+    closeTextEditor();
+    shell.loadSnapshot(scene,{preserveSelection:true});
+    await disclosure();
+    fontMessage.className="warn";
+    fontMessage.textContent=entireStory
+      ? "Entire Story font saved in canonical Project; Publisher-native layout and fixed PDF remain blocked."
+      : "Font saved in canonical Project; layout and fixed PDF remain blocked.";
+  }finally{
+    syncTextControls();
+  }
+}
+
+async function downloadNativePub(){
+  const preview=await service.nativePubPreview();
+  if(preview.can_download!==true) throw new Error("Publisher-native approval missing for exact PUB bytes");
+  const result=await service.nativePubDownload();
+  const url=URL.createObjectURL(result.blob);
+  try{
+    const anchor=document.createElement("a");
+    anchor.href=url;
+    anchor.download="chaptera-edited.pub";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }finally{
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function history(kind){
+  // Undo/Redo revoke any prior Download PUB UI admission immediately.
+  savePubButton.disabled=true;
   const snapshot=shell.snapshot;
   const accepted=await service.historyTransition({
     protocol_version:"chaptera.history-transition-intent.v1",
@@ -107,6 +758,7 @@ async function start(){
   document.querySelector("#redo").onclick=()=>history("redo").catch(showError);
   document.querySelector("#reopen").onclick=async()=>{
     try{
+      savePubButton.disabled=true;
       const response=await fetch(api+"/v1/harness/reopen",{method:"POST",headers:{"x-chaptera-principal-id":"synthetic-editor"}});
       const scene=await response.json();
       if(!response.ok) throw new Error(JSON.stringify(scene));
@@ -116,6 +768,32 @@ async function start(){
   };
   document.querySelector("#preview").onclick=()=>disclosure().catch(showError);
   document.querySelector("#target").onchange=()=>disclosure().catch(showError);
+  editTextButton.onclick=()=>{try{openTextEditor()}catch(error){showError(error)}};
+  document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
+  applyFontButton.onclick=()=>applySelectedFont().catch(showError);
+  applyFontStoryButton.onclick=()=>applyEntireStoryFont().catch(showError);
+  textValue.addEventListener("input",syncTextControls);
+  document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
+  previewFontButton.onclick=()=>previewSelectedFont().catch(error=>{
+    fontMessage.className="bad";
+    fontMessage.textContent=String(error?.message??error);
+  });
+  fontStoryTarget.onchange=()=>{
+    closeTextEditor();
+    syncTextControls();
+    refreshPhysicalGlyphCoverage().catch(showError);
+    if(fontStoryTarget.value){
+      fontMessage.className="warn";
+      fontMessage.textContent="Explicit Story selected; select text characters before applying the font.";
+    }
+  };
+  fontChoice.onchange=()=>{
+    fontSample.style.fontFamily="";
+    fontMessage.className="warn";
+    fontMessage.textContent="Candidate selected; apply only to explicitly selected Story text.";
+    syncTextControls();
+  };
+  savePubButton.onclick=()=>downloadNativePub().catch(showError);
   document.querySelector("#host-wrap").scrollTop=2480;
 }
 start().catch(showError);

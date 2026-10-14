@@ -215,6 +215,12 @@ impl BlobProvider for S3BlobProvider {
                 ));
             }
             GrantOperation::Download => {
+                if self.expected_bucket_owner.is_some() {
+                    return Err(ProviderError::new(
+                        ProviderErrorKind::Other,
+                        "s3_download_grant_expected_owner_requires_headers",
+                    ));
+                }
                 let presigned = self
                     .client
                     .get_object()
@@ -571,6 +577,36 @@ mod tests {
         assert!(!capabilities.hard_exact_or_max_upload_size);
         assert!(!capabilities.signed_content_type);
         assert!(capabilities.strong_head_after_put);
+    }
+
+    #[tokio::test]
+    async fn expected_bucket_owner_fails_closed_for_url_only_download_grants() {
+        let provider = S3BlobProvider::new(
+            test_client(),
+            "chaptera-quarantine",
+            "chaptera-private",
+            Some("123456789012".to_owned()),
+        )
+        .unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let request = ProviderGrantRequest {
+            tenant_id: "tenant:test".to_owned(),
+            object_locator: "exports/tenant-test/artifact".to_owned(),
+            operation: GrantOperation::Download,
+            expected_byte_len: Some(8),
+            required_content_type: None,
+            expires_at_ms: u64::try_from(now).unwrap() + 60_000,
+        };
+
+        let error = provider.issue_grant(&request).await.unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Other);
+        assert_eq!(
+            error.code,
+            "s3_download_grant_expected_owner_requires_headers"
+        );
     }
 
     #[tokio::test]

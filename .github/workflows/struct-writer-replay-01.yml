@@ -1,0 +1,27 @@
+name: struct-writer-replay-01
+
+on:
+  pull_request:
+    paths:
+      - vendor/producer-a/crates/pub-writer/**
+      - .github/workflows/struct-writer-replay-01.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt
+      - name: Test bounded structural replay planner
+        working-directory: vendor/producer-a
+        run: cargo test -p pub-writer structural_replay -- --nocapture
+      - name: Rustfmt pub-writer
+        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs

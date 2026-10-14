@@ -14,15 +14,22 @@ path = "src/main.rs"
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
 pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer", features = ["cmo-slot-compose"] }
+pub-layout = { path = "../../vendor/producer-a/crates/pub-layout" }
+pub-output = { path = "../../vendor/producer-a/crates/pub-output" }
+pub-pdf = { path = "../../vendor/producer-a/crates/pub-pdf" }
 chaptera-cdm-model = { package = "pub-model", path = "../../crates/pub-model" }
 chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
 chaptera-failure-intake-protocol = { path = "../../crates/chaptera-failure-intake-protocol" }
 chaptera-viewer-render-plan = { path = "../../crates/chaptera-viewer-render-plan", features = ["projected-scene-instances"] }
+chaptera-scene-instance = { path = "../../crates/chaptera-scene-instance" }
 chaptera-desktop-fallback-font-resource = { path = "../../crates/chaptera-desktop-fallback-font-resource" }
 aws-config = "=1.12.0"
 aws-sdk-s3 = "=1.149.0"
+aws-sdk-sts = "=1.117.0"
 aws-smithy-types = { version = "=1.8.0", features = ["http-body-1-x"] }
 bytes = "=1.12.1"
+base64 = "=0.22.1"
+chaptera-image-decode-contract = { path = "../../crates/chaptera-image-decode-contract" }
 http-body = "=1.1.0"
 futures-util = "=0.3.31"
 async-trait = "=0.1.89"
@@ -44,4 +51,5 @@ zeroize = "=1.9.0"
 zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 
 [dev-dependencies]
+png = "=0.18.1"
 tower = { version = "=0.5.3", features = ["util"] }

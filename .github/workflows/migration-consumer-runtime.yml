@@ -1,0 +1,84 @@
+name: Migration consumer runtime producer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-consumer-runtime-producer
+  cancel-in-progress: false
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Build pinned consumer runtime candidate
+        run: docker build -f tools/ci/migration-consumer-runtime.Dockerfile -t chaptera-migration-consumers:v1 .
+
+      - name: Capture runtime identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/migration-consumer-runtime
+          image_id="$(docker image inspect chaptera-migration-consumers:v1 --format '{{.Id}}')"
+          docker run --rm chaptera-migration-consumers:v1 sh -lc 'scribus --version; libreoffice --version; dpkg-query -W scribus libreoffice-draw xvfb fonts-montserrat'             > target/migration-consumer-runtime/versions.txt
+          printf '%s\n' "$image_id" > target/migration-consumer-runtime/image-id.txt
+
+      - name: Save and compress runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save chaptera-migration-consumers:v1 | zstd -T0 -10 -o target/migration-consumer-runtime/chaptera-migration-consumers-v1.tar.zst
+          sha256sum target/migration-consumer-runtime/chaptera-migration-consumers-v1.tar.zst             > target/migration-consumer-runtime/chaptera-migration-consumers-v1.tar.zst.sha256
+
+      - name: Emit runtime manifest
+        env:
+          REPO_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("target/migration-consumer-runtime")
+          archive = root / "chaptera-migration-consumers-v1.tar.zst"
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          versions = (root / "versions.txt").read_text(encoding="utf-8").splitlines()
+          manifest = {
+              "schema": "chaptera.migration-consumer-runtime.v1",
+              "repository_commit_sha": os.environ["REPO_SHA"],
+              "image_tag": "chaptera-migration-consumers:v1",
+              "image_id": (root / "image-id.txt").read_text(encoding="utf-8").strip(),
+              "archive_entry": archive.name,
+              "archive_sha256": digest,
+              "archive_byte_len": archive.stat().st_size,
+              "versions": versions,
+              "producer_runner": "ubuntu-24.04",
+          }
+          (root / "manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload exact consumer runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-migration-consumer-runtime-v1-${{ github.run_id }}
+          path: |
+            target/migration-consumer-runtime/chaptera-migration-consumers-v1.tar.zst
+            target/migration-consumer-runtime/chaptera-migration-consumers-v1.tar.zst.sha256
+            target/migration-consumer-runtime/manifest.json
+            target/migration-consumer-runtime/versions.txt
+          if-no-files-found: error
+          retention-days: 30

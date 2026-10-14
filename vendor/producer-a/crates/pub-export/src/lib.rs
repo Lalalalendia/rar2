@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, NodeId, PageId, RectEmu, Size2D, StoryId};
+use pub_model::{CanonicalId, LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Size2D, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,7 +35,6 @@ pub const STORY_FONT_FAMILY_FEATURE: &str = "story.typography.font_family";
 pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
 pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
 pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
-pub const FULL_STORY_TYPOGRAPHY_SCHEMA_V1: &str = "chaptera.full-story-typography.v1";
 pub const AUTHORED_SHAPE_GEOMETRY_FEATURE: &str = "authored_shape.geometry";
 pub const AUTHORED_SHAPE_FILL_FEATURE: &str = "authored_shape.fill";
 pub const AUTHORED_SHAPE_STROKE_FEATURE: &str = "authored_shape.stroke";
@@ -76,6 +75,56 @@ pub struct AuthoredRectangleExportV1 {
     pub stroke: ExportSolidStrokeV1,
 }
 
+/// Canonical target-neutral semantic feature vocabulary.
+///
+/// Presence in this registry names a semantic requirement only. It does not
+/// grant support in any concrete target; TargetCapabilityManifest remains the
+/// authority for Preserved/Approximated/Flattened/Rasterized/Unsupported.
+pub mod feature {
+    pub const PAGE_GEOMETRY: &str = "page.geometry";
+    pub const PAGE_OBJECT_ORDER: &str = "page.object_order";
+    /// Editable page-to-master authoring relation. This does not claim that all
+    /// Publisher master materialization/default semantics are understood.
+    pub const PAGE_MASTER_RELATION: &str = "page.master_relation";
+    pub const STORY_TEXT: &str = "story.text";
+    pub const STORY_LINKED_FRAMES: &str = "story.linked_frames";
+    pub const STORY_SHARED_IDENTITY: &str = "story.shared_identity";
+    pub const TABLE_STRUCTURE: &str = "table.structure";
+    pub const TABLE_STYLE: &str = "table.style";
+    /// Exact image payload bytes.
+    pub const IMAGE_BYTES: &str = "image.bytes";
+    /// Authored geometry of the image frame.
+    pub const IMAGE_FRAME_GEOMETRY: &str = "image.frame_geometry";
+    /// Image content transform inside its frame: crop, fit/fill, pan and
+    /// equivalent inner-content positioning semantics.
+    pub const IMAGE_CONTENT_TRANSFORM: &str = "image.content_transform";
+    /// Persistent group hierarchy plus the group-local coordinate/transform
+    /// relation required for editable preservation.
+    pub const OBJECT_GROUP_STRUCTURE: &str = "object.group_structure";
+    /// Publication-level LayoutGuides row/column boundary grid; deliberately
+    /// narrower than arbitrary page-local ruler guides.
+    pub const LAYOUT_GUIDE_GRID: &str = "layout.guide_grid";
+    pub const NODE_UNSUPPORTED: &str = "node.unsupported";
+
+    pub const ESTABLISHED_V0_1: &[&str] = &[
+        PAGE_GEOMETRY,
+        PAGE_OBJECT_ORDER,
+        PAGE_MASTER_RELATION,
+        STORY_TEXT,
+        STORY_LINKED_FRAMES,
+        STORY_SHARED_IDENTITY,
+        TABLE_STRUCTURE,
+        TABLE_STYLE,
+        IMAGE_BYTES,
+        IMAGE_FRAME_GEOMETRY,
+        IMAGE_CONTENT_TRANSFORM,
+        OBJECT_GROUP_STRUCTURE,
+        LAYOUT_GUIDE_GRID,
+        NODE_UNSUPPORTED,
+    ];
+}
+pub const FULL_STORY_TYPOGRAPHY_SCHEMA_V1: &str = "chaptera.full-story-typography.v1";
+
 /// Target-neutral bounded typography authority for a Story whose entire text
 /// range is proven to use one explicit font family and one explicit font size.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -83,6 +132,44 @@ pub struct FullStoryTypographyV1 {
     pub story_id: StoryId,
     pub font_family: String,
     pub font_size_emu: LengthEmu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphAlignmentV1 {
+    Center,
+    Right,
+}
+
+/// Bounded physical-writer authority for one Story whose current effective
+/// ParagraphId alignment is completely known, uniform and representable by
+/// the existing full-Story Center/Right target wires.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryParagraphAlignmentV1 {
+    pub story_id: StoryId,
+    pub alignment: ParagraphAlignmentV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphScopedAlignmentValueV1 {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+/// Target-neutral physical-writer authority for one canonical ParagraphId.
+///
+/// The range is the current Story-global Unicode-scalar paragraph range and
+/// remains the ordering/binding authority. Target adapters must not infer
+/// paragraph identity from raw delimiter splitting alone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ParagraphScopedAlignmentV1 {
+    pub story_id: StoryId,
+    pub paragraph_id: ParagraphId,
+    pub range: TextRange,
+    pub alignment: ParagraphScopedAlignmentValueV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -392,6 +479,58 @@ mod tests {
             adapter_version: "idml-v0.1".into(),
             profile: "bounded-editable".into(),
             schema_fence: Some("legacy-spec-8.02".into()),
+        }
+    }
+
+    #[test]
+    fn established_feature_vocabulary_is_unique_and_stable() {
+        let mut sorted = feature::ESTABLISHED_V0_1.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), feature::ESTABLISHED_V0_1.len());
+
+        assert_eq!(feature::PAGE_GEOMETRY, "page.geometry");
+        assert_eq!(feature::PAGE_OBJECT_ORDER, "page.object_order");
+        assert_eq!(feature::PAGE_MASTER_RELATION, "page.master_relation");
+        assert_eq!(feature::STORY_TEXT, "story.text");
+        assert_eq!(feature::STORY_LINKED_FRAMES, "story.linked_frames");
+        assert_eq!(feature::STORY_SHARED_IDENTITY, "story.shared_identity");
+        assert_eq!(feature::TABLE_STRUCTURE, "table.structure");
+        assert_eq!(feature::TABLE_STYLE, "table.style");
+        assert_eq!(feature::IMAGE_BYTES, "image.bytes");
+        assert_eq!(feature::IMAGE_FRAME_GEOMETRY, "image.frame_geometry");
+        assert_eq!(feature::IMAGE_CONTENT_TRANSFORM, "image.content_transform");
+        assert_eq!(feature::OBJECT_GROUP_STRUCTURE, "object.group_structure");
+        assert_eq!(feature::LAYOUT_GUIDE_GRID, "layout.guide_grid");
+        assert_eq!(feature::NODE_UNSUPPORTED, "node.unsupported");
+    }
+
+    #[test]
+    fn vocabulary_presence_does_not_grant_target_support() {
+        let manifest = TargetCapabilityManifest {
+            target: target(),
+            features: BTreeMap::new(),
+        };
+
+        for feature_key in [
+            feature::OBJECT_GROUP_STRUCTURE,
+            feature::PAGE_MASTER_RELATION,
+            feature::LAYOUT_GUIDE_GRID,
+        ] {
+            let plan = plan_export(
+                &manifest,
+                vec![SemanticFeatureRequest {
+                    feature: feature_key.into(),
+                    origin: None,
+                    property_path: None,
+                    require_preserved: false,
+                }],
+            );
+
+            assert!(plan.can_serialize());
+            assert_eq!(plan.features[0].disposition, CapabilityLevel::Unsupported);
+            assert_eq!(plan.losses[0].kind, LossKind::Unsupported);
+            assert_eq!(plan.losses[0].severity, LossSeverity::Semantic);
         }
     }
 

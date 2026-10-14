@@ -1,0 +1,928 @@
+use axum::{
+    Router,
+    body::{Body, Bytes},
+    http::{
+        HeaderName, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+    },
+    response::Response,
+    routing::get,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+const INDEX_HTML: &[u8] = include_bytes!("../../web/product-editor.html");
+const CREATE_HTML: &[u8] = include_bytes!("../../web/cloud-project-new.html");
+const CREATE_CSS: &[u8] = include_bytes!("../../web/cloud-project-new.css");
+const CREATE_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-new-v1.mjs");
+const HOME_HTML: &[u8] = include_bytes!("../../web/cloud-project-home.html");
+const HOME_CSS: &[u8] = include_bytes!("../../web/cloud-project-home.css");
+const HOME_ENTRY: &[u8] = include_bytes!("../../web/cloud-project-home-v1.mjs");
+const PROJECT_RENAME_CLIENT: &[u8] = include_bytes!("../../web/cloud-project-rename-v1.mjs");
+const PROJECT_HOME_CONTROLLER: &[u8] = include_bytes!("../../web/project-home-v1.mjs");
+const PROJECT_CATALOG_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-project-catalog-v1.mjs");
+const FILE_ENTRY: &[u8] = include_bytes!("../../web/file-entry-v1.mjs");
+const WORKSPACE_SESSION_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-workspace-session-v1.mjs");
+const SOURCE_INGRESS_CLIENT: &[u8] =
+    include_bytes!("../../web/chaptera-cloud-source-ingress-v1.mjs");
+const EDITOR_CSS: &[u8] = include_bytes!("../../web/product-editor.css");
+const EDITOR_ENTRY: &[u8] = include_bytes!("../../web/product-editor-entry-v1.mjs");
+const PRODUCT_SERVICE: &[u8] = include_bytes!("../../web/chaptera-product-editor-service-v1.mjs");
+const TEXT_PROTOCOL: &[u8] = include_bytes!("../../web/text-protocol-v1.mjs");
+const STORY_LINE_ENDINGS: &[u8] = include_bytes!("../../web/story-line-endings-v1.mjs");
+const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
+    include_bytes!("../../web/temporary-edit-browser-session-v0.mjs");
+const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
+const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
+const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
+const TEMPORARY_EDIT_MOVE_CLIENT: &[u8] =
+    include_bytes!("../../web/temporary-edit-move-client-v1.mjs");
+// This module is the SAME UI-neutral ResizeTransaction used by the desktop
+// and protocol tests, not a second browser-side geometry implementation.
+const TEMPORARY_RESIZE_GESTURE: &[u8] =
+    include_bytes!("../../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs");
+const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
+const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
+const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
+const OBSERVABILITY: &[u8] = include_bytes!("../../web/observability-v1.mjs");
+const READER_ADAPTER: &[u8] = include_bytes!("../../web/reader-scene-editor-adapter-v1.mjs");
+const READER_RENDER: &[u8] = include_bytes!("../../cloud-reader/render-v1.mjs");
+
+const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'";
+const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=()";
+
+struct EmbeddedAsset {
+    name: &'static str,
+    content_type: &'static str,
+    bytes: &'static [u8],
+}
+
+const ASSETS: [EmbeddedAsset; 30] = [
+    EmbeddedAsset {
+        name: "product-editor.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: INDEX_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: CREATE_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: CREATE_CSS,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-new-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: CREATE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: HOME_HTML,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: HOME_CSS,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-home-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: HOME_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "project-home-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_HOME_CONTROLLER,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-project-catalog-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_CATALOG_CLIENT,
+    },
+    EmbeddedAsset {
+        name: "file-entry-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: FILE_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-workspace-session-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: WORKSPACE_SESSION_CLIENT,
+    },
+    EmbeddedAsset {
+        name: "chaptera-cloud-source-ingress-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: SOURCE_INGRESS_CLIENT,
+    },
+    EmbeddedAsset {
+        name: "product-editor.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: EDITOR_CSS,
+    },
+    EmbeddedAsset {
+        name: "product-editor-entry-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: EDITOR_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "chaptera-product-editor-service-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PRODUCT_SERVICE,
+    },
+    EmbeddedAsset {
+        name: "rich-reader-editor-shell-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: RICH_SHELL,
+    },
+    EmbeddedAsset {
+        name: "reader-scene-editor-interaction-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: INTERACTION_SCENE,
+    },
+    EmbeddedAsset {
+        name: "interaction-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: INTERACTION,
+    },
+    EmbeddedAsset {
+        name: "observability-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: OBSERVABILITY,
+    },
+    EmbeddedAsset {
+        name: "reader-scene-editor-adapter-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: READER_ADAPTER,
+    },
+    EmbeddedAsset {
+        name: "cloud-reader/render-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: READER_RENDER,
+    },
+    EmbeddedAsset {
+        name: "cloud-project-rename-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: PROJECT_RENAME_CLIENT,
+    },
+    EmbeddedAsset {
+        name: "text-protocol-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEXT_PROTOCOL,
+    },
+    EmbeddedAsset {
+        name: "temporary-edit-browser-session-v0.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_EDIT_BROWSER_SESSION,
+    },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.html",
+        content_type: "text/html; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_HTML,
+    },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_ENTRY,
+    },
+    EmbeddedAsset {
+        name: "temporary-editor-preview.css",
+        content_type: "text/css; charset=utf-8",
+        bytes: TEMPORARY_PREVIEW_CSS,
+    },
+    EmbeddedAsset {
+        name: "temporary-edit-move-client-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_EDIT_MOVE_CLIENT,
+    },
+    EmbeddedAsset {
+        name: "story-line-endings-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: STORY_LINE_ENDINGS,
+    },
+    EmbeddedAsset {
+        name: "resize-gesture-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_RESIZE_GESTURE,
+    },
+];
+
+pub fn router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/editor/doc/{document_id}", get(index))
+        .route("/editor", get(project_home))
+        .route("/editor/projects", get(project_home))
+        .route("/editor/new", get(new_project))
+        .route("/editor/cloud-project-home.css", get(project_home_css))
+        .route("/editor/cloud-project-home-v1.mjs", get(project_home_entry))
+        .route(
+            "/editor/cloud-project-rename-v1.mjs",
+            get(project_rename_client),
+        )
+        .route("/editor/project-home-v1.mjs", get(project_home_controller))
+        .route(
+            "/editor/chaptera-cloud-project-catalog-v1.mjs",
+            get(project_catalog_client),
+        )
+        .route("/editor/cloud-project-new.css", get(create_css))
+        .route("/editor/cloud-project-new-v1.mjs", get(create_entry))
+        .route("/editor/file-entry-v1.mjs", get(file_entry))
+        .route(
+            "/editor/chaptera-cloud-workspace-session-v1.mjs",
+            get(workspace_session_client),
+        )
+        .route(
+            "/editor/chaptera-cloud-source-ingress-v1.mjs",
+            get(source_ingress_client),
+        )
+        .route("/editor/product-editor.css", get(editor_css))
+        .route("/editor/product-editor-entry-v1.mjs", get(editor_entry))
+        .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
+        .route(
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            get(temporary_edit_browser_session),
+        )
+        // Pilot entry is explicitly named "preview" and intentionally has
+        // no canonical edit or changed-file export controls.
+        .route("/editor/temporary-preview", get(temporary_preview))
+        .route(
+            "/editor/temporary-editor-preview.mjs",
+            get(temporary_preview_entry),
+        )
+        .route(
+            "/editor/temporary-editor-preview.css",
+            get(temporary_preview_css),
+        )
+        .route(
+            "/editor/chaptera-product-editor-service-v1.mjs",
+            get(product_service),
+        )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
+        .route("/editor/rich-reader-editor-shell-v1.mjs", get(rich_shell))
+        .route(
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+            get(interaction_scene),
+        )
+        .route("/editor/interaction-v1.mjs", get(interaction))
+        .route("/editor/observability-v1.mjs", get(observability))
+        .route(
+            "/editor/reader-scene-editor-adapter-v1.mjs",
+            get(reader_adapter),
+        )
+        .route("/cloud-reader/render-v1.mjs", get(reader_render))
+}
+
+/// Minimal public assets for an anonymous filesystem-backed temporary
+/// session. Unlike router(), this must not expose Product/OIDC project
+/// routes or document editor modules when Chaptera runs without AuthN.
+pub fn temporary_preview_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/editor/temporary-preview", get(temporary_preview))
+        .route(
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            get(temporary_edit_browser_session),
+        )
+        .route(
+            "/editor/temporary-editor-preview.mjs",
+            get(temporary_preview_entry),
+        )
+        .route(
+            "/editor/temporary-editor-preview.css",
+            get(temporary_preview_css),
+        )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
+        // Existing source-neutral text helpers, not Product AuthN routes.
+        .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
+        .route("/editor/interaction-v1.mjs", get(interaction))
+        .route(
+            "/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs",
+            get(temporary_resize_gesture),
+        )
+        .route(
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+            get(interaction_scene),
+        )
+        .route("/cloud-reader/render-v1.mjs", get(reader_render))
+}
+
+pub fn version_manifest() -> Value {
+    let files = ASSETS
+        .iter()
+        .map(|asset| {
+            json!({
+                "name": asset.name,
+                "byte_len": asset.bytes.len(),
+                "sha256": format!("{:x}", Sha256::digest(asset.bytes)),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({ "embedded": true, "asset_count": ASSETS.len(), "files": files })
+}
+
+async fn index() -> Response {
+    asset_response(&ASSETS[0])
+}
+async fn new_project() -> Response {
+    asset_response(&ASSETS[1])
+}
+async fn project_home() -> Response {
+    asset_response(&ASSETS[4])
+}
+async fn project_home_css() -> Response {
+    asset_response(&ASSETS[5])
+}
+async fn project_home_entry() -> Response {
+    asset_response(&ASSETS[6])
+}
+async fn project_rename_client() -> Response {
+    asset_response(&ASSETS[21])
+}
+async fn project_home_controller() -> Response {
+    asset_response(&ASSETS[7])
+}
+async fn project_catalog_client() -> Response {
+    asset_response(&ASSETS[8])
+}
+async fn create_css() -> Response {
+    asset_response(&ASSETS[2])
+}
+async fn create_entry() -> Response {
+    asset_response(&ASSETS[3])
+}
+async fn file_entry() -> Response {
+    asset_response(&ASSETS[9])
+}
+async fn workspace_session_client() -> Response {
+    asset_response(&ASSETS[10])
+}
+async fn source_ingress_client() -> Response {
+    asset_response(&ASSETS[11])
+}
+async fn editor_css() -> Response {
+    asset_response(&ASSETS[12])
+}
+async fn editor_entry() -> Response {
+    asset_response(&ASSETS[13])
+}
+async fn text_protocol() -> Response {
+    asset_response(&ASSETS[22])
+}
+async fn story_line_endings() -> Response {
+    asset_response(&ASSETS[28])
+}
+async fn temporary_edit_browser_session() -> Response {
+    asset_response(&ASSETS[23])
+}
+async fn temporary_preview() -> Response {
+    asset_response(&ASSETS[24])
+}
+async fn temporary_preview_entry() -> Response {
+    asset_response(&ASSETS[25])
+}
+async fn temporary_preview_css() -> Response {
+    asset_response(&ASSETS[26])
+}
+async fn temporary_edit_move_client() -> Response {
+    asset_response(&ASSETS[27])
+}
+async fn temporary_resize_gesture() -> Response {
+    asset_response(&ASSETS[29])
+}
+async fn product_service() -> Response {
+    asset_response(&ASSETS[14])
+}
+async fn rich_shell() -> Response {
+    asset_response(&ASSETS[15])
+}
+async fn interaction_scene() -> Response {
+    asset_response(&ASSETS[16])
+}
+async fn interaction() -> Response {
+    asset_response(&ASSETS[17])
+}
+async fn observability() -> Response {
+    asset_response(&ASSETS[18])
+}
+async fn reader_adapter() -> Response {
+    asset_response(&ASSETS[19])
+}
+async fn reader_render() -> Response {
+    asset_response(&ASSETS[20])
+}
+
+fn asset_response(asset: &EmbeddedAsset) -> Response {
+    let mut response = Response::new(Body::from(Bytes::from_static(asset.bytes)));
+    *response.status_mut() = StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(asset.content_type));
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static(PERMISSIONS_POLICY),
+    );
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    const DOC: &str = "10000000-0000-7000-8000-000000000001";
+
+    #[tokio::test]
+    async fn editor_document_route_serves_source_neutral_product_entry() {
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/editor/doc/{DOC}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("frame-ancestors 'none'")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = std::str::from_utf8(&bytes).unwrap();
+        assert!(html.contains("/editor/product-editor-entry-v1.mjs"));
+        assert!(!html.contains("synthetic-editor"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+    }
+
+    #[tokio::test]
+    async fn product_service_reader_adapter_import_is_physically_served() {
+        let service = std::str::from_utf8(PRODUCT_SERVICE).unwrap();
+        assert!(service.contains("./reader-scene-editor-adapter-v1.mjs"));
+        assert!(service.contains("./reader-scene-editor-interaction-v1.mjs"));
+
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/reader-scene-editor-adapter-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), READER_ADAPTER);
+    }
+
+    #[tokio::test]
+    async fn guest_resize_gesture_is_the_canonical_embedded_protocol_module() {
+        let module = std::str::from_utf8(TEMPORARY_PREVIEW_ENTRY).unwrap();
+        assert!(module.contains("../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"));
+        let response = temporary_preview_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEMPORARY_RESIZE_GESTURE);
+        assert!(
+            std::str::from_utf8(TEMPORARY_RESIZE_GESTURE)
+                .unwrap()
+                .contains("export class ResizeTransactionV1")
+        );
+    }
+
+    #[tokio::test]
+    async fn story_line_endings_is_a_real_same_origin_editor_module() {
+        assert!(
+            std::str::from_utf8(EDITOR_ENTRY)
+                .unwrap()
+                .contains("./story-line-endings-v1.mjs")
+        );
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/story-line-endings-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'self'")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), STORY_LINE_ENDINGS);
+        assert!(
+            version_manifest()["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["name"].as_str() == Some("story-line-endings-v1.mjs"))
+        );
+    }
+
+    #[tokio::test]
+    async fn product_text_protocol_is_an_embedded_csp_module() {
+        assert!(
+            std::str::from_utf8(PRODUCT_SERVICE)
+                .unwrap()
+                .contains("./text-protocol-v1.mjs")
+        );
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/text-protocol-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEXT_PROTOCOL);
+    }
+
+    #[tokio::test]
+    async fn temporary_edit_browser_module_is_embedded_without_public_edit_entry() {
+        let module = std::str::from_utf8(TEMPORARY_EDIT_BROWSER_SESSION).unwrap();
+        assert!(module.contains("can_edit: false"));
+        assert!(module.contains("can_download_changed_file: false"));
+        assert!(module.contains("/v1/editor/temporary-sessions"));
+        let routes = router::<()>();
+        let response = routes
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary-edit-browser-session-v0.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("connect-src 'self'")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEMPORARY_EDIT_BROWSER_SESSION);
+
+        // This is only a reusable read-only intake client; no user-facing
+        // temporary edit/download route is enabled by serving the module.
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn temporary_preview_entry_is_same_origin_csp_and_source_bound() {
+        let routes = router::<()>();
+        for (uri, content_type, bytes) in [
+            (
+                "/editor/temporary-preview",
+                "text/html; charset=utf-8",
+                TEMPORARY_PREVIEW_HTML,
+            ),
+            (
+                "/editor/temporary-editor-preview.mjs",
+                "text/javascript; charset=utf-8",
+                TEMPORARY_PREVIEW_ENTRY,
+            ),
+            (
+                "/editor/temporary-editor-preview.css",
+                "text/css; charset=utf-8",
+                TEMPORARY_PREVIEW_CSS,
+            ),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(response.headers()["cache-control"], "no-cache");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+            assert!(
+                response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .contains("connect-src 'self'")
+            );
+            let received = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(received.as_ref(), bytes, "{uri}");
+        }
+
+        let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
+        assert!(html.contains("Просмотр и PDF без правки"));
+        assert!(html.contains("/editor/temporary-editor-preview.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+        assert!(!html.contains("temporary_access_token="));
+
+        // This route is not the future full editing/export entry.
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/temporary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn guest_only_preview_route_excludes_product_auth_and_edit_pages() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-preview",
+            "/editor/temporary-edit-browser-session-v0.mjs",
+            "/editor/temporary-editor-preview.mjs",
+            "/editor/temporary-editor-preview.css",
+            "/cloud-reader/render-v1.mjs",
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        }
+
+        // The no-auth renderer lane must NOT expose the normal Product
+        // project/login/editor entry or accidentally create a guest edit API.
+        for path in [
+            "/editor",
+            "/editor/new",
+            "/editor/projects",
+            "/editor/doc/10000000-0000-7000-8000-000000000001",
+            "/editor/product-editor-entry-v1.mjs",
+            "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_move_module_is_only_static_and_never_mounts_product_routes() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/javascript; charset=utf-8"
+            );
+        }
+        for path in [
+            "/editor/chaptera-product-editor-service-v1.mjs",
+            "/editor/rich-reader-editor-shell-v1.mjs",
+            "/editor/reader-scene-editor-adapter-v1.mjs",
+            "/editor/product-editor-entry-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn editor_assets_include_shared_reader_renderer_alias() {
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/cloud-reader/render-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), READER_RENDER);
+    }
+
+    #[tokio::test]
+    async fn cloud_pub_new_project_route_serves_embedded_modules() {
+        let routes = router::<()>();
+        for (uri, expected_type, bytes) in [
+            ("/editor/new", "text/html; charset=utf-8", CREATE_HTML),
+            (
+                "/editor/cloud-project-new.css",
+                "text/css; charset=utf-8",
+                CREATE_CSS,
+            ),
+            (
+                "/editor/cloud-project-new-v1.mjs",
+                "text/javascript; charset=utf-8",
+                CREATE_ENTRY,
+            ),
+            (
+                "/editor/file-entry-v1.mjs",
+                "text/javascript; charset=utf-8",
+                FILE_ENTRY,
+            ),
+            (
+                "/editor/chaptera-cloud-workspace-session-v1.mjs",
+                "text/javascript; charset=utf-8",
+                WORKSPACE_SESSION_CLIENT,
+            ),
+            (
+                "/editor/chaptera-cloud-source-ingress-v1.mjs",
+                "text/javascript; charset=utf-8",
+                SOURCE_INGRESS_CLIENT,
+            ),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], expected_type, "{uri}");
+            let response_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(response_bytes.as_ref(), bytes, "{uri}");
+        }
+        let html = std::str::from_utf8(CREATE_HTML).unwrap();
+        assert!(html.contains("/editor/cloud-project-new-v1.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+    }
+
+    #[tokio::test]
+    async fn project_rename_module_is_embedded_as_same_origin_csp_resource() {
+        let response = router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/editor/cloud-project-rename-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("connect-src 'self'")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), PROJECT_RENAME_CLIENT);
+    }
+
+    #[tokio::test]
+    async fn cloud_project_home_route_serves_catalog_modules() {
+        let routes = router::<()>();
+        for (uri, expected_type, bytes) in [
+            ("/editor", "text/html; charset=utf-8", HOME_HTML),
+            ("/editor/projects", "text/html; charset=utf-8", HOME_HTML),
+            (
+                "/editor/cloud-project-home.css",
+                "text/css; charset=utf-8",
+                HOME_CSS,
+            ),
+            (
+                "/editor/cloud-project-home-v1.mjs",
+                "text/javascript; charset=utf-8",
+                HOME_ENTRY,
+            ),
+            (
+                "/editor/project-home-v1.mjs",
+                "text/javascript; charset=utf-8",
+                PROJECT_HOME_CONTROLLER,
+            ),
+            (
+                "/editor/chaptera-cloud-project-catalog-v1.mjs",
+                "text/javascript; charset=utf-8",
+                PROJECT_CATALOG_CLIENT,
+            ),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()["content-type"], expected_type, "{uri}");
+            let response_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(response_bytes.as_ref(), bytes, "{uri}");
+        }
+        let html = std::str::from_utf8(HOME_HTML).unwrap();
+        assert!(html.contains("/editor/cloud-project-home-v1.mjs"));
+        assert!(!html.contains("x-chaptera-principal-id"));
+    }
+
+    #[test]
+    fn manifest_covers_every_embedded_editor_asset() {
+        let manifest = version_manifest();
+        assert_eq!(manifest["asset_count"], ASSETS.len());
+        assert_eq!(manifest["files"].as_array().unwrap().len(), ASSETS.len());
+    }
+}

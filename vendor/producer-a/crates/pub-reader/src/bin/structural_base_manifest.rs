@@ -1,8 +1,11 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, io::Cursor, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use pub_contents::{Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32};
-use pub_core::RawSpan;
+use pub_contents::{
+    parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32,
+};
+use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
     PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
     PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
@@ -50,14 +53,100 @@ struct SelectedTarget {
 }
 
 #[derive(Debug, Serialize)]
+struct ContentsReferenceFieldSummary {
+    id: u16,
+    block_type: u8,
+    raw_tag: [u8; 2],
+    scalar_u16: Option<u16>,
+    scalar_u32: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContentsReferenceSummary {
+    seq_num: usize,
+    source: RawSpan,
+    raw_types: Vec<u16>,
+    chunk_offsets: Vec<u32>,
+    parent_seq_nums: Vec<u32>,
+    fields: Vec<ContentsReferenceFieldSummary>,
+}
+
+#[derive(Debug, Serialize)]
 struct Receipt {
     schema: &'static str,
     source_sha256: Sha256Digest,
     structural_schema: &'static str,
     stream_count: usize,
     candidate_count: usize,
+    contents_slot_count: usize,
+    contents_references: Vec<ContentsReferenceSummary>,
     selected_target: SelectedTarget,
     manifest: PubStructuralBaseManifest,
+}
+
+fn contents_reference_inventory(
+    pub_bytes: &[u8],
+) -> Result<(usize, Vec<ContentsReferenceSummary>)> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), "/Contents")
+        .context("read /Contents for structural reference inventory")?;
+    let stream = StreamPath("/Contents".into());
+    let header = parse_0x2c_header(stream, &contents)
+        .context("parse mature-0x2C Contents header for structural reference inventory")?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+        .context("parse mature-0x2C Contents trailer for structural reference inventory")?;
+
+    let slot_count = trailer.directory.slots.len();
+    let mut references = Vec::new();
+    for seq_num in 0..slot_count {
+        let Some(reference) =
+            parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse Contents reference slot {seq_num}"))?
+        else {
+            continue;
+        };
+
+        let fields = reference
+            .fields
+            .iter()
+            .map(|field| {
+                let (scalar_u16, scalar_u32) = match &field.body {
+                    RawContentsBlockBody::U16 { value, .. } => (Some(*value), None),
+                    RawContentsBlockBody::U32 { value, .. } => (None, Some(*value)),
+                    _ => (None, None),
+                };
+                ContentsReferenceFieldSummary {
+                    id: field.id,
+                    block_type: field.block_type,
+                    raw_tag: field.raw_tag,
+                    scalar_u16,
+                    scalar_u32,
+                }
+            })
+            .collect();
+
+        references.push(ContentsReferenceSummary {
+            seq_num,
+            source: reference.source,
+            raw_types: reference
+                .raw_types
+                .into_iter()
+                .map(|field| field.value)
+                .collect(),
+            chunk_offsets: reference
+                .chunk_offsets
+                .into_iter()
+                .map(|field| field.value)
+                .collect(),
+            parent_seq_nums: reference
+                .parent_seq_nums
+                .into_iter()
+                .map(|field| field.value)
+                .collect(),
+            fields,
+        });
+    }
+
+    Ok((slot_count, references))
 }
 
 fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
@@ -202,6 +291,7 @@ fn main() -> Result<()> {
     let bytes = fs::read(&input).with_context(|| format!("read {}", input.display()))?;
     let manifest = build_mature_0x2c_structural_base_manifest(&bytes)
         .with_context(|| format!("build structural base for {}", input.display()))?;
+    let (contents_slot_count, contents_references) = contents_reference_inventory(&bytes)?;
     let selected_target = select_target(&manifest)?;
 
     let receipt = Receipt {
@@ -210,6 +300,8 @@ fn main() -> Result<()> {
         structural_schema: PUB_STRUCTURAL_BASE_SCHEMA_V1,
         stream_count: manifest.streams.len(),
         candidate_count: manifest.candidates.len(),
+        contents_slot_count,
+        contents_references,
         selected_target,
         manifest,
     };

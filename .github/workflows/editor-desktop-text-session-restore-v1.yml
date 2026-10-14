@@ -3,9 +3,14 @@ name: Editor Desktop Text Session Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/text_session_gui_tests.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs"
+      - "crates/chaptera-desktop-shaped-flow-runtime/src/current_typography.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/session_text.rs"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
   push:
     branches:
@@ -16,11 +21,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  format-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format Desktop direct-text slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
   direct-text:
+    needs: format-preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,9 +47,6 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
-
-      - name: Format Desktop direct-text slice
-        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
       - name: Check Desktop direct-text integration
         run: cargo check -p chaptera-desktop --all-targets
@@ -46,6 +61,13 @@ jobs:
           -A clippy::collapsible_if
           -A clippy::too_many_arguments
 
+      # Execute shell-local tests, not just `cargo check --all-targets`.
+      # These cover committed-vs-rejected rebind classification and guard
+      # against a duplicate direct Viewer refresh in the canvas text shell.
+      - name: Test canvas text commit finalization and refresh-route guards
+        run: >-
+          cargo test -p chaptera-desktop text_session_shell::tests:: -- --nocapture
+
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: bash
         run: |
@@ -58,12 +80,39 @@ jobs:
           test "${actual_bytes}" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=${fixture}" >> "${GITHUB_ENV}"
 
+      - name: Acquire pinned 51318 text-format witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/chaptera-text-format-fixtures"
+          mkdir -p "${root}"
+          fixture="${root}/51318.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/51318.pub" \
+            --output "${fixture}"
+          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+          test "${actual_sha}" = "3ab75a6a9196e0a51fc9b0aa759459501c71d313030c06652aabffbae0a2ab09"
+          test "${actual_bytes}" = "88576"
+          echo "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=${root}" >> "${GITHUB_ENV}"
+
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
+      - name: Prove linked Story same-session frame handoff on real PUB
+        run: cargo test -p chaptera-desktop real_sample_newsletter_linked_story_session_hands_off_between_frames_without_topology_mutation -- --nocapture
+
+      - name: Prove scoped Bold Italic history on real PUB
+        run: cargo test -p chaptera-desktop real_pub_story_uses_scoped_desktop_bold_italic_history_v016 -- --nocapture
+
+      - name: Prove scoped Bold reaches current shaped-flow typography
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml real_51318_scoped_bold_reaches_current_boolean_typography -- --nocapture
 
   gui-direct-text:
+    needs: format-preflight
     runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +120,18 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+
+      - name: Restore validated Windows Cargo dependencies
+        id: desktop-cargo-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
 
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: pwsh
