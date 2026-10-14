@@ -230,7 +230,7 @@ def execute(args: argparse.Namespace, environ: dict[str, str] | None = None) -> 
             raise TransportError("outputs_inside_checkout")
         state_path = state_root / "checkpoint.json"
         state = load_state(state_path)
-        if state["last_seen"] == head and not args.force:
+        if state["last_success"] == head and not args.force:
             report.update(status="UNCHANGED", exit_code=0, coverage="same_head")
             return 0, report
         old, coverage = baseline(repo, head, state["last_success"])
