@@ -323,7 +323,7 @@ test("temporary Guest plain Story field posts exact private range and repaints a
     };
     reply.authoring_graph.stories = {
       [storyId]: {text, runs: [], paragraphs: [], fields: [], hyperlinks: []},
-      [otherStoryId]: {text: "Other\\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      [otherStoryId]: {text: "Other\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
     };
     return reply;
   };
@@ -390,7 +390,7 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   assert.equal(dom.nodes["temporary-story-select"].value, storyId,
     "canvas selection must activate the Story owned by its canonical TextFrame");
   assert.equal(dom.nodes["temporary-story-text"].value, "Initial");
-  assert.equal(seen.filter(call => /\\/(?:story-range|move-node)$/.test(call.url)).length, 0,
+  assert.equal(seen.filter(call => call.url.endsWith("/story-range") || call.url.endsWith("/move-node")).length, 0,
     "selection never commits or extends the TTL");
   const editor = dom.nodes["temporary-story-text"];
   const apply = dom.nodes["temporary-story-apply"];
