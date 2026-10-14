@@ -478,7 +478,10 @@ mod tests {
             scene["resources"][0]["derivative_id"].as_str(),
             Some(derivative.as_str())
         );
-        assert_eq!(scene["resources"][0]["byte_len"].as_u64(), Some(encoded.len() as u64));
+        assert_eq!(
+            scene["resources"][0]["byte_len"].as_u64(),
+            Some(encoded.len() as u64)
+        );
         assert_eq!(scene["fidelity"]["state"], "partial");
         assert!(
             scene["fidelity"]["reasons"]
