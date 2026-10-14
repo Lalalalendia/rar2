@@ -92,6 +92,12 @@ jobs:
       - name: Build real Chaptera server and isolated worker
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
+      - name: Verify synthetic CMYK four-frame worker-to-host SafePreview regression
+        run: |
+          cargo test -p chaptera-server --lib --jobs 2 \
+            safe_preview_scene::tests::synthetic_adobe_cmyk_one_resource_four_frames_passes_worker_host_boundary \
+            -- --exact
+
       - name: Run real 022 isolated Product worker -> host image admission (not authenticated HTTP)
         env:
           CHAPTERA_PREVIEW_PROBE_PUB: ${{ runner.temp }}/reader-preview-022/022.pub
