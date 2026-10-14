@@ -821,7 +821,6 @@ fn temporary_resize_accepted(
     }))
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemporaryEditorCreateShapeRequest {
@@ -871,35 +870,57 @@ fn validate_temporary_create_shape_request(
         || request.document_id != path_session_id
         || request.command.kind != "create_shape"
     {
-        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_request_invalid"));
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_create_shape_request_invalid",
+        ));
     }
     if request.client_operation_id.is_empty()
         || request.client_operation_id.len() > 160
-        || !request.client_operation_id.bytes().all(|ch|
-            ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'_' | b':' | b'-'))
+        || !request
+            .client_operation_id
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'_' | b':' | b'-'))
         || request.command.page_id.len() != 36
-        || serde_json::from_value::<pub_editor::PageId>(
-            Value::String(request.command.page_id.clone()),
-        ).is_err()
+        || serde_json::from_value::<pub_editor::PageId>(Value::String(
+            request.command.page_id.clone(),
+        ))
+        .is_err()
         || request.command.x_emu < 0
         || request.command.y_emu < 0
         || request.command.width_emu <= 0
         || request.command.height_emu <= 0
         || request.command.stroke_width_emu <= 0
         || request.command.stroke_width_emu > 1_000_000
-        || request.command.x_emu.checked_add(request.command.width_emu).is_none()
-        || request.command.y_emu.checked_add(request.command.height_emu).is_none()
+        || request
+            .command
+            .x_emu
+            .checked_add(request.command.width_emu)
+            .is_none()
+        || request
+            .command
+            .y_emu
+            .checked_add(request.command.height_emu)
+            .is_none()
     {
-        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_intent_invalid"));
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_create_shape_intent_invalid",
+        ));
     }
     let valid_hash = |value: &str| {
         value.len() == 64
-            && value.bytes().all(|ch| ch.is_ascii_digit() || matches!(ch, b'a'..=b'f'))
+            && value
+                .bytes()
+                .all(|ch| ch.is_ascii_digit() || matches!(ch, b'a'..=b'f'))
     };
     if !valid_hash(&request.source_hash)
-        || !request.base_revision_id.strip_prefix("sha256:").is_some_and(valid_hash)
+        || !request
+            .base_revision_id
+            .strip_prefix("sha256:")
+            .is_some_and(valid_hash)
     {
-        return Err(GuestReaderError::bad_request("temporary_editor_create_shape_revision_invalid"));
+        return Err(GuestReaderError::bad_request(
+            "temporary_editor_create_shape_revision_invalid",
+        ));
     }
     Ok(())
 }
@@ -924,12 +945,16 @@ fn temporary_create_shape_accepted(
         || edge.child_revision != binding.service_revision_id
         || binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1
     {
-        return Err(GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"));
+        return Err(GuestReaderError::internal(
+            "temporary_editor_create_shape_receipt_invalid",
+        ));
     }
     let event = decode_editor_revision_event_v1(&edge)
         .map_err(|_| GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"))?;
     if !matches!(event.operation, EditOperation::CreateShape { .. }) {
-        return Err(GuestReaderError::internal("temporary_editor_create_shape_receipt_invalid"));
+        return Err(GuestReaderError::internal(
+            "temporary_editor_create_shape_receipt_invalid",
+        ));
     }
     Ok(GuestJson(TemporaryEditorCreateShapeAccepted {
         protocol_version: "chaptera.temporary-editor-create-shape.v1",
@@ -958,7 +983,11 @@ fn temporary_author_uuid_v7(now_ms: i64) -> String {
     let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     format!(
         "{}-{}-{}-{}-{}",
-        &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
     )
 }
 
@@ -2214,15 +2243,22 @@ async fn temporary_editor_create_shape(
 
     // The original immutable PUB's isolated canonical page graph decides
     // eligibility; do not trust a browser-provided page size or node identity.
-    let page_id: pub_editor::PageId = serde_json::from_value(Value::String(
-        request.command.page_id.clone(),
-    )).map_err(|_| GuestReaderError::bad_request("temporary_editor_create_shape_page_invalid"))?;
+    let page_id: pub_editor::PageId =
+        serde_json::from_value(Value::String(request.command.page_id.clone())).map_err(|_| {
+            GuestReaderError::bad_request("temporary_editor_create_shape_page_invalid")
+        })?;
     let page = current.authoring_graph.pages.get(&page_id).ok_or_else(|| {
         GuestReaderError::unprocessable("temporary_editor_create_shape_page_missing")
     })?;
-    if request.command.x_emu.checked_add(request.command.width_emu)
+    if request
+        .command
+        .x_emu
+        .checked_add(request.command.width_emu)
         .is_none_or(|x| x > page.size.width.get())
-        || request.command.y_emu.checked_add(request.command.height_emu)
+        || request
+            .command
+            .y_emu
+            .checked_add(request.command.height_emu)
             .is_none_or(|y| y > page.size.height.get())
     {
         return Err(GuestReaderError::unprocessable(

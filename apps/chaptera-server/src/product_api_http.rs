@@ -2010,7 +2010,7 @@ mod tests {
 
     #[test]
     fn authored_reader_rectangles_preserve_identity_and_paint_but_not_fabricated_z_order() {
-        use crate::reader_scene_v1::{ReaderFidelityV1, ReaderPageV1, READER_SCENE_V1};
+        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
         use pub_editor::{
             AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, PageId, RectEmu,
             Srgb8V1,
@@ -2026,9 +2026,15 @@ mod tests {
             revision_id: format!("sha256:{}", "b".repeat(64)),
             scene_authority: "server_viewer_projection",
             stacking_fidelity: "source_back_to_front",
-            fidelity: ReaderFidelityV1 { state: "supported", reasons: Vec::new() },
+            fidelity: ReaderFidelityV1 {
+                state: "supported",
+                reasons: Vec::new(),
+            },
             pages: vec![ReaderPageV1 {
-                page_id: page_id.into(), order: 0, width_emu: 2_000_000, height_emu: 2_000_000,
+                page_id: page_id.into(),
+                order: 0,
+                width_emu: 2_000_000,
+                height_emu: 2_000_000,
             }],
             nodes: Vec::new(),
             stories: Vec::new(),
@@ -2043,18 +2049,28 @@ mod tests {
             parent_id: page,
             shape_kind: AuthoredShapeKindV1::Rectangle,
             bounds: RectEmu::new(
-                LengthEmu::new(100_000), LengthEmu::new(200_000),
-                LengthEmu::new(300_000), LengthEmu::new(400_000),
+                LengthEmu::new(100_000),
+                LengthEmu::new(200_000),
+                LengthEmu::new(300_000),
+                LengthEmu::new(400_000),
             ),
             transform: AuthoredShapeTransformV1::Identity,
             paint: AuthoredShapePaintV1 {
                 fill: AuthoredSolidFillV1 {
                     visible: true,
-                    color: Srgb8V1 { r: 18, g: 52, b: 86 },
+                    color: Srgb8V1 {
+                        r: 18,
+                        g: 52,
+                        b: 86,
+                    },
                 },
                 stroke: AuthoredSolidStrokeV1 {
                     visible: true,
-                    color: Srgb8V1 { r: 170, g: 187, b: 204 },
+                    color: Srgb8V1 {
+                        r: 170,
+                        g: 187,
+                        b: 204,
+                    },
                     width_emu: 12_700,
                 },
                 provenance: AuthoredEntityProvenanceV1::AuthorCreated,
@@ -2068,18 +2084,38 @@ mod tests {
         assert_eq!(scene.nodes[0].kind, "shape");
         assert_eq!(scene.nodes[0].bounds.x, 100_000);
         assert_eq!(scene.nodes[0].bounds.height, 400_000);
-        assert_eq!(scene.nodes[0].paint.as_ref().unwrap().fill_rgb, Some([18, 52, 86]));
-        assert_eq!(scene.nodes[0].paint.as_ref().unwrap().line.as_ref().unwrap().width_emu, 12_700);
+        assert_eq!(
+            scene.nodes[0].paint.as_ref().unwrap().fill_rgb,
+            Some([18, 52, 86])
+        );
+        assert_eq!(
+            scene.nodes[0]
+                .paint
+                .as_ref()
+                .unwrap()
+                .line
+                .as_ref()
+                .unwrap()
+                .width_emu,
+            12_700
+        );
         assert_eq!(scene.stacking_fidelity, "unknown");
         assert_eq!(scene.fidelity.state, "partial");
-        assert!(scene.fidelity.reasons.contains(&"authored_rectangle_mixed_order_unsupported"));
+        assert!(
+            scene
+                .fidelity
+                .reasons
+                .contains(&"authored_rectangle_mixed_order_unsupported")
+        );
         // Duplicate ID or a non-existent PageId is never represented.
         assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[shape.clone()]).is_err());
         scene.nodes.clear();
         let mut malformed = shape;
         malformed.bounds = RectEmu::new(
-            LengthEmu::new(1_900_000), LengthEmu::new(100),
-            LengthEmu::new(300_000), LengthEmu::new(400_000),
+            LengthEmu::new(1_900_000),
+            LengthEmu::new(100),
+            LengthEmu::new(300_000),
+            LengthEmu::new(400_000),
         );
         assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[malformed]).is_err());
     }
