@@ -25,7 +25,7 @@ jobs:
         mode: [split, shared]
     env:
       RUSTFLAGS: -C target-feature=+crt-static
-      CARGO_TERM_COLOR: never
+      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
@@ -66,7 +66,7 @@ jobs:
             Get-Content $errlog -Tail 80
             throw "root cargo build failed with exit code $($proc.ExitCode)"
           }
-          $compiles = @(Select-String -Path $errlog -Pattern '^\s*Compiling\s+').Count
+          $compiles = @(Select-String -Path $errlog -Pattern 'Compiling\s+[^\s]+\s+v[0-9]').Count
           $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
           Write-Host "E1_RESULT mode=${{ matrix.mode }} phase=root seconds=$duration compiling=$compiles exit=0"
           Get-Content $errlog -Tail 3
@@ -89,7 +89,7 @@ jobs:
             Get-Content $errlog -Tail 80
             throw "producer cargo build failed with exit code $($proc.ExitCode)"
           }
-          $compiles = @(Select-String -Path $errlog -Pattern '^\s*Compiling\s+').Count
+          $compiles = @(Select-String -Path $errlog -Pattern 'Compiling\s+[^\s]+\s+v[0-9]').Count
           $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
           Write-Host "E1_RESULT mode=$mode phase=producer seconds=$duration compiling=$compiles exit=0"
           Get-Content $errlog -Tail 3
