@@ -8,11 +8,13 @@ on:
       - "apps/web/temporary-edit-move-client-v1.mjs"
       - "apps/web/temporary-edit-move-client-v1.test.mjs"
       - "apps/web/temporary-edit-move-client-v1.scene.test.mjs"
+      - "apps/web/temporary-edit-move-client-v1.create-shape.test.mjs"
       - "apps/web/temporary-editor-preview.html"
       - "apps/web/temporary-editor-preview.css"
       - "apps/web/temporary-editor-preview.mjs"
       - "apps/web/temporary-editor-preview.test.mjs"
       - "apps/web/temporary-editor-preview.gesture.test.mjs"
+      - "apps/web/temporary-editor-preview.rectangle.test.mjs"
       - ".github/workflows/web-temporary-editor-browser-v0.yml"
   workflow_dispatch:
 
@@ -36,4 +38,4 @@ jobs:
         run: |
           node --check apps/web/temporary-editor-preview.mjs
           node --check apps/web/temporary-edit-move-client-v1.mjs
-          node --test apps/web/temporary-edit-browser-session-v0.test.mjs apps/web/temporary-edit-move-client-v1.test.mjs apps/web/temporary-edit-move-client-v1.scene.test.mjs apps/web/temporary-editor-preview.test.mjs apps/web/temporary-editor-preview.gesture.test.mjs
+          node --test apps/web/temporary-edit-browser-session-v0.test.mjs apps/web/temporary-edit-move-client-v1.test.mjs apps/web/temporary-edit-move-client-v1.scene.test.mjs apps/web/temporary-edit-move-client-v1.create-shape.test.mjs apps/web/temporary-editor-preview.test.mjs apps/web/temporary-editor-preview.gesture.test.mjs apps/web/temporary-editor-preview.rectangle.test.mjs
