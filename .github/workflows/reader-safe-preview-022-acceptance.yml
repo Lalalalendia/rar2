@@ -6,6 +6,7 @@ on:
       - "apps/chaptera-server/src/safe_preview_scene.rs"
       - "apps/chaptera-server/tests/reader_safe_preview_real_v1.rs"
       - "apps/cloud-reader/product-safe-preview-022-browser.test.mjs"
+      - "apps/cloud-reader/synthetic-cmyk-four-frame-browser.test.mjs"
       - "tools/reader_safe_preview_visual_022.py"
       - ".github/workflows/reader-safe-preview-022-acceptance.yml"
   workflow_dispatch:
@@ -93,6 +94,8 @@ jobs:
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
       - name: Verify synthetic CMYK four-frame worker-to-host SafePreview regression
+        env:
+          CHAPTERA_SYNTHETIC_CMYK_SCENE_OUT: ${{ runner.temp }}/reader-preview-022/synthetic-cmyk-scene.json
         run: |
           cargo test -p chaptera-server --lib --jobs 2 \
             safe_preview_scene::tests::synthetic_adobe_cmyk_one_resource_four_frames_passes_worker_host_boundary \
@@ -115,6 +118,11 @@ jobs:
           npx playwright install --with-deps chromium
           python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           python -m py_compile tools/reader_safe_preview_visual_022.py
+
+      - name: Render four host-owned CMYK-derived picture placements in real Chromium
+        env:
+          CHAPTERA_SYNTHETIC_CMYK_SCENE_OUT: ${{ runner.temp }}/reader-preview-022/synthetic-cmyk-scene.json
+        run: node apps/cloud-reader/synthetic-cmyk-four-frame-browser.test.mjs
 
       - name: Measure actual 022 image paint and same-head source-neutral ablation
         env:
