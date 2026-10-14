@@ -15,6 +15,9 @@ on:
       - "tools/ci/local_dev_handoff.py"
       - "tools/ci/test_local_dev_handoff.py"
       - "docs/ci-local-dev-handoff-01.md"
+      - "tools/ci/bootstrap_local_dev_runner.py"
+      - "tools/ci/test_bootstrap_local_dev_runner.py"
+      - "docs/ci-local-dev-bootstrap-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -43,6 +46,10 @@ jobs:
         run: |
           python -m py_compile tools/ci/local_dev_handoff.py
           python -m unittest discover -s tools/ci -p test_local_dev_handoff.py
+      - name: Offline Windows dev runner bootstrap contract
+        run: |
+          python -m py_compile tools/ci/bootstrap_local_dev_runner.py
+          python -m unittest discover -s tools/ci -p test_bootstrap_local_dev_runner.py
       - name: Prove a bounded self-plan
         run: |
           python tools/dev_fast_loop.py \
