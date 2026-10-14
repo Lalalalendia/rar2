@@ -88,6 +88,64 @@ def _intersects(envelope, tx, ty, tile_px, dpi):
     )
 
 
+def _verified_source_links(trace_receipt, painted_nodes):
+    """Validate explicitly recorded source refs; never infer a PUB address."""
+    entries = trace_receipt.get("source_nodes")
+    if entries is None:
+        return {}
+    source_hash = trace_receipt.get("source_sha256")
+    if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        raise TraceJoinError("source-linked trace lacks valid primary PUB SHA-256")
+    if not isinstance(entries, list) or len(entries) > MAX_PAINT_EVENTS:
+        raise TraceJoinError("invalid source link count")
+    statuses = {
+        "unmapped_projected_node",
+        "no_exact_authoritative_source_ref",
+        "exact_source_object_only",
+        "exact_source_byte_range",
+    }
+    linked = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            raise TraceJoinError("malformed source link")
+        node = str(item.get("node_origin"))
+        if node not in painted_nodes or node in linked:
+            raise TraceJoinError("unknown or duplicate source-linked NodeId")
+        status, refs = item.get("status"), item.get("source_refs")
+        if status not in statuses or not isinstance(refs, list):
+            raise TraceJoinError("invalid source link authority status")
+        has_byte_range = False
+        for ref in refs:
+            if not isinstance(ref, dict) or ref.get("source_hash") != source_hash:
+                raise TraceJoinError("source reference hash differs from primary PUB")
+            if (ref.get("authority"), ref.get("confidence"), ref.get("role")) not in (
+                ("authoritative", "exact", "semantic"),
+                ("authoritative", "exact", "projection"),
+            ):
+                raise TraceJoinError("non-authoritative or inferred source reference")
+            span = ref.get("byte_range")
+            if span is not None:
+                if not isinstance(span, dict):
+                    raise TraceJoinError("malformed source byte range")
+                offset, length = span.get("offset"), span.get("length")
+                if not isinstance(offset, int) or not isinstance(length, int):
+                    raise TraceJoinError("noninteger source byte range")
+                if min(offset, length) < 0 or offset + length > (2**64 - 1):
+                    raise TraceJoinError("overflowing source byte range")
+                has_byte_range = True
+        expected = (
+            "exact_source_byte_range" if has_byte_range else "exact_source_object_only"
+        ) if refs else status
+        if refs and status != expected:
+            raise TraceJoinError("claimed source range status disagrees with references")
+        if not refs and status not in (
+            "unmapped_projected_node", "no_exact_authoritative_source_ref"
+        ):
+            raise TraceJoinError("claimed exact source authority without references")
+        linked[node] = {"status": status, "source_refs": refs}
+    return linked
+
+
 def join_paint_trace(trace_receipt, reference_receipt):
     """Return ordered candidate matches, not uniquely attributed pixel causes.
 
@@ -134,6 +192,8 @@ def join_paint_trace(trace_receipt, reference_receipt):
         if not isinstance(indices, list) or len(indices) != 2 or not (0 <= indices[0] < indices[1]):
             raise TraceJoinError("invalid PDF program byte range")
         events_by_page[key].append(event)
+    painted_nodes = {str(event["node_origin"]) for event in all_events}
+    source_links = _verified_source_links(trace_receipt, painted_nodes)
     rows = []
     for page_index, (page, oracle) in enumerate(zip(pages, oracle_pages)):
         _page_geometry(page, oracle, dpi)
@@ -160,6 +220,12 @@ def join_paint_trace(trace_receipt, reference_receipt):
                 "resource_origin": event.get("resource_origin"),
                 "text_run_ordinal": event.get("text_run_ordinal"),
                 "page_paint_index": event["page_paint_index"],
+                "source_link_status": source_links.get(
+                    str(event["node_origin"]), {}
+                ).get("status", "trace_not_available"),
+                "source_refs": source_links.get(
+                    str(event["node_origin"]), {}
+                ).get("source_refs", []),
                 "candidate_significant_tile_count": len(matching),
                 "overlapped_candidate_tile_count": sum(
                     len(matches_by_tile[i]) > 1 for i in matching
@@ -184,6 +250,7 @@ def join_paint_trace(trace_receipt, reference_receipt):
             "Node envelopes are not exact glyph ink, clipping or image crop bounds.",
             "A changed tile can intersect multiple objects; candidate tile counts are non-additive.",
             "Last painted envelope candidate is not proof of the visible or causal source.",
+            "SourceRef links are admitted only when exact and authoritative for the primary PUB.",
             "Publisher native PDF has no Chaptera NodeId; external source matching remains unproven.",
             "Only unrotated, uncropped one-copy pages are supported in this first join.",
         ],
