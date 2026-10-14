@@ -148,6 +148,36 @@ pub struct PdfRenderCapabilities {
     pub richer_vectors_effects: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfPaintTraceKindV1 {
+    Rectangle,
+    Image,
+    Text,
+}
+
+/// One emitted paint operation in page-local, back-to-front order.
+///
+/// The byte range indexes the unwrapped page paint program before the final
+/// page-height transform. Nine-up repeats this program nine times, so the
+/// range does not pretend to identify one physical sheet copy. Node bounds
+/// are geometry envelopes, not exact glyph ink, clipping or visible pixels.
+/// The trace never includes source media bytes, Story text or font binaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdfPaintTraceEventV1 {
+    pub page_origin: PageId,
+    pub node_origin: NodeId,
+    pub page_paint_index: usize,
+    pub kind: PdfPaintTraceKindV1,
+    pub node_bounds_emu: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_origin: Option<ResourceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_run_ordinal: Option<usize>,
+    pub unwrapped_program_byte_range: [usize; 2],
+    pub output_sheet_copies: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PdfRenderReport {
     pub schema_version: String,
@@ -163,6 +193,8 @@ pub struct PdfRenderReport {
 pub struct PdfRenderOutput {
     pub bytes: Vec<u8>,
     pub report: PdfRenderReport,
+    /// Source-neutral diagnostic sidecar kept out of public release receipts.
+    pub paint_trace: Vec<PdfPaintTraceEventV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +325,42 @@ impl From<PdfTextPreparationError> for PdfRenderError {
     fn from(value: PdfTextPreparationError) -> Self {
         Self::Text(value)
     }
+}
+
+fn record_paint_trace(
+    trace: &mut Vec<PdfPaintTraceEventV1>,
+    page_indices: &mut BTreeMap<PageId, usize>,
+    page: PageId,
+    node: &ResolvedPhysicalNode,
+    kind: PdfPaintTraceKindV1,
+    resource_origin: Option<ResourceId>,
+    text_run_ordinal: Option<usize>,
+    from: usize,
+    to: usize,
+    nine_up: bool,
+) {
+    debug_assert!(
+        to > from,
+        "an emitted paint operation writes actual commands"
+    );
+    let next_index = page_indices.entry(page).or_insert(0);
+    trace.push(PdfPaintTraceEventV1 {
+        page_origin: page,
+        node_origin: node.origin,
+        page_paint_index: *next_index,
+        kind,
+        node_bounds_emu: [
+            node.bounds.x.get(),
+            node.bounds.y.get(),
+            node.bounds.width.get(),
+            node.bounds.height.get(),
+        ],
+        resource_origin,
+        text_run_ordinal,
+        unwrapped_program_byte_range: [from, to],
+        output_sheet_copies: if nine_up { 9 } else { 1 },
+    });
+    *next_index += 1;
 }
 
 /// Render the current bounded fixed-PDF subset.
@@ -465,6 +533,8 @@ fn render_bounded_pdf_with_sheet(
         .map(|surface| (surface.origin, String::new()))
         .collect::<BTreeMap<_, _>>();
     let mut reports = Vec::with_capacity(nodes.len());
+    let mut paint_trace = Vec::new();
+    let mut paint_indices_by_page = BTreeMap::<PageId, usize>::new();
     let mut diagnostics = Vec::new();
     let mut image_resources_by_page = surfaces
         .iter()
@@ -526,11 +596,25 @@ fn render_bounded_pdf_with_sheet(
             .expect("page content buffer must exist");
 
         if let Some(paint) = valid_paint {
+            let from = content.len();
             append_rectangle(content, node, paint);
+            record_paint_trace(
+                &mut paint_trace,
+                &mut paint_indices_by_page,
+                surface.origin,
+                node,
+                PdfPaintTraceKindV1::Rectangle,
+                None,
+                None,
+                from,
+                content.len(),
+                nine_up,
+            );
         }
 
         let mut image_painted = false;
         let mut image_partial = false;
+        let image_program_start = content.len();
         if let Some(resource_id) = image_resource_id {
             let prepared = prepared_images
                 .get(&resource_id)
@@ -576,6 +660,18 @@ fn render_bounded_pdf_with_sheet(
                         }
                     }
                     if image_painted {
+                        record_paint_trace(
+                            &mut paint_trace,
+                            &mut paint_indices_by_page,
+                            surface.origin,
+                            node,
+                            PdfPaintTraceKindV1::Image,
+                            Some(resource_id),
+                            None,
+                            image_program_start,
+                            content.len(),
+                            nine_up,
+                        );
                         image_resources_by_page
                             .get_mut(&surface.origin)
                             .expect("page image resource set must exist")
@@ -597,15 +693,28 @@ fn render_bounded_pdf_with_sheet(
         let mut text_painted = false;
         let mut text_partial = false;
         if let Some(runs) = prepared_text.runs_by_node.get(&node.origin) {
-            for run in runs {
+            for (ordinal, run) in runs.iter().enumerate() {
                 match run {
                     text::PreparedTextRun::Painted { .. } => {
+                        let from = content.len();
                         if let Some(identity) = text::append_text(
                             content,
                             node.bounds.x.get(),
                             node.bounds.y.get(),
                             run,
                         ) {
+                            record_paint_trace(
+                                &mut paint_trace,
+                                &mut paint_indices_by_page,
+                                surface.origin,
+                                node,
+                                PdfPaintTraceKindV1::Text,
+                                None,
+                                Some(ordinal),
+                                from,
+                                content.len(),
+                                nine_up,
+                            );
                             font_resources_by_page
                                 .get_mut(&surface.origin)
                                 .expect("page font resource set must exist")
@@ -715,6 +824,7 @@ fn render_bounded_pdf_with_sheet(
 
     Ok(PdfRenderOutput {
         bytes,
+        paint_trace,
         report: PdfRenderReport {
             schema_version: PDF_RENDER_SCHEMA_V0_1.into(),
             target: target.clone(),
@@ -1495,6 +1605,46 @@ mod tests {
     }
 
     #[test]
+    fn paint_trace_is_page_local_and_maps_to_written_rectangle_operators() {
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources(),
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .expect("valid fixed PDF");
+        let trace = &output.paint_trace;
+        assert_eq!(trace.len(), 2, "unsupported nodes emit no paint trace");
+        assert_eq!(trace[0].page_origin, page_id(1));
+        assert_eq!(trace[0].node_origin, node_id(11));
+        assert_eq!(trace[0].page_paint_index, 0);
+        assert_eq!(trace[0].kind, PdfPaintTraceKindV1::Rectangle);
+        assert_eq!(
+            trace[0].node_bounds_emu,
+            [381_000, 508_000, 889_000, 762_000]
+        );
+        assert_eq!(trace[1].node_origin, node_id(10));
+        assert_eq!(trace[1].page_paint_index, 1);
+        assert_eq!(trace[0].output_sheet_copies, 1);
+        let header = b"q\n1 0 0 -1 0 780 cm\n";
+        let prefix = output
+            .bytes
+            .windows(header.len())
+            .position(|window| window == header)
+            .expect("page one transform");
+        let program_base = prefix + header.len();
+        for event in trace {
+            let [from, to] = event.unwrapped_program_byte_range;
+            assert!(to > from);
+            let operation = &output.bytes[program_base + from..program_base + to];
+            assert!(operation.starts_with(b"q\n"));
+            assert!(operation.ends_with(b"Q\n"));
+        }
+        let trace_json = serde_json::to_string(trace).expect("serializable trace");
+        assert!(!trace_json.contains("ActualText"));
+        assert!(!trace_json.contains("font_binary"));
+    }
+
+    #[test]
     fn emitted_rectangle_coordinates_and_paint_are_stable() {
         let output = render_bounded_pdf(
             &scene(),
@@ -1574,6 +1724,20 @@ mod tests {
             render(&visual),
             "identical order remains byte deterministic"
         );
+        let observed = first
+            .paint_trace
+            .iter()
+            .filter(|event| event.kind == PdfPaintTraceKindV1::Image)
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].node_origin, node_id(11));
+        assert_eq!(observed[0].resource_origin, Some(back_image));
+        assert_eq!(observed[0].page_paint_index, 0);
+        assert_eq!(observed[1].node_origin, node_id(10));
+        assert_eq!(observed[1].resource_origin, Some(front_image));
+        assert_eq!(observed[1].page_paint_index, 1);
+        assert_eq!(observed[0].node_bounds_emu, observed[1].node_bounds_emu);
+
         let pdf = String::from_utf8_lossy(&first.bytes);
         let back_op = format!("/{} Do\n", image_name(back_image));
         let front_op = format!("/{} Do\n", image_name(front_image));
@@ -1589,6 +1753,10 @@ mod tests {
         reversed.nodes.reverse();
         let second = render(&reversed);
         assert_ne!(first.bytes, second.bytes);
+        assert_eq!(second.paint_trace[0].node_origin, node_id(10));
+        assert_eq!(second.paint_trace[0].resource_origin, Some(front_image));
+        assert_eq!(second.paint_trace[1].node_origin, node_id(11));
+        assert_eq!(second.paint_trace[1].resource_origin, Some(back_image));
         let inverse_pdf = String::from_utf8_lossy(&second.bytes);
         assert!(
             inverse_pdf.find(&front_op).expect("front operator")

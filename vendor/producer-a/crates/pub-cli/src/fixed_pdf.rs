@@ -106,11 +106,14 @@ pub fn convert_pdf(
     let pub_bytes = admitted.bytes();
     let font_bytes = fs::read(fallback_font)
         .with_context(|| format!("read explicit fallback font {}", fallback_font.display()))?;
-    let (artifact, report, summary) = build_pdf_artifact(
+    // Explicit opt-in; no provenance geometry in default public receipts.
+    let trace_requested = std::env::var("CHAPTERA_PDF_PAINT_TRACE").as_deref() == Ok("1");
+    let (artifact, report, summary, paint_trace_receipt) = build_pdf_artifact(
         &pub_bytes,
         report_path_label(input, "input.pub"),
         &font_bytes,
         report_path_label(fallback_font, "fallback-font.ttf"),
+        trace_requested,
     )?;
 
     if let Some(parent) = output
@@ -136,6 +139,18 @@ pub fn convert_pdf(
         .commit_derived_output(&report_text_path, summary.as_bytes())
         .with_context(|| format!("commit PDF loss summary {}", report_text_path.display()))?;
 
+    if let Some(receipt) = paint_trace_receipt {
+        // This diagnostic exposes NodeId and page geometry, which may reveal
+        // private publication structure. Never upload it as a public CI artifact.
+        let trace_path = sidecar_path(output, ".paint-trace.json");
+        admitted
+            .commit_derived_output(
+                &trace_path,
+                &serde_json::to_vec_pretty(&receipt).context("serialize private paint trace")?,
+            )
+            .with_context(|| format!("commit private paint trace {}", trace_path.display()))?;
+    }
+
     Ok(PdfConversionResult {
         report,
         report_json_path,
@@ -148,7 +163,8 @@ fn build_pdf_artifact(
     source_label: String,
     fallback_font_bytes: &[u8],
     fallback_label: String,
-) -> Result<(Vec<u8>, Value, String)> {
+    trace_requested: bool,
+) -> Result<(Vec<u8>, Value, String, Option<Value>)> {
     let classification = pub_viewer::classify_pub_family(pub_bytes);
     let source_profile_id = match classification.route {
         pub_viewer::PubReaderRoute::Mature2c => "pub-mature-0x2c-v0.1",
@@ -602,7 +618,20 @@ fn build_pdf_artifact(
         summary
     };
 
-    Ok((rendered.bytes, report, summary))
+    let paint_trace_receipt = trace_requested.then(|| {
+        let pdf_sha256 = Sha256::digest(&rendered.bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        serde_json::json!({
+            "schema_version": "chaptera.pdf-paint-trace.v1",
+            "candidate_pdf_sha256": pdf_sha256,
+            "pages": &rendered.report.pages,
+            "paint_trace": &rendered.paint_trace,
+        })
+    });
+
+    Ok((rendered.bytes, report, summary, paint_trace_receipt))
 }
 
 fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
