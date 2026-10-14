@@ -1526,8 +1526,12 @@ pub fn run_product_replay_worker(
                 "CreateShape page is absent from the source graph",
             )
         })?;
-        if bounds.right().is_none_or(|x| x.get() > page.size.width.get())
-            || bounds.bottom().is_none_or(|y| y.get() > page.size.height.get())
+        if bounds
+            .right()
+            .is_none_or(|x| x.get() > page.size.width.get())
+            || bounds
+                .bottom()
+                .is_none_or(|y| y.get() > page.size.height.get())
         {
             return Err(ProductReplayWorkerError::new(
                 "product_create_shape_rejected",
