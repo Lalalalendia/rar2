@@ -53,13 +53,16 @@ try {
   }
   const page = await context.newPage();
   const calls = [];
+  const historyCalls = [];
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   page.on("request", request => {
     const path = new URL(request.url()).pathname;
-    if (!path.endsWith("/story-commit") || request.method() !== "POST") return;
-    calls.push({ path, csrf: !!request.headers()["x-csrf-token"],
-      forgedPrincipal: !!request.headers()["x-chaptera-principal-id"] });
+    if (request.method() !== "POST") return;
+    const trace = { path, csrf: !!request.headers()["x-csrf-token"],
+      forgedPrincipal: !!request.headers()["x-chaptera-principal-id"] };
+    if (path.endsWith("/story-commit")) calls.push(trace);
+    if (path.endsWith("/history")) historyCalls.push(trace);
   });
 
   await page.goto(origin + "/editor/new", { waitUntil: "domcontentloaded" });
@@ -311,6 +314,7 @@ try {
 
   let finalRevisionId = receipt.revision_id;
   let finalCanonical = desiredCanonical;
+  let finalText = desired;
   let pasteInputConfirmed = false;
   let pasteRevisionId = null;
   if (browserEngine === "chromium") {
@@ -394,8 +398,99 @@ try {
     }
     finalRevisionId = pasteReceipt.revision_id;
     finalCanonical = pastedCanonical;
+    finalText = pastedText;
     pasteRevisionId = pasteReceipt.revision_id;
   }
+
+  const historyBaseRevisionId = finalRevisionId;
+  const undoCanonical = browserEngine === "chromium" ? desiredCanonical : priorCanonical;
+  const undoText = browserEngine === "chromium" ? desired : priorText;
+  const undoResponsePromise = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/documents/" + documentId + "/history",
+  { timeout: 90000 });
+  await page.locator("#undo-action").click();
+  const undoResponse = await undoResponsePromise;
+  const undoSubmitted = undoResponse.request().postDataJSON();
+  const undoReceipt = await undoResponse.json().catch(() => null);
+  if (undoResponse.status() !== 200 ||
+      undoSubmitted?.base_revision_id !== historyBaseRevisionId ||
+      undoSubmitted?.command?.kind !== "undo" ||
+      undoReceipt?.protocol_version !== "chaptera.history-transition-accepted.v1" ||
+      undoReceipt.transition_kind !== "undo" ||
+      undoReceipt.base_revision_id !== historyBaseRevisionId ||
+      undoReceipt.revision_id === historyBaseRevisionId ||
+      undoReceipt.replayed !== false) {
+    throw new Error("Story Undo did not produce one exact canonical history revision");
+  }
+  await requirePaint(undoReceipt.revision_id);
+  const undoneCurrent = await readProduct();
+  const undoneScene = await readScene(undoReceipt.revision_id);
+  if (undoneCurrent.revision_id !== undoReceipt.revision_id ||
+      undoneCurrent.authoring_graph?.stories?.[selected.storyId]?.text !== undoCanonical ||
+      !undoneScene.stories?.some(story =>
+        story.story_id === selected.storyId && story.text === undoCanonical)) {
+    throw new Error("Story Undo did not restore canonical current and Reader Scene text");
+  }
+  await page.waitForFunction(({storyId, text}) =>
+    document.querySelector("#story-status")?.textContent?.includes("Canonical Story loaded") &&
+    document.querySelector("#story-select")?.value === storyId &&
+    document.querySelector("#story-input")?.value === text,
+  {storyId: selected.storyId, text: undoText}, { timeout: 90000 });
+
+  const redoResponsePromise = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/documents/" + documentId + "/history",
+  { timeout: 90000 });
+  await page.locator("#redo-action").click();
+  const redoResponse = await redoResponsePromise;
+  const redoSubmitted = redoResponse.request().postDataJSON();
+  const redoReceipt = await redoResponse.json().catch(() => null);
+  if (redoResponse.status() !== 200 ||
+      redoSubmitted?.base_revision_id !== undoReceipt.revision_id ||
+      redoSubmitted?.command?.kind !== "redo" ||
+      redoReceipt?.protocol_version !== "chaptera.history-transition-accepted.v1" ||
+      redoReceipt.transition_kind !== "redo" ||
+      redoReceipt.base_revision_id !== undoReceipt.revision_id ||
+      redoReceipt.revision_id === undoReceipt.revision_id ||
+      redoReceipt.replayed !== false) {
+    throw new Error("Story Redo did not produce one exact canonical history revision");
+  }
+  await requirePaint(redoReceipt.revision_id);
+  const redoneCurrent = await readProduct();
+  const redoneScene = await readScene(redoReceipt.revision_id);
+  if (redoneCurrent.revision_id !== redoReceipt.revision_id ||
+      redoneCurrent.authoring_graph?.stories?.[selected.storyId]?.text !== finalCanonical ||
+      !redoneScene.stories?.some(story =>
+        story.story_id === selected.storyId && story.text === finalCanonical)) {
+    throw new Error("Story Redo did not restore canonical current and Reader Scene text");
+  }
+  await page.waitForFunction(({storyId, text}) =>
+    document.querySelector("#story-status")?.textContent?.includes("Canonical Story loaded") &&
+    document.querySelector("#story-select")?.value === storyId &&
+    document.querySelector("#story-input")?.value === text,
+  {storyId: selected.storyId, text: finalText}, { timeout: 90000 });
+
+  const rejectedRedoPromise = page.waitForResponse(response =>
+    response.request().method() === "POST" &&
+    decodeURIComponent(new URL(response.url()).pathname) ===
+      "/v1/documents/" + documentId + "/history",
+  { timeout: 90000 });
+  await page.locator("#redo-action").click();
+  const rejectedRedoResponse = await rejectedRedoPromise;
+  const rejectedRedo = await rejectedRedoResponse.json().catch(() => null);
+  if (rejectedRedoResponse.status() !== 409 ||
+      rejectedRedo?.error?.code !== "redo_unavailable") {
+    throw new Error("a second Redo did not fail closed as unavailable");
+  }
+  const afterRejectedRedo = await readProduct();
+  if (afterRejectedRedo.revision_id !== redoReceipt.revision_id || historyCalls.length !== 3 ||
+      historyCalls.some(call => !call.csrf || call.forgedPrincipal)) {
+    throw new Error("Story history calls were not exactly authorized or rejection mutated state");
+  }
+  finalRevisionId = redoReceipt.revision_id;
 
   const exportResult = await page.evaluate(async ({id, revisionId}) => {
     const sessionResponse = await fetch("/v1/session", {
@@ -546,6 +641,8 @@ try {
     committed_revision_id: finalRevisionId,
     initial_text_revision_id: receipt.revision_id,
     paste_revision_id: pasteRevisionId,
+    undo_revision_id: undoReceipt.revision_id,
+    redo_revision_id: redoReceipt.revision_id,
     real_dom_textarea_input: true,
     input_path: browserEngine === "chromium"
       ? "chromium_ime_composition"
@@ -564,7 +661,9 @@ try {
     anonymous_read_denied: true,
     source_bytes_in_receipt: false,
     browser_layout_is_canonical: false,
-    story_undo_redo_claim: false,
+    story_undo_redo_claim: true,
+    authorized_history_call_count: historyCalls.length,
+    redo_unavailable_confirmed: true,
     export_job_claim: true,
     export_job_id: exportResult.job_id,
     export_target_profile: exportResult.target_profile,

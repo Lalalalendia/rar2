@@ -913,10 +913,13 @@ fn validate_history_event_fields(
             "materialization V2 admits bounded durable undo and redo only",
         ));
     }
-    if !matches!(event.operation, EditOperation::MoveNode { .. }) {
+    if !matches!(
+        event.operation,
+        EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+    ) {
         return Err(RevisionMaterializerError::new(
             "unsupported_history_operation",
-            "durable history V2 currently admits MoveNode undo only",
+            "durable history V2 admits MoveNode or plain StoryRange history only",
         ));
     }
     require_sha256(&event.source_sha256, "event.source_sha256")?;
@@ -1155,6 +1158,49 @@ mod replay_identity_tests {
         let undone = undo_event_operation(project, &operation).unwrap();
         assert!(undone.operations.is_empty());
         assert_eq!(undone.schema_version, EDITOR_PROJECT_VERSION_V0_2);
+    }
+
+    #[test]
+    fn durable_history_event_admits_plain_story_range_but_rejects_other_text_operations() {
+        let story_range: EditOperation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_range",
+            "story_id": "40000000-0000-4000-8000-000000000001",
+            "start_scalar": 0,
+            "end_scalar": 1,
+            "expected_before": "A",
+            "replacement_text": "B",
+            "before_story_state_id": format!("sha256:{}", "1".repeat(64)),
+            "after_story_state_id": format!("sha256:{}", "2".repeat(64))
+        }))
+        .unwrap();
+        let event = EditorHistoryEventV1 {
+            schema_version: EDITOR_HISTORY_EVENT_SCHEMA_V1.to_owned(),
+            source_sha256: "a".repeat(64),
+            transition_kind: "undo".to_owned(),
+            before_project_sha256: "b".repeat(64),
+            after_project_sha256: "c".repeat(64),
+            base_state_id: format!("sha256:{}", "d".repeat(64)),
+            resulting_state_id: format!("sha256:{}", "e".repeat(64)),
+            authoring_root_hash: None,
+            operation: story_range,
+        };
+
+        assert!(validate_history_event_fields(&event).is_ok());
+
+        let mut unsupported = event;
+        unsupported.operation = serde_json::from_value(serde_json::json!({
+            "kind": "replace_story_text",
+            "story_id": "40000000-0000-4000-8000-000000000001",
+            "before": "A",
+            "after": "B"
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_history_event_fields(&unsupported)
+                .unwrap_err()
+                .code,
+            "unsupported_history_operation"
+        );
     }
 
     #[test]
