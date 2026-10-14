@@ -1,0 +1,21 @@
+# RAR2 guarded branch GC: 2026-10-14, evidence batch 42.
+# Execution-only, do not merge. Exactly 15 live refs verified.
+# All unprotected; none is an open PR head/base as of verification.
+# Recheck SHA lease and active PR topology at execution time.
+# Format: branch exact-live-head-sha # evidence.
+
+ops/branch-gc-20261009-batch39-conservative 800fde15b1355b10b4e492616c3b72c2f0109550 # ahead=0, ancestor of main
+ops/branch-gc-20261013-safe15-0200-a 14e08b4802726e9829afca33209a6236b7ec811b # ahead=0, ancestor of main
+ops/branch-gc-20261013-verified-wave41 9dfcf849639dea4d663c3903970ab3178601170e # ahead=0, ancestor of main
+ops/branch-gc-20261013-wave41-verified ae265bfaa709b361e2c8125614be8f13299b479c # ahead=0, ancestor of main
+ops/branch-gc-20261009-evidence-batch40 cd57cd351ebcf18c9bf3d5815faa97f663125cd3 # closed execution-only PR #2438; historical evidence remains
+feat/temporary-editor-resize-node-v1-20261013 3b86399c265a37727aa426aee5ef2bce4b48c3fe # closed PR #2753 superseded by merged PR #2750
+fix/cloud-reader-linux-embedded-assets-release-trigger-01 e1e31f62c5e5e358a03bfce4d91eef0540b2039f # closed PR #2726 superseded by merged PR #2727
+feat/reader-product-49-111-physical-probe 751de7e5caba42166f4671cef877a2e57b6656a3 # closed PR #2695 superseded by merged PR #2693
+fix/reader-safe-preview-worker-host-20261011 4a13d425e968e24d76c062500f7611fd7aa647d7 # closed PR #2628 superseded by merged PR #2629
+reader/simple-public-shell a430dfce89e41b78927b2579a84b878b88fe477e # closed PR #1823 superseded by merged PRs #1832/#1835
+ci/pub-editor-table-track-core-1766 2b4dffa9fcbb8731a707450ecb5816265db33761 # closed PR #1768 superseded by merged PR #1767
+ci/shaped-flow-lib-split-01 ded8733edf84a5cf3766c71adbcbe759ecc212ef # closed PR #1743 superseded by merged PRs #1744/#1746
+authoring/table-rowcol-v021-fresh-main-02 9f392713da6e6fef631f15120ccd4a74c11fa9b5 # closed PR #1640 superseded by merged PR #1674
+viewer/grouped-image-ancestor-hflip-01 ca4e8755e852b71d7940981b4a9fa4e4606e92d1 # closed PR #1880 superseded by merged PR #1894
+fix/temp-v0-production-ttl-3600-20261013 f85801a960234d838425b5388725bc9c1025add3 # closed PR #2741; false positive, separate tempedit 3600s TTL verified
