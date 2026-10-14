@@ -376,8 +376,13 @@ fn render_bounded_pdf_with_sheet(
         }
     }
 
-    let mut nodes = scene.nodes.clone();
-    nodes.sort_by_key(|node| node.origin);
+    // The resolved scene is a back-to-front paint sequence. In particular,
+    // pub-viewer applies admitted source-page stacking order to these slots.
+    // Sorting by canonical NodeId here can draw a background image *after*
+    // its foreground image even when Viewer displays them correctly.
+    // Keep the caller's deterministic scene order; unknown source-order
+    // participants retain their existing bounded projection slots.
+    let nodes = scene.nodes.clone();
 
     let node_ids = nodes
         .iter()
@@ -1502,6 +1507,94 @@ mod tests {
         assert!(text.contains("1 0 0 -1 0 780 cm"));
         assert!(text.contains("1 0 0 rg\n10 20 100 50 re\nf"));
         assert!(text.contains("0 0 1 RG\n1 w\n30 40 70 60 re\nS"));
+    }
+
+    #[test]
+    fn overlapping_exact_images_keep_resolved_scene_back_to_front_order() {
+        use std::io::Cursor;
+
+        // The front image deliberately has a numerically LOWER canonical
+        // NodeId than the back image. Sorting by NodeId is not paint-order
+        // authority and would conceal the foreground resource.
+        let mut visual = scene();
+        let page = page_id(1);
+        visual.surfaces.retain(|surface| surface.origin == page);
+        visual
+            .nodes
+            .retain(|node| node.parent_origin == page.into_canonical());
+        assert_eq!(
+            visual
+                .nodes
+                .iter()
+                .map(|node| node.origin)
+                .collect::<Vec<_>>(),
+            vec![node_id(11), node_id(10)]
+        );
+        visual.nodes[0].bounds = visual.nodes[1].bounds;
+
+        let png = |rgb: [u8; 3]| {
+            let image = image::RgbImage::from_pixel(2, 2, image::Rgb(rgb));
+            let mut bytes = Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image)
+                .write_to(&mut bytes, ImageFormat::Png)
+                .expect("synthetic 2x2 test PNG");
+            bytes.into_inner()
+        };
+        let back_image = resource_id(61);
+        let front_image = resource_id(62);
+        let images = FixedPdfResources {
+            images: vec![
+                FixedImageResource {
+                    resource_id: back_image,
+                    mime: "image/png".into(),
+                    source_exact: true,
+                    node_ids: vec![node_id(11)],
+                    placements: Vec::new(),
+                    bytes: png([0, 0, 255]),
+                },
+                FixedImageResource {
+                    resource_id: front_image,
+                    mime: "image/png".into(),
+                    source_exact: true,
+                    node_ids: vec![node_id(10)],
+                    placements: Vec::new(),
+                    bytes: png([255, 0, 0]),
+                },
+            ],
+            ..FixedPdfResources::default()
+        };
+        let render = |scene: &BoundedResolvedScene| {
+            render_bounded_pdf(scene, &images, &PdfTargetProfile::basic_geometry_v0_1())
+                .expect("valid bounded source-free image render")
+        };
+
+        let first = render(&visual);
+        assert_eq!(
+            first,
+            render(&visual),
+            "identical order remains byte deterministic"
+        );
+        let pdf = String::from_utf8_lossy(&first.bytes);
+        let back_op = format!("/{} Do\n", image_name(back_image));
+        let front_op = format!("/{} Do\n", image_name(front_image));
+        assert!(
+            pdf.find(&back_op).expect("back image operator")
+                < pdf.find(&front_op).expect("front image operator"),
+            "the team image must paint after the covered background"
+        );
+
+        // Reversing explicit scene order reverses actual paint order. This
+        // guards against a future canonical-NodeId sort in the PDF backend.
+        let mut reversed = visual.clone();
+        reversed.nodes.reverse();
+        let second = render(&reversed);
+        assert_ne!(first.bytes, second.bytes);
+        let inverse_pdf = String::from_utf8_lossy(&second.bytes);
+        assert!(
+            inverse_pdf.find(&front_op).expect("front operator")
+                < inverse_pdf.find(&back_op).expect("back operator"),
+            "scene ordering, not NodeId, controls overlapping image stacking"
+        );
     }
 
     #[test]
