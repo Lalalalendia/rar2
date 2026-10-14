@@ -11,8 +11,9 @@ use pub_output::{
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
-    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfTargetProfile, render_bounded_pdf,
+    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedImageSourceWindow,
+    FixedNodePaint, FixedPdfResources, FixedStroke, FixedTextRun, PdfTargetProfile,
+    render_bounded_pdf,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -71,11 +72,12 @@ fn report_path_label(path: &Path, fallback: &str) -> String {
 
 fn fixed_image_placement_has_output_semantics(
     mime: &str,
+    source_exact: bool,
     placement: &pub_viewer::ViewerImagePlacementV1,
 ) -> bool {
     placement.content_rotation_degrees.is_some()
-        || (mime == "image/gif"
-            && (placement.source_window.is_some() || placement.recolor.is_some()))
+        || (placement.source_window.is_some() && (source_exact || mime == "image/gif"))
+        || (mime == "image/gif" && placement.recolor.is_some())
 }
 
 fn retain_scene_node_ids(
@@ -478,12 +480,23 @@ fn build_pdf_artifact(
                 .iter()
                 .filter(|placement| {
                     node_ids.contains(&placement.node_id)
-                        && fixed_image_placement_has_output_semantics(&image.mime, placement)
+                        && fixed_image_placement_has_output_semantics(
+                            &image.mime,
+                            image.source_exact,
+                            placement,
+                        )
                 })
                 .map(|placement| FixedImagePlacement {
                     node_id: placement.node_id,
                     content_rotation_degrees: placement.content_rotation_degrees,
-                    source_window_present: placement.source_window.is_some(),
+                    source_window: placement.source_window.as_ref().map(|window| {
+                        FixedImageSourceWindow {
+                            left_q16: window.left_q16,
+                            top_q16: window.top_q16,
+                            right_q16: window.right_q16,
+                            bottom_q16: window.bottom_q16,
+                        }
+                    }),
                     recolor_present: placement.recolor.is_some(),
                 })
                 .collect();
@@ -656,10 +669,12 @@ mod tests {
         };
         assert!(!fixed_image_placement_has_output_semantics(
             "image/png",
+            true,
             &empty
         ));
         assert!(!fixed_image_placement_has_output_semantics(
             "image/gif",
+            true,
             &empty
         ));
 
@@ -667,6 +682,7 @@ mod tests {
         rotation.content_rotation_degrees = Some(90);
         assert!(fixed_image_placement_has_output_semantics(
             "image/png",
+            true,
             &rotation
         ));
 
@@ -677,12 +693,19 @@ mod tests {
             right_q16: 1 << 15,
             bottom_q16: 1 << 16,
         });
+        assert!(fixed_image_placement_has_output_semantics(
+            "image/png",
+            true,
+            &crop
+        ));
         assert!(!fixed_image_placement_has_output_semantics(
             "image/png",
+            false,
             &crop
         ));
         assert!(fixed_image_placement_has_output_semantics(
             "image/gif",
+            true,
             &crop
         ));
 
@@ -693,10 +716,12 @@ mod tests {
         });
         assert!(!fixed_image_placement_has_output_semantics(
             "image/jpeg",
+            true,
             &recolor
         ));
         assert!(fixed_image_placement_has_output_semantics(
             "image/gif",
+            true,
             &recolor
         ));
     }
