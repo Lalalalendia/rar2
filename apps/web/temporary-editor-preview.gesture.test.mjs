@@ -311,20 +311,28 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   });
   await controller.start({name: "example.pub", size: 1729});
   assert.equal(dom.nodes["temporary-story-panel"].hidden, false);
+  assert.equal(dom.nodes["temporary-story-select"].disabled, false);
+  assert.equal(dom.nodes["temporary-story-text"].disabled, false);
+  assert.equal(dom.nodes["temporary-story-apply"].disabled, false);
   assert.equal(dom.nodes["temporary-story-select"].value, storyId);
   assert.equal(dom.nodes["temporary-story-text"].value, "Initial");
   const editor = dom.nodes["temporary-story-text"];
   const apply = dom.nodes["temporary-story-apply"];
   editor.value = "Edited";
   editor.handlers.compositionstart();
+  assert.equal(apply.disabled, true, "IME composition must disable Story submission");
   await apply.handlers.click();
   assert.equal(seen.filter(call => call.url.endsWith("/story-range")).length, 0);
   editor.handlers.compositionend();
+  assert.equal(apply.disabled, false, "Story submission resumes after composition");
   await apply.handlers.click();
   assert.equal(seen.filter(call => call.url.endsWith("/story-range")).length, 1);
   assert.equal(renders.at(-1).revision_id, afterRev);
   assert.equal(dom.nodes["temporary-story-text"].value, "Edited");
   assert.equal(dom.nodes["temporary-download-idml"].disabled, false);
+  assert.equal(dom.nodes["temporary-story-select"].disabled, false);
+  assert.equal(dom.nodes["temporary-story-text"].disabled, false);
+  assert.equal(dom.nodes["temporary-story-apply"].disabled, false);
   assert.match(dom.nodes["temporary-status"].textContent, /Текст подтверждён сервером/);
 });
 
@@ -347,5 +355,74 @@ test("A4 nine-card control is available only for the exact edited 85x55 mm page"
     assert.equal(network.calls.filter(c => c.url.endsWith("/move-node")).length, 1);
     assert.equal(button.hidden, !card);
     assert.equal(button.disabled, !card, "only the admitted edited card can be printed 9-up");
+  }
+});
+
+test("A4 sheet preview displays only report-bound PDF and revokes it on forget; a forged report is refused", async () => {
+  for (const matching of [true, false]) {
+    const dom = fakeDom(), network = server("supported", true);
+    for (const key of ["temporary-preview-pdf9up", "temporary-sheet-preview", "temporary-sheet-pdf-frame"]) {
+      dom.nodes[key] = {
+        hidden: false, disabled: false, src: "", textContent: "", handlers: {},
+        addEventListener(type, callback) { this.handlers[type] = callback; },
+      };
+    }
+    const pdf = new TextEncoder().encode("%PDF-1.7\\n1 0 obj\\n<<>>\\nendobj\\n%%EOF\\n");
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", pdf));
+    const hash = [...digest].map(x => x.toString(16).padStart(2, "0")).join("");
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+      if (!url.startsWith(base + "/exports/pdf9up?")) return network.fetchImpl(url, options);
+      calls.push({url, options});
+      const query = new URL(url, "https://reader.example").searchParams;
+      assert.equal(query.get("revision_id"), afterRev);
+      assert.equal(query.get("canonical_authoring_revision_id"), afterCanon);
+      assert.equal(options.headers["x-chaptera-reader-session"], token);
+      assert.ok(!url.includes(token), "bearer must not be exposed in export URL");
+      if (query.get("report_only") === "true") {
+        assert.equal(options.headers.accept, "application/json");
+        return response({
+          protocol_version: "chaptera.temporary-edited-export-report.v1",
+          source_hash: source, revision_id: afterRev,
+          canonical_authoring_revision_id: afterCanon, target: "pdf9up",
+          artifact_sha256: matching ? hash : "0".repeat(64),
+          loss_report: {counts: {blocking: 0}},
+        });
+      }
+      assert.equal(options.headers.accept, "application/pdf");
+      return new Response(pdf, {headers: {
+        "content-type": "application/pdf",
+        "x-chaptera-edit-revision": afterRev,
+        "x-chaptera-export-sha256": hash,
+      }});
+    };
+    const controller = await bootTemporaryEditorPreview({
+      documentObject: dom.documentObject,
+      cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+      storage: storage(), fetchImpl, renderer: async () => {},
+    });
+    await controller.start({name: "card.pub", size: 1729});
+    const preview = dom.nodes["temporary-preview-pdf9up"];
+    assert.equal(preview.hidden, false);
+    assert.equal(preview.disabled, true, "unmodified card cannot be previewed as edited");
+    dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+    dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(150, 260));
+    await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(180, 270));
+    assert.equal(preview.disabled, false);
+    await preview.handlers.click();
+    assert.equal(calls.length, 2, "exactly one report and one PDF request");
+    if (matching) {
+      assert.equal(dom.nodes["temporary-sheet-preview"].hidden, false);
+      assert.match(dom.nodes["temporary-sheet-pdf-frame"].src, /^blob:/);
+      assert.match(dom.nodes["temporary-status"].textContent, /контрольной сумме/);
+    } else {
+      assert.equal(dom.nodes["temporary-sheet-preview"].hidden, true);
+      assert.equal(dom.nodes["temporary-sheet-pdf-frame"].src, "");
+      assert.equal(preview.disabled, true, "bad digest must fence further exports");
+      assert.match(dom.nodes["temporary-status"].textContent, /не подтверждён/);
+    }
+    controller.forget();
+    assert.equal(dom.nodes["temporary-sheet-preview"].hidden, true);
+    assert.equal(dom.nodes["temporary-sheet-pdf-frame"].src, "");
   }
 });

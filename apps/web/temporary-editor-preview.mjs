@@ -174,6 +174,14 @@ export async function bootTemporaryEditorPreview({
         }
       }
     }
+    if (storyEnabled) {
+      const locked = busy || editBusy || !moveClient ||
+        moveClient.status.pending_reconciliation || moveClient.status.refresh_required;
+      storyPanel.hidden = !moveClient || storyCandidates.length === 0;
+      storySelect.disabled = locked;
+      storyText.disabled = locked;
+      storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
+    }
   }
 
   function clearSheetPreview() {
@@ -183,14 +191,6 @@ export async function bootTemporaryEditorPreview({
     if (sheetPreviewUrl !== null) {
       URL.revokeObjectURL(sheetPreviewUrl);
       sheetPreviewUrl = null;
-    }
-    if (storyEnabled) {
-      const locked = busy || editBusy || !moveClient ||
-        moveClient.status.pending_reconciliation || moveClient.status.refresh_required;
-      storyPanel.hidden = !moveClient || storyCandidates.length === 0;
-      storySelect.disabled = locked;
-      storyText.disabled = locked;
-      storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
     }
   }
 
