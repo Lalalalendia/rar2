@@ -1,6 +1,12 @@
 name: CI-LOCAL-DEV-TRANSPORT-01 Windows trusted main fast feedback
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci-local-dev-transport-01.yml"
+      - "tools/ci/local_dev_transport.py"
+      - "tools/ci/test_local_dev_transport.py"
+      - "docs/ci-local-dev-transport-01.md"
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
@@ -14,8 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-local-dev-transport-01-windows
-  cancel-in-progress: false
+  group: ci-local-dev-transport-01-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'trusted-main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Admission and security checks stay hosted; code from a PR is never sent to the PC.
@@ -27,22 +33,26 @@ jobs:
         with:
           persist-credentials: false
       - name: Run transport negative controls
-        run: python -m unittest discover -s tools/ci -p test_local_dev_transport.py
+        run: |
+          python -m py_compile tools/ci/local_dev_transport.py
+          python -m unittest discover -s tools/ci -p test_local_dev_transport.py
 
   local-dev:
     needs: contract
-    if: github.repository == 'Lalalalendia/rar2' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || github.actor == 'Lalalalendia')
+    if: github.repository == 'Lalalalendia/rar2' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'Lalalalendia'))
     runs-on: [self-hosted, Windows, X64, chaptera-dev-unprivileged]
     timeout-minutes: 22
     env:
       CHAPTERA_LOCAL_DEV_STATE: ${{ runner.tool_cache }}\chaptera-dev-state
       CHAPTERA_LOCAL_DEV_RECEIPT: ${{ runner.temp }}\chaptera-dev-receipt.json
+      CHAPTERA_LOCAL_DEV_LOG_ROOT: ${{ runner.temp }}\chaptera-dev-private-logs
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           clean: true
+          fetch-depth: 0
       - name: Verify exact SHA and run bounded local fast loop
         shell: pwsh
         run: |
@@ -52,6 +62,7 @@ jobs:
             "tools/ci/local_dev_transport.py",
             "--repo", "$env:GITHUB_WORKSPACE",
             "--state-root", "$env:CHAPTERA_LOCAL_DEV_STATE",
+            "--logs-root", "$env:CHAPTERA_LOCAL_DEV_LOG_ROOT",
             "--receipt", "$env:CHAPTERA_LOCAL_DEV_RECEIPT",
             "--sha", "$env:GITHUB_SHA",
             "--run-id", "$env:GITHUB_RUN_ID",

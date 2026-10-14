@@ -120,7 +120,7 @@ def baseline(repo: Path, head: str, last_success: str | None) -> tuple[str, str]
 def changed_paths(repo: Path, base: str, head: str) -> list[str]:
     try:
         data = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=ACMRT", "-z", base, head, "--"],
+            ["git", "diff", "--name-only", "--diff-filter=ACMRTD", "-z", base, head, "--"],
             cwd=repo, capture_output=True, check=False, timeout=45,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -136,9 +136,9 @@ def changed_paths(repo: Path, base: str, head: str) -> list[str]:
     return names
 
 
-def run_checks(repo: Path, head: str, paths: list[str], mode: str, state_root: Path,
+def run_checks(repo: Path, head: str, paths: list[str], mode: str, logs_root: Path,
                run_id: str) -> tuple[int, int]:
-    logs = state_root / "private-logs"
+    logs = logs_root / "private-logs"
     logs.mkdir(parents=True, exist_ok=True)
     captured_receipt = logs / f"fast-{head[:12]}-{run_id}.json"
     if mode == "smoke":
@@ -221,12 +221,14 @@ def execute(args: argparse.Namespace, environ: dict[str, str] | None = None) -> 
             raise TransportError("checkout_root_mismatch")
         if git(repo, "rev-parse", "HEAD") != head:
             raise TransportError("checkout_sha_mismatch")
-        if git(repo, "status", "--porcelain", "--untracked-files=no"):
+        if git(repo, "status", "--porcelain", "--untracked-files=normal"):
             raise TransportError("dirty_checkout")
         state_root = args.state_root.resolve()
         receipt_path = args.receipt.resolve()
+        logs_root = args.logs_root.resolve()
         if (state_root == repo or state_root.is_relative_to(repo)
-                or receipt_path == repo or receipt_path.is_relative_to(repo)):
+                or receipt_path == repo or receipt_path.is_relative_to(repo)
+                or logs_root == repo or logs_root.is_relative_to(repo)):
             raise TransportError("outputs_inside_checkout")
         state_path = state_root / "checkpoint.json"
         state = load_state(state_path)
@@ -240,7 +242,7 @@ def execute(args: argparse.Namespace, environ: dict[str, str] | None = None) -> 
             code, count = 0, 0
             status = "NO_SOURCE_CHANGE"
         else:
-            code, count = run_checks(repo, head, paths, args.profile, state_root, args.run_id)
+            code, count = run_checks(repo, head, paths, args.profile, logs_root, args.run_id)
             status = "PASS" if code == 0 else "FAIL"
         report.update(status=status, check_count=count, exit_code=code)
         state["last_seen"] = head
@@ -261,6 +263,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
+    parser.add_argument("--logs-root", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--run-id", required=True)
