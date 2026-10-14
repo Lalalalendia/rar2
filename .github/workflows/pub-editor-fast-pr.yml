@@ -104,41 +104,13 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-export -p pub-editor -p pub-idml -p pub-odg -- --check
-          # The adapters live in semantic::authored_rectangle_overlay_v1,
-          # not in authored_shape. Assert non-zero selected tests before running.
+          # Count actual tests before running: a filtered cargo test with zero cases is a false pass.
           for package in pub-idml pub-odg; do
             listing="$(cargo test --manifest-path vendor/producer-a/Cargo.toml -p "$package" --lib authored_rectangle_overlay_v1 -- --list)"
             printf '%s\n' "$listing"
-            count="$(printf '%s\n' "$listing" | grep -Ec '^semantic::authored_rectangle_overlay_v1::tests::[^ ]+: test
-          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin editable_route_probe
-
-      - name: Print timing receipt
-        if: always()
-        shell: bash
-        run: |
-          if [[ -f target/pub-editor-fast-pr/receipt.json ]]; then
-            python - <<'PY'
-          import json
-          from pathlib import Path
-
-          data = json.loads(Path("target/pub-editor-fast-pr/receipt.json").read_text())
-          print("pub-editor fast total_seconds:", data["total_seconds"])
-          for check in data["checks"]:
-              print(f'{check["seconds"]:8.3f}s  {check["kind"]}: {" ".join(check["command"])}')
-          PY
-          fi
-
-      - name: Upload fast-loop receipt
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pub-editor-fast-pr-${{ github.event.pull_request.head.sha || github.sha }}
-          path: target/pub-editor-fast-pr/receipt.json
-          if-no-files-found: warn
-          retention-days: 30
- || true)"
+            count="$(printf '%s\n' "$listing" | grep -Ec 'semantic::authored_rectangle_overlay_v1::tests::.*: test' || true)"
             if [[ "$count" -lt 2 ]]; then
-              echo "::error::Expected at least 2 authored rectangle tests in $package, got $count"
+              echo "::error::Expected at least 2 authored rectangle tests in $package; found $count"
               exit 1
             fi
             cargo test --manifest-path vendor/producer-a/Cargo.toml -p "$package" --lib authored_rectangle_overlay_v1
