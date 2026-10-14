@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+from collections import Counter
+from io import BytesIO
 import hashlib
 import json
 import os
@@ -57,17 +60,94 @@ def verify_physical_edited_pdf(data: bytes, expected: geometry.RectEmu) -> dict:
     raise AssertionError("edited PDF stream does not paint the accepted MoveNode rectangle")
 
 
+def sbdc_picture_scene_witness(scene: dict) -> dict:
+    """Only the documented, exact SBDC034 4-use red CMYK source is admitted."""
+    from PIL import Image
+    nodes = scene.get("nodes")
+    resources = scene.get("resources")
+    if not isinstance(nodes, list) or not isinstance(resources, list):
+        raise AssertionError("SBDC current Scene has no image graph")
+    by_id = {item.get("resource_id"): item for item in resources
+             if isinstance(item, dict) and isinstance(item.get("resource_id"), str)}
+    image_uses = Counter(
+        node.get("resource_id") for node in nodes
+        if isinstance(node, dict) and node.get("kind") == "picture_frame"
+        and isinstance(node.get("resource_id"), str)
+    )
+    safe_images = {}
+    for rid, resource in by_id.items():
+        if resource.get("mime") not in ("image/jpeg", "image/png"):
+            continue
+        mime = resource["mime"]
+        prefix = f"data:{mime};base64,"
+        url = resource.get("inline_data_url")
+        if resource.get("availability") != "inline_data_url" or not isinstance(url, str):
+            continue
+        if not url.startswith(prefix):
+            raise AssertionError("host image MIME and data URL mismatch")
+        raw = base64.b64decode(url[len(prefix):], validate=True)
+        if not 0 < len(raw) <= 5 * 1024 * 1024:
+            raise AssertionError("SBDC image derivative exceeds safe limit")
+        image = Image.open(BytesIO(raw)).convert("RGB")
+        image.thumbnail((128, 128))
+        pixels = list(image.getdata())
+        red_pixels = sum(
+            r > 180 and g < 75 and b < 155 and r - g > 140
+            for r, g, b in pixels
+        )
+        safe_images[rid] = (image.width, image.height,
+                            red_pixels / max(1, len(pixels)))
+    stars = [
+        rid for rid, (width, height, red) in safe_images.items()
+        if image_uses[rid] == 4
+        and 0.85 <= width / height <= 1.20 and red >= 0.05
+    ]
+    if len(stars) != 1:
+        raise AssertionError("SBDC four red source picture frames not admitted")
+    star = stars[0]
+    positions = {
+        node["node_id"]: node["bounds"]
+        for node in nodes if node.get("resource_id") == star
+    }
+    if len(positions) != 4:
+        raise AssertionError("SBDC star picture node identity was duplicated")
+    logos = [
+        rid for rid, (width, height, _) in safe_images.items()
+        if rid != star and 1.95 <= width / height <= 2.65 and image_uses[rid] >= 1
+    ]
+    if not logos:
+        raise AssertionError("SBDC wide CMYK logo is not admitted")
+    return {"star_resource_id": star, "star_node_bounds": positions,
+            "host_image_resources": len(safe_images), "logo_admitted": True}
+
+
+def require_sbdc_fixed_pdf_image_uses(data: bytes, star_resource_id: str) -> int:
+    """The fixed PDF paint program must invoke one star XObject four times."""
+    from uuid import UUID
+    canonical = UUID(star_resource_id).hex[:16]
+    operator = ("/Im" + canonical + " Do").encode("ascii")
+    uses = data.count(operator)
+    if uses != 4 or data.count(b"/Subtype /Image") < 2:
+        raise AssertionError(
+            "SBDC current fixed PDF omitted star XObject uses or the logo"
+        )
+    return uses
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     for key in ("chaptera", "caddy", "fixture", "out"):
         ap.add_argument("--" + key, type=pathlib.Path, required=True)
     ap.add_argument("--fixture-sha256", required=True)
+    ap.add_argument("--sbdc-cmyk-picture-proof", action="store_true")
     args = ap.parse_args()
 
     fixture = args.fixture.resolve()
     expected_hash = live.sha256_file(fixture)
     if expected_hash != args.fixture_sha256 or not 0 < fixture.stat().st_size < live.FIXTURE_MAX_BYTES:
         raise AssertionError("pinned real PUB source identity/size mismatch")
+    if args.sbdc_cmyk_picture_proof and (expected_hash != "0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a" or fixture.stat().st_size != 1019904):
+        raise AssertionError("SBDC proof requires the exact existing native Batch01-034 source")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     work = pathlib.Path(tempfile.mkdtemp(prefix="chaptera-temp-current-"))
@@ -270,6 +350,7 @@ def main() -> int:
             or not isinstance(rich_scene.get("nodes"), list)
         ):
             raise AssertionError("isolated baseline Reader Scene protocol or revision invalid")
+        sbdc_r0 = sbdc_picture_scene_witness(rich_scene) if args.sbdc_cmyk_picture_proof else None
         # Physical P0 no-edit export: the canonical baseline has no event edge.
         # Exercise real Caddy HTTPS, the actual confined renderer, private
         # capabilities, exact identity and independent PDF xref/page reopening.
@@ -349,6 +430,10 @@ def main() -> int:
             or not 0 < pristine_pages <= 1000
         ):
             raise AssertionError("pristine fixed-output PDF fails independent xref/page consumer")
+        sbdc_pdf_r0_uses = (
+            require_sbdc_fixed_pdf_image_uses(pristine_pdf, sbdc_r0["star_resource_id"])
+            if sbdc_r0 else None
+        )
         if live.sha256_file(physical_source) != expected_hash:
             raise AssertionError("original PDF conversion mutated the source PUB")
         with sqlite3.connect(db) as conn:
@@ -518,6 +603,13 @@ def main() -> int:
             or matches[0].get("bounds", {}).get("y") != after_bounds["y"]
         ):
             raise AssertionError("real edited Reader Scene did not paint moved canonical node")
+        sbdc_r1 = sbdc_picture_scene_witness(edited_rich_scene) if sbdc_r0 else None
+        if sbdc_r0:
+            if sbdc_r1["star_resource_id"] != sbdc_r0["star_resource_id"]:
+                raise AssertionError("accepted edit changed the source star resource identity")
+            for node_id, old_bounds in sbdc_r0["star_node_bounds"].items():
+                if node_id != chosen_id and sbdc_r1["star_node_bounds"].get(node_id) != old_bounds:
+                    raise AssertionError("unmodified star frame moved during canonical R1 replay")
         if live.sha256_file(physical_source) != expected_hash:
             raise AssertionError("revised Scene changed the immutable original PUB")
 
@@ -609,6 +701,10 @@ def main() -> int:
                 raise AssertionError(
                     f"edited {target} did not preserve the accepted physical geometry"
                 ) from exc
+            if target == "pdf" and sbdc_r1:
+                sbdc_pdf_r1_uses = require_sbdc_fixed_pdf_image_uses(
+                    artifact, sbdc_r1["star_resource_id"]
+                )
             export_receipts.append({
                 "target": target, "sha256": actual_sha,
                 "artifact_length": len(artifact),
@@ -854,6 +950,20 @@ def main() -> int:
             "early_delete_physical_original_removed": True,
             "early_delete_foreign_capability_rejected": True,
             "persistent_export_artifacts": False, "v0_go": False,
+            **({"sbdc_picture_proof": {
+                "source_exact_batch01_034": True,
+                "source_star_picture_nodes_r0": len(sbdc_r0["star_node_bounds"]),
+                "source_star_picture_nodes_r1": len(sbdc_r1["star_node_bounds"]),
+                "shared_star_resource_preserved": True,
+                "host_image_resources_r0": sbdc_r0["host_image_resources"],
+                "host_image_resources_r1": sbdc_r1["host_image_resources"],
+                "cmky_logo_admitted": sbdc_r1["logo_admitted"],
+                "fixed_pdf_star_paint_uses_r0": sbdc_pdf_r0_uses,
+                "fixed_pdf_star_paint_uses_r1": sbdc_pdf_r1_uses,
+                "unmodified_star_bounds_preserved_after_move": True,
+                "star_xobject_emitted_physically": True,
+                "source_bytes_or_picture_payload_reported": False,
+            }} if sbdc_r0 else {}),
         }
         (out / "receipt.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
