@@ -49,6 +49,12 @@ const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
 const OBSERVABILITY: &[u8] = include_bytes!("../../web/observability-v1.mjs");
 const READER_ADAPTER: &[u8] = include_bytes!("../../web/reader-scene-editor-adapter-v1.mjs");
 const READER_RENDER: &[u8] = include_bytes!("../../cloud-reader/render-v1.mjs");
+const RESOURCE_IMAGE_ADMISSION: &[u8] =
+    include_bytes!("../../web/web-resource-image-activation-v1.mjs");
+const RESOURCE_WINDOW: &[u8] = include_bytes!("../../web/web-resource-window-v1.mjs");
+const RESOURCE_SCHEDULER: &[u8] = include_bytes!("../../web/web-resource-scheduler-v1.mjs");
+const RESOURCE_READINESS: &[u8] = include_bytes!("../../web/resource-readiness-v1.mjs");
+const IMAGE_DECODE: &[u8] = include_bytes!("../../web/image-decode-v1.mjs");
 
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'";
 const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=()";
@@ -59,7 +65,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 30] = [
+const ASSETS: [EmbeddedAsset; 35] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -210,6 +216,31 @@ const ASSETS: [EmbeddedAsset; 30] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: TEMPORARY_RESIZE_GESTURE,
     },
+    EmbeddedAsset {
+        name: "web-resource-image-activation-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: RESOURCE_IMAGE_ADMISSION,
+    },
+    EmbeddedAsset {
+        name: "web-resource-window-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: RESOURCE_WINDOW,
+    },
+    EmbeddedAsset {
+        name: "web-resource-scheduler-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: RESOURCE_SCHEDULER,
+    },
+    EmbeddedAsset {
+        name: "resource-readiness-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: RESOURCE_READINESS,
+    },
+    EmbeddedAsset {
+        name: "image-decode-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: IMAGE_DECODE,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -282,6 +313,14 @@ where
             get(reader_adapter),
         )
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
+        .route(
+            "/editor/web-resource-image-activation-v1.mjs",
+            get(resource_image_admission),
+        )
+        .route("/editor/web-resource-window-v1.mjs", get(resource_window))
+        .route("/editor/web-resource-scheduler-v1.mjs", get(resource_scheduler))
+        .route("/editor/resource-readiness-v1.mjs", get(resource_readiness))
+        .route("/editor/image-decode-v1.mjs", get(image_decode))
 }
 
 /// Minimal public assets for an anonymous filesystem-backed temporary
@@ -427,6 +466,21 @@ async fn reader_adapter() -> Response {
 }
 async fn reader_render() -> Response {
     asset_response(&ASSETS[20])
+}
+async fn resource_image_admission() -> Response {
+    asset_response(&ASSETS[30])
+}
+async fn resource_window() -> Response {
+    asset_response(&ASSETS[31])
+}
+async fn resource_scheduler() -> Response {
+    asset_response(&ASSETS[32])
+}
+async fn resource_readiness() -> Response {
+    asset_response(&ASSETS[33])
+}
+async fn image_decode() -> Response {
+    asset_response(&ASSETS[34])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
@@ -779,6 +833,11 @@ mod tests {
             "/editor/rich-reader-editor-shell-v1.mjs",
             "/editor/reader-scene-editor-adapter-v1.mjs",
             "/editor/product-editor-entry-v1.mjs",
+            "/editor/web-resource-image-activation-v1.mjs",
+            "/editor/web-resource-window-v1.mjs",
+            "/editor/web-resource-scheduler-v1.mjs",
+            "/editor/resource-readiness-v1.mjs",
+            "/editor/image-decode-v1.mjs",
         ] {
             let response = routes
                 .clone()
@@ -786,6 +845,32 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn product_reader_scheduler_modules_are_embedded_only_on_product_routes() {
+        let routes = router::<()>();
+        let assets = [
+            ("/editor/web-resource-image-activation-v1.mjs", RESOURCE_IMAGE_ADMISSION),
+            ("/editor/web-resource-window-v1.mjs", RESOURCE_WINDOW),
+            ("/editor/web-resource-scheduler-v1.mjs", RESOURCE_SCHEDULER),
+            ("/editor/resource-readiness-v1.mjs", RESOURCE_READINESS),
+            ("/editor/image-decode-v1.mjs", IMAGE_DECODE),
+        ];
+        for (path, expected) in assets {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/javascript; charset=utf-8"
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), expected, "{path}");
         }
     }
 

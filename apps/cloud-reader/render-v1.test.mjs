@@ -13,6 +13,7 @@ import {
   previewTextSizeSource,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
+  renderReaderScene,
   tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
@@ -748,5 +749,62 @@ test("existing OfficeArt line and dash-gel diagonals are not flattened", () => {
       tag: "line",
       attrs: { x1: 100, y1: 200, x2: 400, y2: 600 }
     });
+  }
+});
+
+test("opt-in render hook keeps off-page SafePreview SVG href absent until admitted", async () => {
+  class FakeSvg {
+    constructor(tag){this.tag=tag;this.attrs=new Map();this.children=[];this.style={};this.parent=null;}
+    setAttribute(k,v){this.attrs.set(k,String(v));}
+    getAttribute(k){return this.attrs.get(k)??null;}
+    removeAttribute(k){this.attrs.delete(k);}
+    appendChild(c){c.parent=this;this.children.push(c);return c;}
+    replaceChildren(...children){this.children=[];children.forEach(c=>this.appendChild(c));}
+    get previousElementSibling(){const siblings=this.parent?.children??[];return siblings[siblings.indexOf(this)-1]??null;}
+  }
+  function find(root,tag){if(root.tag===tag)return root;for(const child of root.children){const x=find(child,tag);if(x)return x;}return null;}
+  const previousDocument=globalThis.document;
+  globalThis.document={createElementNS:(_ns,tag)=>new FakeSvg(tag)};
+  try {
+    const host=new FakeSvg("host");
+    const resource={resource_id:"safe-image",mime:"image/png",
+      availability:"inline_data_url",inline_data_url:"data:image/png;base64,cG5n"};
+    const node={node_id:"n1",page_id:"p1",kind:"picture_frame",
+      bounds:{x:0,y:0,width:100000,height:100000},resource_id:resource.resource_id};
+    const payload={protocol_version:"chaptera.reader-scene.v1",
+      pages:[{page_id:"p1",order:0,width_emu:100000,height_emu:100000}],
+      nodes:[node],resources:[resource]};
+    const captured=[];
+    await renderReaderScene(host,payload,{materializeImageHref:args=>{
+      captured.push(args);return true;
+    }});
+    assert.equal(captured.length,1);
+    assert.equal(captured[0].page_id,"p1");
+    assert.equal(captured[0].resource,resource);
+    const deferred=find(host,"image");
+    assert.equal(deferred.getAttribute("href"),null);
+    assert.equal(deferred.getAttribute("data-resource-activation"),"deferred");
+    assert.equal(deferred.previousElementSibling?.getAttribute("data-resource-awaiting-image"),"safe-image");
+    const eager=new FakeSvg("host");
+    await renderReaderScene(eager,payload);
+    assert.equal(find(eager,"image").getAttribute("href"),resource.inline_data_url);
+
+    const borderHost=new FakeSvg("host");
+    const borderNode={node_id:"b1",page_id:"p1",kind:"shape",
+      bounds:{x:0,y:0,width:100000,height:100000},
+      decorative_border:{placements:[{slot:"top",resource_id:"safe-image",
+        bounds:{x:0,y:0,width:100000,height:20000}}]}};
+    await renderReaderScene(borderHost,{...payload,nodes:[borderNode]},{
+      materializeImageHref:()=>true,
+    });
+    const borderImage=find(borderHost,"image");
+    assert.equal(borderImage.getAttribute("href"),null);
+    assert.equal(borderImage.previousElementSibling?.getAttribute("data-resource-awaiting-image"),"safe-image");
+    await assert.rejects(renderReaderScene(new FakeSvg("host"),payload,{
+      materializeImageHref:true,
+    }),/must be a function/);
+  } finally {
+    if(previousDocument===undefined)delete globalThis.document;
+    else globalThis.document=previousDocument;
   }
 });

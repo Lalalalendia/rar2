@@ -171,7 +171,27 @@ export function decorativeBorderPlacementPaintPlan(placement, resource) {
   });
 }
 
-function appendDecorativeBorder(group, node, resources) {
+function activateImageHref(image, resource, pageId, href, materializeImageHref) {
+  const deferred = materializeImageHref?.({
+    image, resource, page_id: pageId, href
+  }) === true;
+  if (!deferred) image.setAttribute("href", href);
+  else image.setAttribute("data-resource-activation", "deferred");
+  return deferred;
+}
+
+function pendingResourceOutline(resourceId, x, y, width, height) {
+  return svgNode("rect", {
+    x, y, width, height,
+    fill: "none",
+    stroke: "rgba(180,80,0,.65)",
+    "stroke-dasharray": "38100 25400",
+    "data-resource-awaiting-image": resourceId,
+    "pointer-events": "none"
+  });
+}
+
+function appendDecorativeBorder(group, node, resources, materializeImageHref) {
   const border = node?.decorative_border;
   if (!border) return 0;
   let painted = 0;
@@ -190,7 +210,15 @@ function appendDecorativeBorder(group, node, resources) {
       "data-decorative-border-slot": plan.slot,
       "data-decorative-border-authority": "source-borderart"
     });
-    image.setAttribute("href", plan.href);
+    const deferred = activateImageHref(
+      image, resource, node.page_id, plan.href, materializeImageHref
+    );
+    if (deferred) {
+      group.appendChild(pendingResourceOutline(
+        plan.resource_id, plan.geometry.x, plan.geometry.y,
+        plan.geometry.width, plan.geometry.height
+      ));
+    }
     group.appendChild(image);
     painted += 1;
   }
@@ -627,7 +655,7 @@ export function imageResourcePaintPlan(node, resource) {
   });
 }
 
-function appendImage(group, defs, node, resource, imageId) {
+function appendImage(group, defs, node, resource, imageId, materializeImageHref) {
   const plan = imageResourcePaintPlan(node, resource);
   if (!plan) return false;
 
@@ -670,7 +698,14 @@ function appendImage(group, defs, node, resource, imageId) {
     "data-image-recolor-authority": recolor ? "source-picture-recolor" : null,
     transform: plan.content_transform
   });
-  image.setAttribute("href", plan.href);
+  const deferred = activateImageHref(
+    image, resource, node.page_id, plan.href, materializeImageHref
+  );
+  if (deferred) {
+    viewport.appendChild(pendingResourceOutline(
+      plan.resource_id, 0, 0, node.bounds.width, node.bounds.height
+    ));
+  }
   viewport.appendChild(image);
   group.appendChild(viewport);
   return true;
@@ -727,7 +762,7 @@ export function presetShapePaintGeometry(node) {
   return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
 }
 
-function renderNode(svg, defs, node, resources, fonts, index) {
+function renderNode(svg, defs, node, resources, fonts, index, materializeImageHref) {
   const bounds = node.bounds;
   for (const [key, value] of Object.entries(bounds)) safeInteger(value, "node.bounds." + key);
   if (bounds.width <= 0 || bounds.height <= 0) return;
@@ -757,7 +792,8 @@ function renderNode(svg, defs, node, resources, fonts, index) {
       defs,
       node,
       resource,
-      "chaptera-reader-image-" + index
+      "chaptera-reader-image-" + index,
+      materializeImageHref
     );
     if (!paintedResource) {
       const placeholder = svgNode("rect", {
@@ -776,7 +812,9 @@ function renderNode(svg, defs, node, resources, fonts, index) {
 
   const hasDecorativeBorder = node.decorative_border !== null
     && node.decorative_border !== undefined;
-  if (hasDecorativeBorder) appendDecorativeBorder(group, node, resources);
+  if (hasDecorativeBorder) {
+    appendDecorativeBorder(group, node, resources, materializeImageHref);
+  }
 
   const line = node.paint?.line;
   const stroke = rgb(line?.rgb);
@@ -810,6 +848,10 @@ export async function renderReaderScene(host, payload, options = {}) {
     throw new RangeError("renderer view scale must be positive");
   }
 
+  if (options.materializeImageHref != null &&
+      typeof options.materializeImageHref !== "function") {
+    throw new TypeError("materializeImageHref must be a function");
+  }
   const fonts = await installFonts(payload);
   host.replaceChildren();
   const resources = new Map((payload.resources ?? []).map((resource) => [resource.resource_id, resource]));
@@ -847,7 +889,7 @@ export async function renderReaderScene(host, payload, options = {}) {
 
     for (const node of payload.nodes ?? []) {
       if (node.page_id !== pageModel.page_id) continue;
-      renderNode(svg, defs, node, resources, fonts, nodeIndex);
+      renderNode(svg, defs, node, resources, fonts, nodeIndex, options.materializeImageHref);
       nodeIndex += 1;
     }
     host.appendChild(svg);

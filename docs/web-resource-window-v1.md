@@ -84,31 +84,48 @@ The `chaptera.reader-scene.v1` still embeds the complete admitted image's
 `inline_data_url` inside the Scene: no page-scoped HTTP demand/cache savings
 are claimed by carrying a verified hash.
 
-`apps/cloud-reader/render-v1.mjs` currently sets SVG image `href` directly and
-installs all inline fonts during initial rendering. Simply invoking a resource
-scheduler in the product entry point would NOT limit those independent native
-browser fetch/decode/materialization paths. Do not wire a fake immediate
-`decode_resource` just to make telemetry green: it would publish a dishonest
-ready state and leave physical decoding unbounded.
+## Product SafePreview SVG admission (bounded integration slice)
 
-Required before claiming **actual online editor integration**:
+The Product Editor route now opts into `materializeImageHref` in the **existing**
+Reader SVG painter through `RichReaderEditorShellV1`. Its
+`ProductSafePreviewImageAdmissionV1` captures only already host-admitted
+SafePreview derivatives with exact encoded-artifact hash/recipe/byte length.
+For those resources, the painter constructs a source-neutral pending outline
+without assigning SVG `href` on off-window pages. Legacy/unreceipted image
+paths retain the previous eager painter unchanged.
 
-1. The SafePreview variant now exposes server-verified encoded-artifact
-   identities. Other derivative routes/legacy descriptors still require their
-   own approved immutable hash, policy-scoped access and cost/size hints; never
-   confuse a source container hash with its safe preview derivative.
-2. Supply the existing authorized fetch/cache adapter and a real materialization
-   adapter. Avoid double-decoding and ensure decode reservations correspond to
-   physical work; use the already owned image-decode and HTTP-cache boundaries.
-3. Make the Reader SVG presentation defer out-of-window materialization until
-   readiness, and repaint only the affected pages. Preserve fidelity and pointer
-   interactions; do not confuse visual placeholders with exact images.
-4. Bind lifecycle to the current product route and test page 1 -> 80, rapid
-   scroll/zoom, failed/offline/hidden state and 500-page documents in real
-   Chromium/Firefox, with first useful page + memory receipts.
+`WebResourceViewportObserverV1` supplies the current/visible page set to the
+existing scheduler, whose `ResourceReadinessRuntimeV1` fences late completions.
+The inline delivery adapter checks encoded length and SHA-256 on demand via
+WebCrypto (never rehashing all 500 manifest items), then invokes the existing
+browser `createImageBitmap` options under conservative single-decode working-set
+reservations. Only **ready + still visible** images receive SVG `href`.
+A rejected hash/oversized preflight does not publish a ready image. A true
+scheduler *setup* failure alone falls back to the old painter; the normal
+integrity-failure path does not silently bypass verification.
 
-**No runtime UI wiring and no actual-PUB browser benchmark is claimed by this
-slice.** The existing core scheduler and readiness authority remain unchanged.
+Important limits remain:
+
+1. The entire approved inline data URL still arrives inside Reader Scene.
+   This is **not** per-page network/CDN/CacheStorage delivery. Those functions
+   remain owned by WEB-RESOURCE-DELIVERY-CACHE-01 and its upstream derivative
+   producer; this code does not add a second HTTP authority.
+2. `createImageBitmap` preflight is bounded, but SVG `href` can trigger an
+   additional native browser decode. The exact SVG paint/GPU memory working set
+   has **not** been measured or proven strictly limited. Fonts still load eagerly.
+3. The initial Product policy uses no neighbor prefetch (`near_before = 0`,
+   `near_after = 0`) until representative WEB-SCENE-SCALE evidence provides a
+   justified radius. The scheduler remains configurable and source-neutral.
+4. Browser/real-PUB acceptance needs page 1 -> 80, rapid-scroll, hidden-resume,
+   shared/decorative image, error and memory receipts in Chromium and Firefox.
+   Do not label initial paint complete before the SVG `load` event.
+5. A complete 500-page SVG DOM is still constructed. Resource admission alone
+   does not solve page/shard virtualization or the existing full-document font
+   installation.
+
+This slice is a concrete **product lifecycle/render hook**, not a claim that
+network delivery, all font resources, or complete browser memory authority are
+now solved. Canonical Scene, revision and PUB bytes are unchanged.
 
 ## Test coverage
 

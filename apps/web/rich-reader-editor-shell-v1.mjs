@@ -141,6 +141,7 @@ export class RichReaderEditorShellV1 {
     host,
     service,
     renderOptions = {},
+    resourceImages = null,
     operationIdFactory = null,
     historyOperationIdFactory = null,
     keyboardTarget = globalThis.document ?? host,
@@ -167,6 +168,15 @@ export class RichReaderEditorShellV1 {
     this.keyboardTarget = keyboardTarget;
     this.service = service;
     this.renderOptions = { ...renderOptions };
+    if (resourceImages !== null && (
+      typeof resourceImages.prepare !== "function" ||
+      typeof resourceImages.captureImageHref !== "function" ||
+      typeof resourceImages.mount !== "function" ||
+      typeof resourceImages.fallbackToEager !== "function"
+    )) {
+      throw new TypeError("resourceImages lifecycle adapter is invalid");
+    }
+    this.resourceImages = resourceImages;
     this.operationIdFactory =
       operationIdFactory ??
       (() => "rich-move-" + globalThis.crypto.randomUUID());
@@ -226,7 +236,23 @@ export class RichReaderEditorShellV1 {
     this.gesture = null;
     this.gesturePageId = null;
 
-    await renderReaderScene(this.host, this.readerScene, this.renderOptions);
+    if (this.resourceImages) this.resourceImages.prepare(this.readerScene);
+    await renderReaderScene(this.host, this.readerScene, this.resourceImages
+      ? {
+          ...this.renderOptions,
+          materializeImageHref: args => this.resourceImages.captureImageHref(args),
+        }
+      : this.renderOptions);
+    if (this.resourceImages) {
+      try {
+        this.resourceImages.mount();
+      } catch {
+        // A missing browser scheduler capability cannot blank a real publication.
+        // Only a setup failure uses legacy eager image painting; exact hash
+        // mismatches detected during admission remain blocked.
+        this.resourceImages.fallbackToEager();
+      }
+    }
 
     if (
       previousSelection &&

@@ -1,6 +1,7 @@
 import { BrowserObservabilityV1 } from "./observability-v1.mjs";
 import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-service-v1.mjs";
 import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
+import { ProductSafePreviewImageAdmissionV1 } from "./web-resource-image-activation-v1.mjs";
 import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
 import {
   canonicalStorySelectionFromTextarea,
@@ -195,10 +196,11 @@ export async function bootProductEditor({
   const fidelity=documentObject.querySelector("#fidelity");
   const identity=documentObject.querySelector("#document");
   const host=documentObject.querySelector("#canvas");
+  const scrollContainer=documentObject.querySelector("#canvas-wrap");
   const undoButton=documentObject.querySelector("#undo-action");
   const redoButton=documentObject.querySelector("#redo-action");
   const recheckButton=documentObject.querySelector("#reconcile-action");
-  if(!status||!fidelity||!identity||!host) throw new Error("Chaptera Editor shell DOM is incomplete");
+  if(!status||!fidelity||!identity||!host||!scrollContainer) throw new Error("Chaptera Editor shell DOM is incomplete");
   identity.textContent=documentId;
 
   let seq=0;
@@ -223,8 +225,18 @@ export async function bootProductEditor({
     throw error;
   }
 
+  // Admit host-verified inline SafePreview images only for the current page.
+  // Without a verified derivative identity, the Reader painter stays unchanged.
+  const resourceImages=new ProductSafePreviewImageAdmissionV1({
+    host, scroll_container:scrollContainer, document_object:documentObject,
+    crypto_object:cryptoObject,
+  });
+  globalThis.window?.addEventListener?.("pagehide",(event)=>{
+    if(event.persisted!==true) resourceImages.dispose();
+  });
   let shell=null;
   shell=new RichReaderEditorShellV1({
+    resourceImages,
     host,
     service,
     keyboardTarget:documentObject,
@@ -457,7 +469,7 @@ export async function bootProductEditor({
       locationObject.reload?.();
     });
   }
-  return {kind:"ready",document_id:documentId,shell,service};
+  return {kind:"ready",document_id:documentId,shell,service,resourceImages};
 }
 
 if(typeof window!=="undefined"&&typeof document!=="undefined"){
