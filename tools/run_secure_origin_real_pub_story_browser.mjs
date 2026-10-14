@@ -283,6 +283,20 @@ try {
     document.querySelector("#story-status")?.textContent?.includes(
       "Exact server revision and reopened Story text confirmed"),
   null, { timeout: 120000 });
+  const firstSelection = await page.evaluate(() => {
+    const input = document.querySelector("#story-input");
+    return {
+      start: input.selectionStart,
+      end: input.selectionEnd,
+      direction: input.selectionDirection,
+      focused: document.activeElement === input,
+    };
+  });
+  if (firstSelection.start !== replacement.length ||
+      firstSelection.end !== replacement.length ||
+      firstSelection.direction !== "none" || !firstSelection.focused) {
+    throw new Error("accepted Story edit did not restore the canonical caret");
+  }
   const current = await readProduct();
   if (current.revision_id !== receipt.revision_id ||
       current.authoring_graph?.stories?.[selected.storyId]?.text !== desiredCanonical) {
@@ -386,6 +400,20 @@ try {
       document.querySelector("#story-status")?.textContent?.includes(
         "Exact server revision and reopened Story text confirmed"),
     null, { timeout: 120000 });
+    const pasteCaret = afterFirstScalars[0].length + pasteReplacement.length;
+    const pasteSelection = await page.evaluate(() => {
+      const input = document.querySelector("#story-input");
+      return {
+        start: input.selectionStart,
+        end: input.selectionEnd,
+        direction: input.selectionDirection,
+        focused: document.activeElement === input,
+      };
+    });
+    if (pasteSelection.start !== pasteCaret || pasteSelection.end !== pasteCaret ||
+        pasteSelection.direction !== "none" || !pasteSelection.focused) {
+      throw new Error("accepted physical paste did not restore the canonical caret");
+    }
     const pastedCurrent = await readProduct();
     if (pastedCurrent.revision_id !== pasteReceipt.revision_id ||
         pastedCurrent.authoring_graph?.stories?.[selected.storyId]?.text !== pastedCanonical) {
@@ -662,6 +690,8 @@ try {
     source_bytes_in_receipt: false,
     browser_layout_is_canonical: false,
     story_undo_redo_claim: true,
+    selection_reconciliation_claim: true,
+    initial_reconciled_selection_utf16: firstSelection,
     authorized_history_call_count: historyCalls.length,
     redo_unavailable_confirmed: true,
     export_job_claim: true,
