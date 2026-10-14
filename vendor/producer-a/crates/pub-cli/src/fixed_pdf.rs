@@ -64,7 +64,6 @@ fn shaped_glyph_sequence_hash(glyphs: &[pub_layout::BoundedShapedGlyph]) -> Resu
     sha256_json_id(&serde_json::json!(normalized))
 }
 
-
 fn authoritative_source_refs<'a>(
     references: &'a [SourceRef],
     primary_source: &SourceDescriptor,
@@ -75,7 +74,10 @@ fn authoritative_source_refs<'a>(
             reference.validate_primary_source(primary_source).is_ok()
                 && reference.authority == AuthorityClass::Authoritative
                 && reference.confidence == Some(ReadConfidence::Exact)
-                && matches!(reference.role, SourceRole::Semantic | SourceRole::Projection)
+                && matches!(
+                    reference.role,
+                    SourceRole::Semantic | SourceRole::Projection
+                )
         })
         .collect()
 }
@@ -663,7 +665,10 @@ fn build_pdf_artifact(
                     "unmapped_projected_node"
                 } else if references.is_empty() {
                     "no_exact_authoritative_source_ref"
-                } else if references.iter().any(|reference| reference.byte_range.is_some()) {
+                } else if references
+                    .iter()
+                    .any(|reference| reference.byte_range.is_some())
+                {
                     "exact_source_byte_range"
                 } else {
                     "exact_source_object_only"
@@ -704,7 +709,6 @@ mod tests {
     use pub_viewer::{ViewerImagePlacementV1, ViewerImageRecolorV1, ViewerImageSourceWindowV1};
     use std::collections::BTreeSet;
     use std::path::Path;
-
 
     #[test]
     fn pdf_source_refs_require_validated_exact_primary_authority() {
