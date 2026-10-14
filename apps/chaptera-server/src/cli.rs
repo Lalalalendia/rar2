@@ -80,7 +80,7 @@ pub enum Command {
         project_json: Option<PathBuf>,
         #[arg(long, requires = "project_json")]
         expected_project_sha256: Option<String>,
-        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"])]
+        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"], conflicts_with = "resize_intent_json")]
         move_node_id: Option<String>,
         #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
         move_x_emu: Option<i64>,
@@ -90,14 +90,21 @@ pub enum Command {
         #[arg(
             long,
             requires = "project_json",
-            conflicts_with_all = ["move_node_id", "scene_revision_id"]
+            conflicts_with_all = ["move_node_id", "scene_revision_id", "resize_intent_json"]
         )]
         story_intent_json: Option<PathBuf>,
+        /// Exact private bounds; never trust the browser as source authority.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "story_intent_json", "scene_revision_id", "editable_export_target"]
+        )]
+        resize_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,
             requires_all = ["scene_baseline_revision_id", "project_json"],
-            conflicts_with = "move_node_id"
+            conflicts_with_all = ["move_node_id", "resize_intent_json"]
         )]
         scene_revision_id: Option<String>,
         #[arg(long, requires = "scene_revision_id")]
@@ -106,7 +113,7 @@ pub enum Command {
         #[arg(
             long,
             requires = "project_json",
-            conflicts_with_all = ["move_node_id", "scene_revision_id", "story_intent_json"]
+            conflicts_with_all = ["move_node_id", "scene_revision_id", "story_intent_json", "resize_intent_json"]
         )]
         editable_export_target: Option<String>,
     },
@@ -176,6 +183,42 @@ mod tests {
             "rev",
         ]);
         assert!(Cli::try_parse_from(admitted).is_err());
+    }
+
+    #[test]
+    fn resize_mode_requires_exact_project_and_forbids_ambiguous_commands() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "tempedit:0123456789abcdef0123456789abcdef",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut invalid = base.to_vec();
+        invalid.extend(["--resize-intent-json", "/tmp/resize.json"]);
+        assert!(Cli::try_parse_from(invalid).is_err());
+
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/current.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--resize-intent-json",
+            "/tmp/resize.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                resize_intent_json: Some(_),
+                ..
+            }
+        ));
+        valid.extend(["--story-intent-json", "/tmp/story.json"]);
+        assert!(Cli::try_parse_from(valid).is_err());
     }
 
     #[test]

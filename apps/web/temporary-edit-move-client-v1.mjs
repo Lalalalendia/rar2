@@ -32,6 +32,18 @@ function safePosition(value) {
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value);
 }
+
+function isSafeResizeRect(rect) {
+  return object(rect) && [rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) &&
+    rect.width > 0 && rect.height > 0 &&
+    Number.isSafeInteger(rect.x + rect.width) &&
+    Number.isSafeInteger(rect.y + rect.height);
+}
+function sameBounds(a, b) {
+  return a.x === b.x && a.y === b.y &&
+    a.width === b.width && a.height === b.height;
+}
+
 function defaultStorage() {
   try { return globalThis.sessionStorage ?? null; } catch { return null; }
 }
@@ -239,7 +251,9 @@ export class TemporaryGuestMoveClientV1 {
 
   #checkedAck(ack, request, previous) {
     const protocol = request.command.kind === "replace_story_range"
-      ? "chaptera.temporary-editor-story-range.v1" : ACCEPTED_PROTOCOL;
+      ? "chaptera.temporary-editor-story-range.v1"
+      : request.command.kind === "resize_node"
+        ? "chaptera.temporary-editor-resize-node.v1" : ACCEPTED_PROTOCOL;
     if (ack.protocol_version !== protocol ||
         ack.document_id !== this.#sessionId || ack.source_hash !== this.#sourceHash ||
         ack.base_revision_id !== request.base_revision_id ||
@@ -259,6 +273,21 @@ export class TemporaryGuestMoveClientV1 {
          ack.canonical_operation.end_scalar !== request.command.end_scalar ||
          ack.canonical_operation.replacement_text !== request.command.replacement_text)) {
       throw failure("temporary_story_ack_operation_mismatch");
+    }
+    if (request.command.kind === "resize_node") {
+      const after = ack.canonical_operation.after;
+      const command = request.command;
+      const prior = previous.authoring_graph?.nodes?.[command.node_id]?.header?.bounds;
+      const before = ack.canonical_operation.before;
+      if (ack.canonical_operation.kind !== "resize_node" ||
+          ack.canonical_operation.node_id !== command.node_id ||
+          !isSafeResizeRect(after) || !isSafeResizeRect(before) ||
+          !isSafeResizeRect(prior) || !sameBounds(before, prior) ||
+          after.x !== command.x_emu || after.y !== command.y_emu ||
+          after.width !== command.width_emu ||
+          after.height !== command.height_emu) {
+        throw failure("temporary_resize_ack_operation_mismatch");
+      }
     }
     return ack;
   }
@@ -288,9 +317,15 @@ export class TemporaryGuestMoveClientV1 {
     const node = current.authoring_graph.nodes[command.node_id];
     const exactMutation = pending.action === "story-range"
       ? current.authoring_graph.stories?.[command.story_id]?.text === pending.expectedText
-      : object(node?.header?.bounds) &&
-        node.header.bounds.x === command.x_emu &&
-        node.header.bounds.y === command.y_emu;
+      : pending.action === "resize-node"
+        ? isSafeResizeRect(node?.header?.bounds) &&
+          node.header.bounds.x === command.x_emu &&
+          node.header.bounds.y === command.y_emu &&
+          node.header.bounds.width === command.width_emu &&
+          node.header.bounds.height === command.height_emu
+        : object(node?.header?.bounds) &&
+          node.header.bounds.x === command.x_emu &&
+          node.header.bounds.y === command.y_emu;
     if (current.revision_id !== ack.revision_id ||
         current.canonical_authoring_revision_id !== ack.canonical_authoring_revision_id ||
         current.revision_cursor !== pending.before.revision_cursor + 1 ||
@@ -486,6 +521,52 @@ export class TemporaryGuestMoveClientV1 {
   // Guest single-paragraph Story replacement. Full-range scalar replacement
   // avoids browser-dependent caret offsets and newline normalization. No
   // speculative local authoritative state is ever exposed or persisted.
+
+  async resizeNode({ nodeId, bounds } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const before = this.#current.authoring_graph.nodes[nodeId]?.header?.bounds;
+    if (!NODE.test(nodeId ?? "") || !isSafeResizeRect(before) ||
+        !isSafeResizeRect(bounds) || sameBounds(before, bounds) ||
+        (before.width === bounds.width && before.height === bounds.height)) {
+      throw failure("temporary_resize_intent_invalid");
+    }
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "resize-node",
+      before: this.#current,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "resize_node", node_id: nodeId,
+          x_emu: bounds.x, y_emu: bounds.y,
+          width_emu: bounds.width, height_emu: bounds.height,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
   async replaceStory({ storyId, newText } = {}) {
     if (this.#busy) throw failure("temporary_move_busy");
     if (this.#pending) throw failure("temporary_move_reconciliation_required");

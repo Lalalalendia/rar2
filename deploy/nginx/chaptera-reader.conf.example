@@ -54,7 +54,7 @@ server {
     # Browser Temporary Editor runs on the same HTTPS host as Reader.
     # This is an exact, case-sensitive source-neutral asset allowlist.
     # Never forward a broad /editor/* or /v1/editor/* Product/OIDC route.
-    location ~ ^/(?:editor/(?:temporary-preview|temporary-editor-preview\.(?:mjs|css)|temporary-edit-browser-session-v0\.mjs|temporary-edit-move-client-v1\.mjs|text-protocol-v1\.mjs|story-line-endings-v1\.mjs|interaction-v1\.mjs|reader-scene-editor-interaction-v1\.mjs)|cloud-reader/render-v1\.mjs)$ {
+    location ~ ^/(?:editor/(?:temporary-preview|temporary-editor-preview\.(?:mjs|css)|temporary-edit-browser-session-v0\.mjs|temporary-edit-move-client-v1\.mjs|text-protocol-v1\.mjs|story-line-endings-v1\.mjs|interaction-v1\.mjs|reader-scene-editor-interaction-v1\.mjs)|cloud-reader/render-v1\.mjs|packages/protocol/editor-resize/v1/resize-gesture-v1\.mjs)$ {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -70,7 +70,7 @@ server {
     # bounded edited exports and explicit DELETE. Restrict path to the
     # canonical tempedit:hex32 identity; arbitrary Product routes remain 404.
     # Quantified {32} requires quoted PCRE for Nginx config lexer.
-    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|story-range|exports/(?:idml|odg|pdf9up|pdf)))?)?$" {
+    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|story-range|resize-node|exports/(?:idml|odg|pdf9up|pdf)))?)?$" {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

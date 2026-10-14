@@ -25,7 +25,9 @@ def main() -> int:
     for key in ("chaptera", "caddy", "fixture", "out"):
         ap.add_argument("--" + key, required=True, type=pathlib.Path)
     ap.add_argument("--fixture-sha256", required=True)
-    ap.add_argument("--target", choices=("idml", "pdf", "story-idml", "story-odg"), default="idml")
+    ap.add_argument("--target", choices=(
+        "idml", "pdf", "story-idml", "story-odg",
+        "resize-idml", "resize-odg"), default="idml")
     args = ap.parse_args()
     binary = args.chaptera.resolve()
     caddy = args.caddy.resolve()
@@ -34,6 +36,7 @@ def main() -> int:
     if not binary.is_file() or not caddy.is_file():
         raise AssertionError("canonical Chaptera binary and pinned Caddy required")
     story_mode = args.target.startswith("story-")
+    resize_mode = args.target.startswith("resize-")
     expected_length = 72192 if story_mode else 291840
     if (live.sha256_file(fixture) != args.fixture_sha256 or
             fixture.stat().st_size != expected_length):
@@ -85,6 +88,7 @@ def main() -> int:
             "/editor/temporary-edit-move-client-v1.mjs",
             "/editor/text-protocol-v1.mjs",
             "/editor/story-line-endings-v1.mjs",
+            "/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs",
             "/editor/reader-scene-editor-interaction-v1.mjs",
             "/cloud-reader/render-v1.mjs",
             "/v1/editor/temporary-sessions",
@@ -139,8 +143,10 @@ def main() -> int:
             "--fixture", str(fixture),
             "--fixture-sha256", args.fixture_sha256,
             "--out", str(out / "receipt.json"),
-            "--target", args.target.removeprefix("story-"),
+            "--target", args.target.removeprefix("story-").removeprefix("resize-"),
         ]
+        if resize_mode:
+            command.append("--resize")
         result = subprocess.run(
             command, env=env, cwd=live.ROOT, text=True,
             capture_output=True, timeout=540, check=False,
@@ -189,6 +195,45 @@ def main() -> int:
                 "target": target,
                 "changed_artifact_sha256": receipt["changed_artifact_sha256"],
                 "physical_text_consumer": True,
+            }, sort_keys=True))
+            return 0
+        if resize_mode:
+            target = args.target.removeprefix("resize-")
+            geometry = (
+                "idml_path_geometry" if target == "idml"
+                else "odg_frame_attributes"
+            )
+            if (receipt.get("schema") !=
+                    "chaptera.tempedit-real-pub-resize-chromium-https.v1" or
+                    receipt.get("status") != "PASS" or
+                    receipt.get("source_sha256") != args.fixture_sha256 or
+                    receipt.get("source_byte_len") != expected_length or
+                    receipt.get("real_pub") is not True or
+                    receipt.get("real_chromium") is not True or
+                    receipt.get("browser_pointer_commits") != 1 or
+                    receipt.get("resize_handle_pointer_commit") is not True or
+                    receipt.get("resized_bounds_reopened") is not True or
+                    receipt.get("resized_target_application_reopened") is not True or
+                    receipt.get("export_target") != target or
+                    receipt.get(f"changed_{target}_geometry_proven") is not True or
+                    receipt.get(f"changed_{target}_identity_proven") is not True or
+                    receipt.get(f"changed_{target}_geometry_form") != geometry or
+                    receipt.get("same_browser_session_delete_proven") is not True or
+                    receipt.get("revoked_old_current_scene_export_denied") is not True or
+                    receipt.get("temporary_bearer_cleared_after_delete") is not True or
+                    receipt.get("loss_report_checked") is not True or
+                    receipt.get("original_pub_immutable") is not True or
+                    receipt.get("bearer_absent_from_urls") is not True or
+                    receipt.get("v0_go") is not False):
+                raise AssertionError("physical Guest ResizeNode receipt invalid")
+            print(json.dumps({
+                "schema": receipt["schema"], "status": "PASS",
+                "real_pub_browser_https": True,
+                "resize_node_commits": receipt["browser_pointer_commits"],
+                "target": target,
+                "physical_geometry_consumer": True,
+                "changed_artifact_sha256":
+                    receipt[f"changed_{target}_download_sha256"],
             }, sort_keys=True))
             return 0
         target = args.target

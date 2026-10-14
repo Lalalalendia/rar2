@@ -31,6 +31,7 @@ on:
       - "tools/run_temporary_editor_real_pub_story_browser.mjs"
       - "tools/verify_temporary_guest_story_export.py"
       - "tools/verify_temporary_guest_pdf_geometry.py"
+      - "tools/verify_temporary_guest_resize_export.py"
       - ".github/workflows/cloud-reader-live-https-acceptance.yml"
   workflow_dispatch:
 
@@ -67,7 +68,7 @@ jobs:
       - name: Verify acceptance host dependencies
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py
+          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_resize_export.py
           node --check tools/run_temporary_editor_real_pub_browser.mjs
           node --check tools/run_temporary_editor_real_pub_story_browser.mjs
           python - <<'PY'
@@ -190,6 +191,22 @@ jobs:
           command -v libreoffice
           command -v xvfb-run
 
+      - name: Prove real Chromium ResizeNode via physical IDML/ODG target geometry
+        run: |
+          set -euo pipefail
+          # This uses the canonical eight-handle browser flow, not a direct
+          # synthetic mutation. Independent XML consumers inspect the actual
+          # files downloaded by Chromium, not a generated expected project.
+          for target in idml odg; do
+            python tools/run_temporary_editor_real_pub_browser_acceptance.py \
+              --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+              --caddy "$RUNNER_TEMP/live-reader/caddy" \
+              --fixture "$RUNNER_TEMP/live-reader/temp-current.pub" \
+              --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
+              --target "resize-$target" \
+              --out "$GITHUB_WORKSPACE/target/temporary-editor-resize-$target"
+          done
+
       - name: Prove real Guest Story edit through isolated worker and physical IDML/ODG consumer
         run: |
           set -euo pipefail
@@ -222,5 +239,7 @@ jobs:
             target/temporary-editor-browser-pdf/caddy.log
             target/temporary-editor-story-idml/receipt.json
             target/temporary-editor-story-odg/receipt.json
+            target/temporary-editor-resize-idml/receipt.json
+            target/temporary-editor-resize-odg/receipt.json
           if-no-files-found: warn
           retention-days: 30

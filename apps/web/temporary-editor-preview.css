@@ -31,6 +31,13 @@ button:disabled { opacity: .65; cursor: wait; }
 #temporary-story-text { resize: vertical; min-height: 7rem; }
 #temporary-story-select:focus-visible, #temporary-story-text:focus-visible { outline: 3px solid #d79b18; outline-offset: 3px; }
 
+.temporary-resize-handle { fill: #fff; stroke: #205d9a; stroke-width: 2px; pointer-events: all; cursor: nwse-resize; }
+.temporary-resize-handle[data-temporary-resize-handle="top"],
+.temporary-resize-handle[data-temporary-resize-handle="bottom"] { cursor: ns-resize; }
+.temporary-resize-handle[data-temporary-resize-handle="left"],
+.temporary-resize-handle[data-temporary-resize-handle="right"] { cursor: ew-resize; }
+.temporary-resize-handle:focus-visible { stroke: #e2961b; outline: none; }
+
 /* The sheet uses the exact verified PDF bytes offered for download. */
 .sheet-preview { margin-top: 1.25rem; }
 .sheet-preview h3 { font-size: 1rem; margin-bottom: .35rem; }

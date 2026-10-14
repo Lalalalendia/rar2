@@ -426,3 +426,94 @@ test("A4 sheet preview displays only report-bound PDF and revokes it on forget; 
     assert.equal(dom.nodes["temporary-sheet-pdf-frame"].src, "");
   }
 });
+
+
+test("selected page-owned shape exposes eight handles and one canonical pointer-up ResizeNode", async () => {
+  const dom = fakeDom();
+  const svg = dom.pointer(101,201).target.closest("svg.page");
+  const drawn = [];
+  svg.appendChild = element => drawn.push(element);
+  dom.documentObject.createElementNS = () => {
+    const attrs = {};
+    return {
+      attrs,
+      setAttribute(key,value) {attrs[key]=value;},
+      getAttribute(key) {return attrs[key] ?? null;},
+      remove() {},
+    };
+  };
+  const original = current(beforeRev,0,100,200);
+  const resized = current(afterRev,1,100,200);
+  resized.authoring_graph.nodes[nodeId].header.bounds = {
+    x:100,y:200,width:400,height:400,
+  };
+  const scenes = [];
+  const baseNetwork=server();
+  let saved = false;
+  const posts=[];
+  const fetchImpl=async (url, options) => {
+    if(url===base+"/current") return response(saved?resized:original);
+    if(url===base+"/scene") {
+      const scene=readerScene(saved?afterRev:beforeRev);
+      if(saved) scene.nodes[0].bounds={x:100,y:200,width:400,height:400};
+      return response({
+        protocol_version:"chaptera.temporary-editor-scene.v1",
+        document_id:id,source_hash:source,revision_id:saved?afterRev:beforeRev,
+        expires_at_ms:saved?8_200_000:4_600_000,scene,
+      });
+    }
+    if(url===base+"/resize-node") {
+      const body=JSON.parse(options.body);
+      posts.push({body,options});
+      assert.deepEqual(body.command,{
+        kind:"resize_node",node_id:nodeId,x_emu:100,y_emu:200,
+        width_emu:400,height_emu:400,
+      });
+      assert.equal(options.headers["x-chaptera-reader-session"],token);
+      saved=true;
+      return response({
+        protocol_version:"chaptera.temporary-editor-resize-node.v1",
+        document_id:id,source_hash:source,base_revision_id:beforeRev,
+        revision_id:afterRev,canonical_authoring_revision_id:afterCanon,
+        client_operation_id:body.client_operation_id,expires_at_ms:8_200_000,
+        replayed:false,scene_refresh:"current",
+        canonical_operation:{
+          kind:"resize_node",node_id:nodeId,
+          before:{x:100,y:200,width:300,height:300},
+          after:{x:100,y:200,width:400,height:400},
+        },
+      });
+    }
+    return baseNetwork.fetchImpl(url, options);
+  };
+  const controller=await bootTemporaryEditorPreview({
+    documentObject:dom.documentObject,
+    cryptoObject:{getRandomValues(bytes){bytes.fill(4);return bytes;}},
+    storage:storage(),fetchImpl,renderer:async(_,scene)=>scenes.push(scene),
+  });
+  await controller.start({name:"example.pub",size:1729});
+  const pages=dom.nodes["temporary-pages"];
+  const selected=dom.pointer(120,230);
+  pages.handlers.pointerdown(selected);
+  await pages.handlers.pointerup(selected);
+  const handles=drawn.filter(el=>el.attrs?.["data-temporary-resize-handle"]);
+  assert.equal(handles.length,8);
+  const corner=handles.find(el=>el.getAttribute("data-temporary-resize-handle")==="bottom-right");
+  assert.ok(corner);
+  const target={
+    closest(selector) {
+      if(selector.startsWith("svg.")) return svg;
+      if(selector==="[data-temporary-resize-handle]"||selector==="[data-node-id]")return corner;
+      return null;
+    },
+  };
+  const resizeDown={...dom.pointer(400,500),target};
+  const resizeUp={...dom.pointer(500,600),target};
+  pages.handlers.pointerdown(resizeDown);
+  pages.handlers.pointermove(resizeUp);
+  await pages.handlers.pointerup(resizeUp);
+  assert.equal(posts.length,1);
+  assert.equal(scenes.at(-1).nodes[0].bounds.width,400);
+  assert.equal(dom.nodes["temporary-download-idml"].disabled,false);
+  assert.match(dom.nodes["temporary-status"].textContent,/Правка сохранена/);
+});
