@@ -16,6 +16,47 @@ const CURRENT_PROTOCOL = "chaptera.temporary-editor-current.v1";
 const ACCEPTED_PROTOCOL = "chaptera.temporary-editor-move-node.v1";
 const REQUEST_PROTOCOL = "chaptera.commit-request.v1";
 const LOCAL_SCHEMA = "chaptera.temporary-edit.browser.v0";
+const SHAPE_ACK_PROTOCOL = "chaptera.temporary-editor-create-shape.v1";
+const AUTHORED_UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function safeRgb(value) {
+  return Array.isArray(value) && value.length === 3 &&
+    value.every(component => Number.isInteger(component) && component >= 0 && component <= 255);
+}
+function sameRgb(a, b) {
+  return safeRgb(a) && safeRgb(b) && a.every((value, index) => value === b[index]);
+}
+function canonicalCreatedRectangleMatches(operation, command) {
+  if (!object(operation) || operation.kind !== "create_shape" ||
+      !AUTHORED_UUID_V7.test(operation.node_id ?? "") ||
+      operation.page_id !== command.page_id ||
+      operation.parent_id !== command.page_id ||
+      operation.shape_kind !== "rectangle" ||
+      operation.transform?.kind !== "identity" ||
+      operation.provenance?.kind !== "author_created" ||
+      operation.paint?.provenance?.kind !== "author_created") return false;
+  const bounds = operation.bounds;
+  if (!isSafeResizeRect(bounds) ||
+      bounds.x !== command.x_emu || bounds.y !== command.y_emu ||
+      bounds.width !== command.width_emu || bounds.height !== command.height_emu) return false;
+  const fill = operation.paint?.fill, stroke = operation.paint?.stroke;
+  return fill?.visible === true && stroke?.visible === true &&
+    sameRgb([fill.color?.r, fill.color?.g, fill.color?.b], command.fill_rgb) &&
+    sameRgb([stroke.color?.r, stroke.color?.g, stroke.color?.b], command.stroke_rgb) &&
+    stroke.width_emu === command.stroke_width_emu;
+}
+function sameAuthoredRectangleEvent(a, b) {
+  // Host-generated NodeId is unknown before the POST; after ACK it must
+  // exactly match the last canonical operation in the reopened project.
+  if (!object(a) || !object(b) || a.node_id !== b.node_id ||
+      a.page_id !== b.page_id) return false;
+  const keys = ["kind", "node_id", "page_id", "parent_id", "shape_kind"];
+  if (!keys.every(key => a[key] === b[key])) return false;
+  return JSON.stringify(a.bounds) === JSON.stringify(b.bounds) &&
+    JSON.stringify(a.paint) === JSON.stringify(b.paint) &&
+    JSON.stringify(a.transform) === JSON.stringify(b.transform) &&
+    JSON.stringify(a.provenance) === JSON.stringify(b.provenance);
+}
+
 
 // Only a server-confirmed 429 on an idempotent, private GET may be retried.
 // A server-supplied Retry-After must be a small, positive delta-seconds value;
@@ -281,7 +322,9 @@ export class TemporaryGuestMoveClientV1 {
     const protocol = request.command.kind === "replace_story_range"
       ? "chaptera.temporary-editor-story-range.v1"
       : request.command.kind === "resize_node"
-        ? "chaptera.temporary-editor-resize-node.v1" : ACCEPTED_PROTOCOL;
+        ? "chaptera.temporary-editor-resize-node.v1"
+        : request.command.kind === "create_shape"
+          ? SHAPE_ACK_PROTOCOL : ACCEPTED_PROTOCOL;
     if (ack.protocol_version !== protocol ||
         ack.document_id !== this.#sessionId || ack.source_hash !== this.#sourceHash ||
         ack.base_revision_id !== request.base_revision_id ||
@@ -301,6 +344,10 @@ export class TemporaryGuestMoveClientV1 {
          ack.canonical_operation.end_scalar !== request.command.end_scalar ||
          ack.canonical_operation.replacement_text !== request.command.replacement_text)) {
       throw failure("temporary_story_ack_operation_mismatch");
+    }
+    if (request.command.kind === "create_shape" &&
+        !canonicalCreatedRectangleMatches(ack.canonical_operation, request.command)) {
+      throw failure("temporary_create_shape_ack_operation_mismatch");
     }
     if (request.command.kind === "resize_node") {
       const after = ack.canonical_operation.after;
@@ -343,7 +390,11 @@ export class TemporaryGuestMoveClientV1 {
     const current = this.#checkedCurrent(await this.#request("current"));
     const command = pending.request.command;
     const node = current.authoring_graph.nodes[command.node_id];
-    const exactMutation = pending.action === "story-range"
+    const currentOperation = current.project?.operations?.at(-1);
+    const exactMutation = pending.action === "create-shape"
+      ? canonicalCreatedRectangleMatches(currentOperation, command) &&
+        sameAuthoredRectangleEvent(currentOperation, ack.canonical_operation)
+      : pending.action === "story-range"
       ? current.authoring_graph.stories?.[command.story_id]?.text === pending.expectedText
       : pending.action === "resize-node"
         ? isSafeResizeRect(node?.header?.bounds) &&
@@ -579,6 +630,62 @@ export class TemporaryGuestMoveClientV1 {
           kind: "resize_node", node_id: nodeId,
           x_emu: bounds.x, y_emu: bounds.y,
           width_emu: bounds.width, height_emu: bounds.height,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
+
+  // Only geometry/paint are browser intent. The server owns NodeId, source
+  // page eligibility and the atomic RevisionStream append.
+  async createRectangle({ pageId, bounds, fillRgb = [18, 52, 86],
+    strokeRgb = [170, 187, 204], strokeWidthEmu = 12_700 } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const page = this.#current.authoring_graph.pages?.[pageId];
+    const width = page?.size?.width, height = page?.size?.height;
+    if (!NODE.test(pageId ?? "") || !object(page) ||
+        !safeUnsigned(width) || width <= 0 || !safeUnsigned(height) || height <= 0 ||
+        !isSafeResizeRect(bounds) || bounds.x < 0 || bounds.y < 0 ||
+        bounds.x + bounds.width > width || bounds.y + bounds.height > height ||
+        !safeRgb(fillRgb) || !safeRgb(strokeRgb) ||
+        !Number.isSafeInteger(strokeWidthEmu) || strokeWidthEmu <= 0 ||
+        strokeWidthEmu > 1_000_000) {
+      throw failure("temporary_create_shape_intent_invalid");
+    }
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "create-shape",
+      before: this.#current,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "create_shape", page_id: pageId,
+          x_emu: bounds.x, y_emu: bounds.y,
+          width_emu: bounds.width, height_emu: bounds.height,
+          fill_rgb: [...fillRgb], stroke_rgb: [...strokeRgb],
+          stroke_width_emu: strokeWidthEmu,
         },
       },
       ack: null,
