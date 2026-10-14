@@ -12,6 +12,9 @@ on:
       - "tools/ci/local_dev_transport.py"
       - "tools/ci/test_local_dev_transport.py"
       - "docs/ci-local-dev-transport-01.md"
+      - "tools/ci/local_dev_handoff.py"
+      - "tools/ci/test_local_dev_handoff.py"
+      - "docs/ci-local-dev-handoff-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -36,6 +39,10 @@ jobs:
         run: |
           python -m py_compile tools/ci/local_dev_transport.py
           python -m unittest discover -s tools/ci -p test_local_dev_transport.py
+      - name: Unit-test opt-in local task handoff with disposable Git remotes
+        run: |
+          python -m py_compile tools/ci/local_dev_handoff.py
+          python -m unittest discover -s tools/ci -p test_local_dev_handoff.py
       - name: Prove a bounded self-plan
         run: |
           python tools/dev_fast_loop.py \
