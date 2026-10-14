@@ -84,7 +84,11 @@ try {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
-  assert.equal(navigation?.status(), 200);
+  if (navigation?.status() !== 200) {
+    const failure = new Error("browser_load_http_status");
+    failure.safeHttpStatus = navigation?.status() ?? 0;
+    throw failure;
+  }
   stage = "resume_ui";
   await page.locator("#temporary-resume").waitFor({ state: "visible", timeout: 15000 });
   await page.locator("#temporary-resume").click();
@@ -252,6 +256,7 @@ try {
   // allowlist of diagnostic strings already owned by this test.
   const message = String(error?.message ?? "");
   const kinds = [
+    ["browser_origin_http", /browser_load_http_status/],
     ["missing_picture_dom", /not painted by editor|did not paint once per frame|missing star for controlled/],
     ["image_transport", /host-authorized SafePreview|R1 image not decoded or visible/],
     ["logo_dom_or_decode", /logo/i],
@@ -263,7 +268,11 @@ try {
   const code = kinds.find(([, match]) => match.test(message))?.[0] ??
     (error?.name === "AssertionError" ? "assertion_unclassified" : "browser_unclassified");
   console.error("SBDC034_R1_BROWSER_FAILURE " + JSON.stringify({
-    stage, code, class: error?.name === "TimeoutError" ? "TimeoutError" :
+    stage, code,
+    http_status: Number.isSafeInteger(error?.safeHttpStatus) &&
+      error.safeHttpStatus >= 0 && error.safeHttpStatus <= 599
+      ? error.safeHttpStatus : null,
+    class: error?.name === "TimeoutError" ? "TimeoutError" :
       error?.name === "AssertionError" ? "AssertionError" : "Error",
   }));
   process.exitCode = 1;
