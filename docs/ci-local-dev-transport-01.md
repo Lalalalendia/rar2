@@ -22,8 +22,11 @@ The workflow is hourly and manual for trusted `main` only; every scheduled
 run checks out the event's immutable `github.sha` without persisting the GitHub
 token. No PR workflow executes on the PC. The source-safe receipt is uploaded as
 a short-retention artifact; no stdout/stderr, private document, or source bundle
-is uploaded by this adapter. Full fast-loop logs stay in `runner.temp`,
-which should not be used as durable storage.
+is uploaded by this adapter. The sanitized checkpoint is stored under `runner.tool_cache` to survive jobs
+on a persistent runner. The directory must be owned by the unprivileged runner
+account; do not share it with Publisher/native jobs. Full fast-loop logs remain
+local and are not uploaded. They are only bounded to 64 KiB each, not automatically
+purged by this adapter; configure host retention/cleanup separately.
 
 ## First run and limitations
 
