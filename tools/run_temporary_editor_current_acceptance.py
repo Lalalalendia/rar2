@@ -626,7 +626,10 @@ def main() -> int:
         edited_formats = []
         unavailable_formats = []
         export_receipts = []
-        for target in ("odg", "idml", "pdf"):
+        # The exact SBDC034 visual proof only owns the current fixed PDF.
+        # Imported picture objects need not be editable ODG/IDML frames.
+        # Keep the original all-format geometry gate for other real fixtures.
+        for target in (("pdf",) if sbdc_r0 else ("odg", "idml", "pdf")):
             export_path = f"/v1/editor/temporary-sessions/{session_id}/exports/{target}?{query}"
             checked(call("GET", export_path)[0], 401, "private edited export capability")
             checked(call(
@@ -957,7 +960,7 @@ def main() -> int:
                 "shared_star_resource_preserved": True,
                 "host_image_resources_r0": sbdc_r0["host_image_resources"],
                 "host_image_resources_r1": sbdc_r1["host_image_resources"],
-                "cmky_logo_admitted": sbdc_r1["logo_admitted"],
+                "cmyk_logo_admitted": sbdc_r1["logo_admitted"],
                 "fixed_pdf_star_paint_uses_r0": sbdc_pdf_r0_uses,
                 "fixed_pdf_star_paint_uses_r1": sbdc_pdf_r1_uses,
                 "unmodified_star_bounds_preserved_after_move": True,
