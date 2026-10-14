@@ -2,28 +2,28 @@
 # Execution-only, never merge; 25 live refs, verified unprotected and not open-PR head/base.
 # Preservation: closed PR text, retained commit SHAs and workflow receipts; current product branch heads excluded.
 # branch exact_sha # factual evidence
-ops/branch-gc-20261014-evidence-batch42 # 9eeb97af182849a42a1993959c80c4139a2f7b79 # closed execution-only PR #2777, successful 15/15 receipt run 38622011816
-measure/exact-main-pdf-digest-falsifier-20261012 # d993b15c8eb2876b0651e0adc5ea087b26ebc6dc # closed PR #2657, measurement-only comment, no product change
-ci/reader-classifier-dispatch-ab-01 # 3ff38729c8dac7adbe452d47bf616b43187f3aa5 # closed PR #2363, experimental CI runner control, never-merge
-ci/reader-visual-no-smoke-ab-01 # ec8b7600a83cc8cafc8cb19c0b6269876adeef57 # closed PR #2354, sacrificial A/B control, never-merge
-ci/pub-editor-delete-test-path-control-2215 # bf7cc27fd8e6b1b5664893d097b0b5719c6cdb4d # closed PR #2231, comment-only routing control, never-merge
-viewer/officeart-grouped-image-residual-05-01 # 785293d21a566fecd5e2c1f568bad3c996e9fdff # closed PR #1810, no accepted product semantics, superseded decomposition
-ci/shaped-flow-runtime-split-01 # 11a746d4edfc397b43e826f5bbea3fc42746f319 # closed PR #1741, superseded by merged #1744
-recovery/partial-escherdelay-salvage-04-current-stack # f1c5217481f6c7d41449d8828f10100426f743d4 # closed PR #1621, superseded by merged #1624
-recovery/partial-stream-sid-01 # 5f0c15975640c5eb2801cca962bfc778c8f061ab # closed PR #1568, superseded by merged #1583
-authoring/table-track-resize-history-01 # 2aa53d1fb7721946dd7278fdd776311577b70c68 # closed PR #1554, superseded by merged #1586
-viewer/manual-oracle-rotated-text-01 # 769f3d17b144953369ed30802b0f949b6367e991 # closed PR #1552, superseded by merged #1579
-conversion/effective-paragraph-align-06 # af0959b2191e4169951b54cae68b6dad6a996f8e # closed PR #1451, superseded by merged #1459
-authoring/paragraph-substrate-rar2-01 # c8c8b3dd1d0e30cfabede7eb081567a85f63f224 # closed PR #1310, superseded by merged #1315
-recover/pub-docx-text-first-03 # 0d879d66a9711c566ced3fcc851b0f3300d2c600 # closed PR #1210, superseded by merged #1215
-recover/pub-output-font-plan-02 # 5beecf3e0d1ed018c601a8cd83ebc9839337faa7 # closed PR #1186, superseded by merged #1209
-conversion/editable-typography-current-main-01 # 1f5a8b0a739ca763b85d62443c3ffa9cc761870d # closed PR #1102, superseded by merged #1117
-ci-reader-update-fanout-01 # c0f87789989d3ecda7717d457a07f41abbfd8b59 # closed PR #1096, superseded by merged #1262
-conversion/editable-typography-consumer-edit-01b # 5c4273c74a546eada4737f73c2ec819c29c1d75a # closed PR #1073, superseded by merged #1079
-fix/mature-zero-leader-detached-tail-983-v3 # d20ba5c9a5f6b1bb85150b81bc1f796de60cd4da # closed PR #1000, superseded by merged #1004
-cloud-reader/font-supply-diagnostics-944-v2 # 5ec89f77b3d235c94b5b044313670ba16f3ea728 # closed PR #997, superseded by merged #1008
-fix/legacy22-point-group-viewer-01 # 4c5d6c117adda1f8bf38dcc7f0420852f2a3eaca # closed PR #932, superseded by merged #936
-fix/quill-text-color-reader-01-v4 # beb3e08aa240df027c0cd65321cabd86dd1c14cd # closed PR #900, superseded by merged #910
-fix/batch01-fingerprint-pin # d20f1a633980a310cf3d47472f8b0ab2e3000897 # closed PR #849, exact Batch01 pin correction already in main
-fix/quill-text-color-01 # f60662f102c8bef47248456ccc3377d3cbafbe9e # closed PR #811, text-color work landed via merged #910
-fix/quill-text-color-carrier-01 # 6f6bf81f1ea4a6d4991b206ce144c2b4162c7474 # closed PR #840, stronger text-color model landed via merged #910
+ops/branch-gc-20261014-evidence-batch42 9eeb97af182849a42a1993959c80c4139a2f7b79 # closed execution-only PR #2777, successful 15/15 receipt run 38622011816
+measure/exact-main-pdf-digest-falsifier-20261012 d993b15c8eb2876b0651e0adc5ea087b26ebc6dc # closed PR #2657, measurement-only comment, no product change
+ci/reader-classifier-dispatch-ab-01 3ff38729c8dac7adbe452d47bf616b43187f3aa5 # closed PR #2363, experimental CI runner control, never-merge
+ci/reader-visual-no-smoke-ab-01 ec8b7600a83cc8cafc8cb19c0b6269876adeef57 # closed PR #2354, sacrificial A/B control, never-merge
+ci/pub-editor-delete-test-path-control-2215 bf7cc27fd8e6b1b5664893d097b0b5719c6cdb4d # closed PR #2231, comment-only routing control, never-merge
+viewer/officeart-grouped-image-residual-05-01 785293d21a566fecd5e2c1f568bad3c996e9fdff # closed PR #1810, no accepted product semantics, superseded decomposition
+ci/shaped-flow-runtime-split-01 11a746d4edfc397b43e826f5bbea3fc42746f319 # closed PR #1741, superseded by merged #1744
+recovery/partial-escherdelay-salvage-04-current-stack f1c5217481f6c7d41449d8828f10100426f743d4 # closed PR #1621, superseded by merged #1624
+recovery/partial-stream-sid-01 5f0c15975640c5eb2801cca962bfc778c8f061ab # closed PR #1568, superseded by merged #1583
+authoring/table-track-resize-history-01 2aa53d1fb7721946dd7278fdd776311577b70c68 # closed PR #1554, superseded by merged #1586
+viewer/manual-oracle-rotated-text-01 769f3d17b144953369ed30802b0f949b6367e991 # closed PR #1552, superseded by merged #1579
+conversion/effective-paragraph-align-06 af0959b2191e4169951b54cae68b6dad6a996f8e # closed PR #1451, superseded by merged #1459
+authoring/paragraph-substrate-rar2-01 c8c8b3dd1d0e30cfabede7eb081567a85f63f224 # closed PR #1310, superseded by merged #1315
+recover/pub-docx-text-first-03 0d879d66a9711c566ced3fcc851b0f3300d2c600 # closed PR #1210, superseded by merged #1215
+recover/pub-output-font-plan-02 5beecf3e0d1ed018c601a8cd83ebc9839337faa7 # closed PR #1186, superseded by merged #1209
+conversion/editable-typography-current-main-01 1f5a8b0a739ca763b85d62443c3ffa9cc761870d # closed PR #1102, superseded by merged #1117
+ci-reader-update-fanout-01 c0f87789989d3ecda7717d457a07f41abbfd8b59 # closed PR #1096, superseded by merged #1262
+conversion/editable-typography-consumer-edit-01b 5c4273c74a546eada4737f73c2ec819c29c1d75a # closed PR #1073, superseded by merged #1079
+fix/mature-zero-leader-detached-tail-983-v3 d20ba5c9a5f6b1bb85150b81bc1f796de60cd4da # closed PR #1000, superseded by merged #1004
+cloud-reader/font-supply-diagnostics-944-v2 5ec89f77b3d235c94b5b044313670ba16f3ea728 # closed PR #997, superseded by merged #1008
+fix/legacy22-point-group-viewer-01 4c5d6c117adda1f8bf38dcc7f0420852f2a3eaca # closed PR #932, superseded by merged #936
+fix/quill-text-color-reader-01-v4 beb3e08aa240df027c0cd65321cabd86dd1c14cd # closed PR #900, superseded by merged #910
+fix/batch01-fingerprint-pin d20f1a633980a310cf3d47472f8b0ab2e3000897 # closed PR #849, exact Batch01 pin correction already in main
+fix/quill-text-color-01 f60662f102c8bef47248456ccc3377d3cbafbe9e # closed PR #811, text-color work landed via merged #910
+fix/quill-text-color-carrier-01 6f6bf81f1ea4a6d4991b206ce144c2b4162c7474 # closed PR #840, stronger text-color model landed via merged #910
