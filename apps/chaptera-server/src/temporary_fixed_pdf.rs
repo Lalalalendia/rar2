@@ -100,7 +100,6 @@ fn admitted_source_line_style_v1(
     })
 }
 
-
 /// The only source-derived authority is the already-replayed EditorSession.
 /// In particular, never call the PUB-to-PDF source CLI on original source bytes.
 pub(crate) fn render_current_fixed_pdf(
@@ -280,7 +279,9 @@ fn render_current_fixed_pdf_with_sheet(
                 line.scalar_end,
             )
         });
-        let color_rgb = source_style.and_then(|style| style.color_rgb).unwrap_or([0, 0, 0]);
+        let color_rgb = source_style
+            .and_then(|style| style.color_rgb)
+            .unwrap_or([0, 0, 0]);
         if source_style.is_some_and(|style| style.color_rgb.is_some()) {
             source_color_lines += 1;
         }
@@ -301,9 +302,12 @@ fn render_current_fixed_pdf_with_sheet(
             && source_size != font_size.get()
             && line.scalar_start == 0
             && line.frame_line_index == 0
-            && u32::try_from(story.text.chars().count()).ok()
-                == Some(line.consumed_scalar_end)
-            && flow.lines.iter().filter(|other| other.story_origin == line.story_origin).count()
+            && u32::try_from(story.text.chars().count()).ok() == Some(line.consumed_scalar_end)
+            && flow
+                .lines
+                .iter()
+                .filter(|other| other.story_origin == line.story_origin)
+                .count()
                 == 1
             && let Some(frame) = bundle
                 .geometry
@@ -319,11 +323,9 @@ fn render_current_fixed_pdf_with_sheet(
                 font_size_emu: LengthEmu::new(source_size),
                 font_bytes: font,
             };
-            if let Ok(candidate) = shape_bounded_ltr_segment(
-                &line.text,
-                line.scalar_start,
-                &source_runtime,
-            ) {
+            if let Ok(candidate) =
+                shape_bounded_ltr_segment(&line.text, line.scalar_start, &source_runtime)
+            {
                 if candidate.total_x_advance.get() > 0
                     && candidate.total_x_advance.get() <= frame.bounds.width.get()
                     && candidate.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
@@ -560,7 +562,6 @@ fn render_current_fixed_pdf_with_sheet(
     })
 }
 
-
 #[cfg(test)]
 mod source_pdf_style_tests {
     use super::*;
@@ -629,7 +630,10 @@ mod source_pdf_style_tests {
             typography((0, 3), Some([211, 8, 81]), 28 * 12_700, text),
             typography((4, 7), Some([211, 8, 81]), 28 * 12_700, text),
         ];
-        assert_eq!(admitted_source_line_style_v1(&gap, story_id(), text, 0, 7), None);
+        assert_eq!(
+            admitted_source_line_style_v1(&gap, story_id(), text, 0, 7),
+            None
+        );
 
         let overlaps = vec![
             typography((0, 4), Some([211, 8, 81]), 28 * 12_700, text),
