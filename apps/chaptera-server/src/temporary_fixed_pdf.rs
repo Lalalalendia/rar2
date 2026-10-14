@@ -620,7 +620,13 @@ mod source_pdf_style_tests {
         let text = "Heading";
         let original = typography((0, 7), Some([211, 8, 81]), 28 * 12_700, text);
         assert_eq!(
-            admitted_source_line_style_v1(std::slice::from_ref(&original), story_id(), "Changed", 0, 7),
+            admitted_source_line_style_v1(
+                std::slice::from_ref(&original),
+                story_id(),
+                "Changed",
+                0,
+                7,
+            ),
             None,
             "a story mutation may never inherit stale Quill typography"
         );
