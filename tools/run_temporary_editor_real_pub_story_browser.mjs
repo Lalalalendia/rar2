@@ -425,11 +425,32 @@ try {
 
   const beforeReload = await readCurrent("current", sessionId);
   assert.equal(beforeReload.body.expires_at_ms, accepted.expires_at_ms);
+  // The 6-request anonymous admission bucket is shared with independent
+  // negative probes, export report/download and this exact Current check.
+  // A user's explicit Resume must not race those credits. Waiting does
+  // not renew the persisted 60-minute session TTL.
+  await page.waitForTimeout(10000);
   await page.reload({waitUntil: "domcontentloaded"});
   await page.locator("#temporary-resume").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#temporary-status")?.textContent.includes(
-      "Открыта редактируемая ревизия"), null, {timeout: 150000});
+  try {
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-status")?.textContent.includes(
+        "Открыта редактируемая ревизия"), null, {timeout: 150000});
+  } catch {
+    // Source-safe classification of an HTTP/TTL/rate/Scene failure. Never
+    // serialize private headers, bearer, document bytes or Story contents.
+    const status = await page.locator("#temporary-status").textContent();
+    const safeStatus = String(status).replace(/tempedit:[0-9a-f]{32}/g, "{session}")
+      .replace(/[0-9a-f]{64}/g, "{sha256}").slice(0, 210);
+    const lastHttp = responses.slice(-15).map(item => ({
+      route: item.path.replace(/tempedit:[0-9a-f]{32}/g, "{session}"),
+      status: item.status,
+    }));
+    throw Error("physical Guest Story resume failed: status=" + safeStatus +
+      " recent_http=" + JSON.stringify(lastHttp) +
+      " page_errors=" + JSON.stringify(errors.slice(-4)) +
+      " transport=" + JSON.stringify(transportFailures.slice(-4)));
+  }
   assert.equal(await page.locator("#temporary-story-text").inputValue(), observedDesired);
   const reopened = await readCurrent("current", sessionId);
   assert.equal(reopened.body.revision_cursor, 1);

@@ -191,19 +191,6 @@ jobs:
           command -v libreoffice
           command -v xvfb-run
 
-      - name: Prove real Guest Story edit through isolated worker and physical IDML/ODG consumer
-        run: |
-          set -euo pipefail
-          for target in idml odg; do
-            python tools/run_temporary_editor_real_pub_browser_acceptance.py \
-              --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
-              --caddy "$RUNNER_TEMP/live-reader/caddy" \
-              --fixture "$RUNNER_TEMP/live-reader/story.pub" \
-              --fixture-sha256 "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc" \
-              --target "story-$target" \
-              --out "$GITHUB_WORKSPACE/target/temporary-editor-story-$target"
-          done
-
       - name: Prove real Chromium ResizeNode via physical IDML/ODG target geometry
         run: |
           set -euo pipefail
@@ -218,6 +205,19 @@ jobs:
               --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
               --target "resize-$target" \
               --out "$GITHUB_WORKSPACE/target/temporary-editor-resize-$target"
+          done
+
+      - name: Prove real Guest Story edit through isolated worker and physical IDML/ODG consumer
+        run: |
+          set -euo pipefail
+          for target in idml odg; do
+            python tools/run_temporary_editor_real_pub_browser_acceptance.py \
+              --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+              --caddy "$RUNNER_TEMP/live-reader/caddy" \
+              --fixture "$RUNNER_TEMP/live-reader/story.pub" \
+              --fixture-sha256 "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc" \
+              --target "story-$target" \
+              --out "$GITHUB_WORKSPACE/target/temporary-editor-story-$target"
           done
 
       - uses: actions/upload-artifact@v4

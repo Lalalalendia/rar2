@@ -553,9 +553,9 @@ fn project_reader_scene_with_worker_samples(
                 continue;
             }
             let bounds = authored_node.header.bounds;
-            // ResizeNode can leave x/y unchanged; can_move_node_to may
-            // legitimately reject that unchanged position. A confirmed
-            // canonical ResizeNode instead uses its own direct-page gate.
+            // ResizeNode may preserve x/y. MoveNode rejects a no-op at
+            // mutation time, while capability checks only verify eligibility.
+            // Accepted ResizeNode therefore uses its own canonical resize gate.
             let resize_admitted = resized_node_ids.contains(&scene_node.origin)
                 && session.can_resize_node(scene_node.origin).is_ok();
             if session
@@ -2153,7 +2153,7 @@ mod tests {
         );
         assert!(
             session
-                .can_move_node_to(node_id, before.x, before.y)
+                .move_node_to(node_id, before.x, before.y)
                 .is_err(),
             "a pure resize must not masquerade as a MoveNode"
         );
