@@ -516,17 +516,19 @@ fn project_reader_scene_with_worker_samples(
         })?;
 
         let mut moved_node_ids = Vec::new();
+        let mut resized_node_ids = Vec::new();
         let mut edited_story_ids = Vec::new();
         for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
+                EditOperation::ResizeNode { node_id, .. } => resized_node_ids.push(*node_id),
                 EditOperation::ReplaceStoryRange { story_id, .. } => {
                     edited_story_ids.push(*story_id);
                 }
                 _ => {
                     return Err(ProductApiError::conflict(
                         "reader_scene_revision_operation_unsupported",
-                        "rich Reader scene replay admits only canonical MoveNode and plain StoryRange revisions",
+                        "rich Reader scene replay admits only canonical MoveNode, ResizeNode and plain StoryRange revisions",
                     ));
                 }
             }
@@ -551,9 +553,12 @@ fn project_reader_scene_with_worker_samples(
                 continue;
             }
             let bounds = authored_node.header.bounds;
-            if session
-                .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
-                .is_ok()
+            if (moved_node_ids.contains(&scene_node.origin)
+                && session
+                    .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
+                    .is_ok())
+                || (resized_node_ids.contains(&scene_node.origin)
+                    && session.can_resize_node(scene_node.origin).is_ok())
             {
                 scene_node.bounds = bounds;
             }
@@ -590,6 +595,25 @@ fn project_reader_scene_with_worker_samples(
                 return Err(ProductApiError::conflict(
                     "reader_scene_story_projection_unavailable",
                     "current StoryRange revision cannot be represented by the admitted Viewer scene",
+                ));
+            }
+        }
+
+        for resized_node_id in resized_node_ids {
+            let Some(authored_node) = session.graph().nodes.get(&resized_node_id) else {
+                return Err(ProductApiError::internal(
+                    "reader_scene_resize_node_missing",
+                    "current canonical graph lost a durable ResizeNode target",
+                ));
+            };
+            if !bundle.geometry.scene.nodes.iter().any(|scene_node| {
+                scene_node.origin == resized_node_id
+                    && scene_node.parent_origin == authored_node.header.parent_id
+                    && scene_node.bounds == authored_node.header.bounds
+            }) {
+                return Err(ProductApiError::conflict(
+                    "reader_scene_resize_projection_unavailable",
+                    "current ResizeNode revision cannot be represented by the admitted rich Viewer scene",
                 ));
             }
         }
