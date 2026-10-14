@@ -148,9 +148,13 @@ def fast_loop(root: Path, head: str, paths: list[str]) -> int:
             sys.executable, "tools/dev_fast_loop.py", "--paths", *paths,
             "--mode", "feature", "--run", "--no-history", "--receipt", str(result_path),
         ]
+        env = os.environ.copy()
+        env["CARGO_BUILD_JOBS"] = "2"  # Ryzen 5 / 16 GiB development host
+        env["RUST_TEST_THREADS"] = "2"
         try:
             result = subprocess.run(argv, cwd=root, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, check=False, timeout=30 * 60)
+                                    stderr=subprocess.PIPE, env=env, check=False,
+                                    timeout=30 * 60)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HandoffError("fast_loop_unavailable_or_timeout") from exc
         if result.returncode != 0:
