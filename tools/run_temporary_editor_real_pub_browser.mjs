@@ -396,12 +396,14 @@ try {
     ? "chaptera.tempedit-guest-pdf-physical-geometry.v1"
     : "chaptera.local-editable-export-geometry-proof.v1");
   assert.equal(consumer.target, target);
-  if (target === "idml") {
-    assert.equal(consumer.node_id, selected.nodeId);
-  } else {
+  if (target === "pdf") {
     assert.ok(consumer.pages >= 1,"downloaded PDF has no reopened pages");
     assert.equal(consumer.artifact_byte_len,artifact.length);
     assert.equal(consumer.source_position_changed,true);
+  } else {
+    // Both IDML and ODG bind the exact resized source node; the standalone
+    // PDF consumer owns page-count/byte-length proof instead.
+    assert.equal(consumer.node_id, selected.nodeId);
   }
   assert.equal(consumer.artifact_sha256, sha256(artifact));
   assert.deepEqual(consumer.expected_rect_emu, {
