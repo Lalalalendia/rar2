@@ -98,6 +98,16 @@ jobs:
           fi
           python tools/dev_fast_loop.py             --base "$base"             --head "$head"             --mode edit             --run             --rust-cache off             --budget-seconds 120             --receipt target/pub-editor-fast-pr/receipt.json             --no-history
 
+      - name: Authored Rectangle IDML and ODG semantic regressions
+        if: contains(github.event.pull_request.title, 'EDITOR-CREATED-SHAPE-EDITABLE-EXPORT-01')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-export -p pub-editor -p pub-idml -p pub-odg -- --check
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-idml authored_shape
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-odg authored_shape
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin editable_route_probe
+
       - name: Print timing receipt
         if: always()
         shell: bash

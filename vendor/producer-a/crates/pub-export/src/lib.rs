@@ -26,7 +26,9 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Size2D, StoryId, TextRange};
+use pub_model::{
+    CanonicalId, LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Size2D, StoryId, TextRange,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

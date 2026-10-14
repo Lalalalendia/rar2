@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
-mod authored_shape;
 mod image;
 mod package_writer;
 mod paragraph_alignment;
@@ -18,7 +17,6 @@ mod semantic;
 mod table;
 mod typography;
 
-pub use authored_shape::{IdmlAuthoredShapeError, add_authored_rectangles_to_idml};
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
     IdmlEmbeddedImagePlacement, IdmlImageError, add_embedded_images_to_idml,
@@ -32,7 +30,8 @@ pub use paragraph_alignment::{
     add_full_story_paragraph_alignment_to_idml, add_paragraph_scoped_alignment_to_idml,
 };
 pub use semantic::{
-    IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlSemanticError, IdmlWireProfile,
+    IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlAuthoredShapeError,
+    IdmlSemanticError, IdmlWireProfile, add_authored_rectangles_to_idml,
     project_resolved_graph_to_idml, project_resolved_graph_to_idml_with_tables,
 };
 pub use table::{IdmlSimpleTable, IdmlTableCell, IdmlTableError};

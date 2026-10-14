@@ -171,12 +171,11 @@ use pub_export::{
     ExportReport, ExportReportSource, ExportSolidPaintV1, ExportSolidStrokeV1, ExportSrgb8V1,
     FormatCompatibilityManifest, FormatRepresentability, FullStoryParagraphAlignmentV1,
     FullStoryTypographyV1, LossItem, LossKind, LossSeverity, ParagraphAlignmentV1,
-    ParagraphScopedAlignmentV1,
-    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
-    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
-    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    ParagraphScopedAlignmentV1, PersistenceCompatibilityAssessment, PersistenceCompatibilityError,
+    PersistenceRequirement, PersistenceRequirements, PersistenceTargetProfile,
+    STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
+    STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError, ScopedCapabilityOverride,
+    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
     render_human_summary,
 };
@@ -184,9 +183,9 @@ use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
     IdmlParagraphScopedAlignmentPlacement, IdmlWireProfile, add_authored_rectangles_to_idml,
-    add_embedded_images_to_idml,
-    add_full_story_paragraph_alignment_to_idml, add_full_story_typography_to_idml,
-    add_paragraph_scoped_alignment_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    add_embedded_images_to_idml, add_full_story_paragraph_alignment_to_idml,
+    add_full_story_typography_to_idml, add_paragraph_scoped_alignment_to_idml,
+    project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -201,9 +200,9 @@ use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
     OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
     OdgParagraphScopedAlignmentPlacement, add_authored_rectangles_to_odg,
-    add_embedded_images_to_odg,
-    add_full_story_paragraph_alignment_to_odg, add_full_story_typography_to_odg,
-    add_paragraph_scoped_alignment_to_odg, project_resolved_graph_to_odg, write_odg,
+    add_embedded_images_to_odg, add_full_story_paragraph_alignment_to_odg,
+    add_full_story_typography_to_odg, add_paragraph_scoped_alignment_to_odg,
+    project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubParagraphFlowRun, PubResolvedGraph,
@@ -5384,136 +5383,6 @@ impl EditorSession {
         }
 
         Ok(placements)
-    }
-
-    pub fn create_text_box(
-        &mut self,
-        node_id: NodeId,
-        story_id: StoryId,
-        page_id: PageId,
-        bounds: RectEmu,
-        text_preset: AuthoringTextPresetV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        validate_create_text_box_candidate(
-            &self.graph,
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            &text_preset,
-        )?;
-
-        let operation = EditOperation::CreateTextBox {
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            text_preset,
-        };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn create_shape(
-        &mut self,
-        node_id: NodeId,
-        page_id: PageId,
-        bounds: RectEmu,
-        paint: AuthoredShapePaintV1,
-    ) -> Result<EditOperation, EditorError> {
-        let operation = EditOperation::CreateShape {
-            node_id,
-            page_id,
-            parent_id: page_id,
-            shape_kind: AuthoredShapeKindV1::Rectangle,
-            bounds,
-            transform: AuthoredShapeTransformV1::Identity,
-            paint,
-            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
-        };
-        self.consume_canonical_create_shape(operation)
-    }
-
-    fn consume_canonical_create_shape(
-        &mut self,
-        operation: EditOperation,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        let shape = authored_shape_from_operation(&operation)
-            .expect("consume_canonical_create_shape receives CreateShape");
-        self.validate_create_shape_candidate(&shape)?;
-
-        let before_stack = self.current_authored_stack_v1(shape.page_id);
-        let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
-            EditorError::StaleAuthoredStack {
-                page_id: shape.page_id,
-            }
-        })?;
-        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
-            .map_err(|_| EditorError::StaleAuthoredStack {
-                page_id: shape.page_id,
-            })?;
-
-        self.authored_shapes.insert(shape.node_id, shape);
-        self.install_authored_stack_v1(after_stack);
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    fn validate_create_shape_candidate(
-        &self,
-        shape: &AuthoredShapeRuntimeV1,
-    ) -> Result<(), EditorError> {
-        if !self.graph.pages.contains_key(&shape.page_id) {
-            return Err(EditorError::CreateShapePageMissing {
-                page_id: shape.page_id,
-            });
-        }
-        if self.graph.nodes.contains_key(&shape.node_id)
-            || self.authored_shapes.contains_key(&shape.node_id)
-            || self.authored_lines.contains_key(&shape.node_id)
-        {
-            return Err(EditorError::CreateShapeIdCollision {
-                node_id: shape.node_id,
-            });
-        }
-        match validate_authored_shape_runtime_v1(shape) {
-            Ok(()) => Ok(()),
-            Err(CreateShapeRuntimeValidationError::NodeIdNotUuidV7) => {
-                Err(EditorError::CreateShapeInvalidNodeId {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(CreateShapeRuntimeValidationError::InvalidBounds) => {
-                Err(EditorError::CreateShapeInvalidBounds {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(CreateShapeRuntimeValidationError::InvalidPaint) => {
-                Err(EditorError::CreateShapeInvalidPaint {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(
-                CreateShapeRuntimeValidationError::NonAuthorCreatedProvenance
-                | CreateShapeRuntimeValidationError::NonAuthorCreatedPaintProvenance,
-            ) => Err(EditorError::CreateShapeInvalidProvenance {
-                node_id: shape.node_id,
-            }),
-            Err(
-                CreateShapeRuntimeValidationError::ParentPageMismatch
-                | CreateShapeRuntimeValidationError::UnsupportedShapeKind
-                | CreateShapeRuntimeValidationError::UnsupportedTransform,
-            ) => Err(EditorError::CreateShapeMalformed {
-                node_id: shape.node_id,
-            }),
-        }
     }
 
     pub fn create_table(
