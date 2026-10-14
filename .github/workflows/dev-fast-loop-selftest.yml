@@ -8,6 +8,10 @@ on:
       - "tools/dev_fast_loop_components.json"
       - "docs/dev-fast-loop.md"
       - ".github/workflows/dev-fast-loop-selftest.yml"
+      - ".github/workflows/ci-local-dev-transport-01.yml"
+      - "tools/ci/local_dev_transport.py"
+      - "tools/ci/test_local_dev_transport.py"
+      - "docs/ci-local-dev-transport-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -28,6 +32,10 @@ jobs:
           python-version: "3.12"
       - name: Unit-test fast-loop routing
         run: python tools/test_dev_fast_loop.py
+      - name: Unit-test isolated Windows dev transport without a self-hosted runner
+        run: |
+          python -m py_compile tools/ci/local_dev_transport.py
+          python -m unittest discover -s tools/ci -p test_local_dev_transport.py
       - name: Prove a bounded self-plan
         run: |
           python tools/dev_fast_loop.py \
