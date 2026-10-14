@@ -1246,9 +1246,9 @@ mod tests {
 mod authored_rectangle_overlay_v1 {
     use crate::{IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind};
     use pub_export::{
-        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
-        AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
-        ExportSrgb8V1,
+        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1,
+        CapabilityLevel, ExportPlan, ExportSrgb8V1,
     };
     use pub_model::{CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId};
     use std::collections::BTreeSet;
@@ -1316,8 +1316,12 @@ mod authored_rectangle_overlay_v1 {
                     f,
                     "authored rectangle {node_id} lacks explicit authored_shape.z_order loss"
                 ),
-                Self::MissingSpread { page_id } => write!(f, "IDML spread missing for page {page_id}"),
-                Self::BinarySpread { page_id } => write!(f, "IDML spread for page {page_id} is binary"),
+                Self::MissingSpread { page_id } => {
+                    write!(f, "IDML spread missing for page {page_id}")
+                }
+                Self::BinarySpread { page_id } => {
+                    write!(f, "IDML spread for page {page_id} is binary")
+                }
                 Self::InvalidSpreadXml { page_id } => write!(
                     f,
                     "IDML spread for page {page_id} is not overlay-compatible"
@@ -1842,6 +1846,4 @@ mod authored_rectangle_overlay_v1 {
     }
 }
 
-pub use authored_rectangle_overlay_v1::{
-    IdmlAuthoredShapeError, add_authored_rectangles_to_idml,
-};
+pub use authored_rectangle_overlay_v1::{IdmlAuthoredShapeError, add_authored_rectangles_to_idml};

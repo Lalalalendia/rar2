@@ -973,9 +973,9 @@ mod tests {
 mod authored_rectangle_overlay_v1 {
     use crate::{ODG_CONTENT_PATH, OdgPackage, OdgPartKind};
     use pub_export::{
-        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
-        AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
-        ExportSrgb8V1,
+        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1,
+        CapabilityLevel, ExportPlan, ExportSrgb8V1,
     };
     use pub_model::{CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId};
     use std::collections::BTreeSet;
@@ -1032,7 +1032,9 @@ mod authored_rectangle_overlay_v1 {
                     f,
                     "authored rectangle {node_id} lacks explicit authored_shape.z_order loss"
                 ),
-                Self::MissingAutomaticStyles => f.write_str("ODG automatic-styles container missing"),
+                Self::MissingAutomaticStyles => {
+                    f.write_str("ODG automatic-styles container missing")
+                }
                 Self::MissingPage { page_id } => write!(f, "ODG page {page_id} missing"),
             }
         }
@@ -1177,7 +1179,10 @@ mod authored_rectangle_overlay_v1 {
         Ok(())
     }
 
-    fn insert_automatic_styles(xml: &mut String, styles: &str) -> Result<(), OdgAuthoredShapeError> {
+    fn insert_automatic_styles(
+        xml: &mut String,
+        styles: &str,
+    ) -> Result<(), OdgAuthoredShapeError> {
         let empty = "  <office:automatic-styles/>\n";
         if xml.matches(empty).count() == 1 {
             let replacement =
@@ -1387,11 +1392,9 @@ mod authored_rectangle_overlay_v1 {
                 "draw:stroke=\"solid\" svg:stroke-color=\"#AABBCC\" svg:stroke-width=\"1pt\""
             ));
             assert!(xml.contains("<draw:rect draw:name=\"AuthoredRect_"));
-            assert!(
-                xml.contains(
-                    "svg:x=\"100pt\" svg:y=\"200pt\" svg:width=\"200pt\" svg:height=\"100pt\""
-                )
-            );
+            assert!(xml.contains(
+                "svg:x=\"100pt\" svg:y=\"200pt\" svg:width=\"200pt\" svg:height=\"100pt\""
+            ));
             assert!(!xml.contains("draw:z-index="));
         }
 
@@ -1411,6 +1414,4 @@ mod authored_rectangle_overlay_v1 {
     }
 }
 
-pub use authored_rectangle_overlay_v1::{
-    OdgAuthoredShapeError, add_authored_rectangles_to_odg,
-};
+pub use authored_rectangle_overlay_v1::{OdgAuthoredShapeError, add_authored_rectangles_to_odg};

@@ -67,7 +67,7 @@ pub struct ExportSolidStrokeV1 {
 ///
 /// Z-order is deliberately absent: the current authored overlay has no
 /// consumer-proven interleaving authority relative to imported page items.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthoredRectangleExportV1 {
     pub node_id: NodeId,
     pub page_id: PageId,

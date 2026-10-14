@@ -200,13 +200,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 mod authored_shape_probe {
     use pub_editor::{
-        AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
-        EditorEditableTarget, EditorProject, EditorSession, LengthEmu, NodeId, RectEmu, Sha256Digest,
-        Srgb8V1, open_mature_0x2c_editor,
+        AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1,
+        AuthoredSolidStrokeV1, EditorEditableTarget, EditorProject, EditorSession, LengthEmu,
+        NodeId, RectEmu, Sha256Digest, Srgb8V1, open_mature_0x2c_editor,
     };
     use pub_export::{
-        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
-        AUTHORED_SHAPE_Z_ORDER_FEATURE, CapabilityLevel,
+        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, CapabilityLevel,
     };
     use pub_model::CanonicalId;
     use serde_json::json;
@@ -222,15 +222,18 @@ mod authored_shape_probe {
 
     fn authored_node_id() -> NodeId {
         let mut bytes = [
-            0x01, 0x9a, 0x2d, 0x80, 0x11, 0x12, 0x70, 0x01, 0x80, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
-            0x01,
+            0x01, 0x9a, 0x2d, 0x80, 0x11, 0x12, 0x70, 0x01, 0x80, 0x01, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0x01,
         ];
         bytes[6] = (bytes[6] & 0x0f) | 0x70;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         NodeId::from_canonical(CanonicalId::from_bytes(bytes))
     }
 
-    fn verify_report(report: &pub_export::ExportReport, node_id: NodeId) -> Result<(), Box<dyn Error>> {
+    fn verify_report(
+        report: &pub_export::ExportReport,
+        node_id: NodeId,
+    ) -> Result<(), Box<dyn Error>> {
         let origin = node_id.as_canonical();
         for feature in [
             AUTHORED_SHAPE_GEOMETRY_FEATURE,
@@ -249,7 +252,9 @@ mod authored_shape_probe {
         let z_order = report
             .items
             .iter()
-            .find(|item| item.origin == Some(origin) && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE)
+            .find(|item| {
+                item.origin == Some(origin) && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
+            })
             .ok_or("missing authored_shape.z_order report item")?;
         if z_order.disposition != CapabilityLevel::Unsupported {
             return Err(format!("z-order unexpectedly {:?}", z_order.disposition).into());
