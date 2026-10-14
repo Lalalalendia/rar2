@@ -1297,34 +1297,34 @@ mod authored_rectangle_overlay_v1 {
             match self {
                 Self::NonIdmlPackage => f.write_str("authored rectangle projection requires IDML"),
                 Self::DuplicateRectangle { node_id } => {
-                    write!(f, "duplicate authored rectangle {node_id}")
+                    write!(f, "duplicate authored rectangle {node_id:?}")
                 }
                 Self::InvalidPageSize { page_id } => {
-                    write!(f, "authored rectangle page {page_id} has invalid size")
+                    write!(f, "authored rectangle page {page_id:?} has invalid size")
                 }
                 Self::InvalidBounds { node_id } => {
-                    write!(f, "authored rectangle {node_id} has invalid bounds")
+                    write!(f, "authored rectangle {node_id:?} has invalid bounds")
                 }
                 Self::InvalidStroke { node_id } => {
-                    write!(f, "authored rectangle {node_id} has invalid stroke")
+                    write!(f, "authored rectangle {node_id:?} has invalid stroke")
                 }
                 Self::MissingPreservedFeature { node_id, feature } => write!(
                     f,
-                    "authored rectangle {node_id} lacks preserved {feature} in ExportPlan"
+                    "authored rectangle {node_id:?} lacks preserved {feature} in ExportPlan"
                 ),
                 Self::MissingZOrderLoss { node_id } => write!(
                     f,
-                    "authored rectangle {node_id} lacks explicit authored_shape.z_order loss"
+                    "authored rectangle {node_id:?} lacks explicit authored_shape.z_order loss"
                 ),
                 Self::MissingSpread { page_id } => {
-                    write!(f, "IDML spread missing for page {page_id}")
+                    write!(f, "IDML spread missing for page {page_id:?}")
                 }
                 Self::BinarySpread { page_id } => {
-                    write!(f, "IDML spread for page {page_id} is binary")
+                    write!(f, "IDML spread for page {page_id:?} is binary")
                 }
                 Self::InvalidSpreadXml { page_id } => write!(
                     f,
-                    "IDML spread for page {page_id} is not overlay-compatible"
+                    "IDML spread for page {page_id:?} is not overlay-compatible"
                 ),
                 Self::MissingDesignMap => f.write_str("IDML designmap.xml missing"),
                 Self::BinaryDesignMap => f.write_str("IDML designmap.xml is binary"),

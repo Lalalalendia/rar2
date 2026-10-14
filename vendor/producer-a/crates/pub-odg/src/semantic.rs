@@ -1016,26 +1016,26 @@ mod authored_rectangle_overlay_v1 {
                 Self::MissingContent => f.write_str("ODG content.xml missing"),
                 Self::InvalidContentUtf8 => f.write_str("ODG content.xml is not UTF-8"),
                 Self::DuplicateRectangle { node_id } => {
-                    write!(f, "duplicate authored rectangle {node_id}")
+                    write!(f, "duplicate authored rectangle {node_id:?}")
                 }
                 Self::InvalidBounds { node_id } => {
-                    write!(f, "authored rectangle {node_id} has invalid bounds")
+                    write!(f, "authored rectangle {node_id:?} has invalid bounds")
                 }
                 Self::InvalidStroke { node_id } => {
-                    write!(f, "authored rectangle {node_id} has invalid stroke")
+                    write!(f, "authored rectangle {node_id:?} has invalid stroke")
                 }
                 Self::MissingPreservedFeature { node_id, feature } => write!(
                     f,
-                    "authored rectangle {node_id} lacks preserved {feature} in ExportPlan"
+                    "authored rectangle {node_id:?} lacks preserved {feature} in ExportPlan"
                 ),
                 Self::MissingZOrderLoss { node_id } => write!(
                     f,
-                    "authored rectangle {node_id} lacks explicit authored_shape.z_order loss"
+                    "authored rectangle {node_id:?} lacks explicit authored_shape.z_order loss"
                 ),
                 Self::MissingAutomaticStyles => {
                     f.write_str("ODG automatic-styles container missing")
                 }
-                Self::MissingPage { page_id } => write!(f, "ODG page {page_id} missing"),
+                Self::MissingPage { page_id } => write!(f, "ODG page {page_id:?} missing"),
             }
         }
     }
