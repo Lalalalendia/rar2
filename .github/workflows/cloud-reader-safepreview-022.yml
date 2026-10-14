@@ -7,6 +7,7 @@ on:
       - "apps/cloud-reader/real-browser.test.mjs"
       - "tools/run_cloud_reader_live_acceptance.py"
       - "tools/run_reader_sbdc034_host_acceptance.py"
+      - "tools/run_temporary_editor_current_acceptance.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -782,6 +783,30 @@ jobs:
             --repository-commit "$EXACT_COMMIT_SHA" \
             --receipt-out "target/safe-preview-022-visual/sbdc034-real-host.json"
 
+      - name: Verify SBDC034 accepted edit preserves four CMYK stars in exact R1 PDF
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/run_temporary_editor_current_acceptance.py
+          python tools/run_temporary_editor_current_acceptance.py \
+            --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+            --caddy "/tmp/chaptera-safe-preview-022/caddy" \
+            --fixture "out/pinned1050/materialized/native/0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a.pub" \
+            --fixture-sha256 "0d2278960a0101ced0a1ba6d5922f5a26ea37b76b3ab00ef21e21873359d4a5a" \
+            --sbdc-cmyk-picture-proof \
+            --out "/tmp/chaptera-safe-preview-022/sbdc034-current-edited"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          full = json.loads(Path("/tmp/chaptera-safe-preview-022/sbdc034-current-edited/receipt.json").read_text())
+          proof = full["sbdc_picture_proof"]
+          assert proof["source_star_picture_nodes_r0"] == proof["source_star_picture_nodes_r1"] == 4
+          assert proof["fixed_pdf_star_paint_uses_r0"] == proof["fixed_pdf_star_paint_uses_r1"] == 4
+          out = Path("target/safe-preview-022-visual/sbdc034-r1-fixedpdf.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")
+          print('SBDC034_EDITED_PDF_IMAGE_PAINT ' + json.dumps(proof, sort_keys=True))
+          PY
+
       - name: Retain only source-free visual and HTTPS receipts
         if: always()
         uses: actions/upload-artifact@v4
@@ -792,6 +817,7 @@ jobs:
             target/safe-preview-022-visual/controls.json
             target/safe-preview-022-visual/host-001-023.json
             target/safe-preview-022-visual/sbdc034-real-host.json
+            target/safe-preview-022-visual/sbdc034-r1-fixedpdf.json
             target/safe-preview-022-live/receipt.json
           if-no-files-found: warn
           retention-days: 30
