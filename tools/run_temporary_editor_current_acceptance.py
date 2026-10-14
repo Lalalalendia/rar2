@@ -135,13 +135,192 @@ def require_sbdc_fixed_pdf_image_uses(data: bytes, star_resource_id: str) -> int
     return uses
 
 
+def sbdc_r1_browser_own_pdf_raster(
+    fixture: pathlib.Path,
+    expected_hash: str,
+    classification: str,
+    session_id: str,
+    baseline_revision_id: str,
+    edited_revision_id: str,
+    edited_scene: dict,
+    pdf_bytes: bytes,
+    star_bounds: dict,
+    work: pathlib.Path,
+) -> dict:
+    """Real current HTTPS R1 Scene -> Chromium; same-R1 own PDF -> MuPDF.
+
+    Private scene, screenshot, original media and PDF are confined to work
+    and cleaned up by the caller. Only aggregate source-neutral metrics escape.
+    """
+    import fitz
+    from PIL import Image
+    from pdf_reference_diff_v1 import compare_rasters
+
+    raster_dir = work / "sbdc-browser-vs-own-pdf"
+    raster_dir.mkdir(mode=0o700)
+    accepted_scene = raster_dir / "accepted-r1.json"
+    manifest = raster_dir / "manifest.json"
+    browser_dir = raster_dir / "browser"
+    source_size = fixture.stat().st_size
+    scene = {
+        "protocol_version": "chaptera.live-accepted-temp-editor-scene.v1",
+        "source_sha256": expected_hash,
+        "source_byte_len": source_size,
+        "classification": classification,
+        "session_id": session_id,
+        "baseline_revision_id": baseline_revision_id,
+        "editor_revision_id": edited_revision_id,
+        "revision_cursor": 1,
+        "isolated_editor_scene_count": 1,
+        "scene": edited_scene,
+    }
+    accepted_scene.write_text(json.dumps(scene, separators=(",", ":")), encoding="utf-8")
+    manifest.write_text(json.dumps({
+        "schema": "chaptera.cloud-reader-real-fixtures.v1",
+        "fixtures": [{
+            "name": "sbdc034-accepted-r1",
+            "sha256": expected_hash,
+            "bytes": source_size,
+            "pages": 1,
+            "require_render": True,
+            "source_path": str(fixture),
+        }],
+    }), encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("READER_ACCEPTED_SCENE_JSON", None)
+    env.update({
+        "READER_REAL_MANIFEST": str(manifest),
+        "READER_ACCEPTED_EDITOR_SCENE_JSON": str(accepted_scene),
+        "READER_REAL_OUTPUT": str(browser_dir),
+        "READER_REFERENCE_RASTER_DPI": "144",
+        "READER_REQUIRED_PAINTED_HOST_IMAGES": "4",
+    })
+    subprocess.run(
+        ["node", "apps/cloud-reader/real-browser.test.mjs"],
+        env=env, cwd=live.ROOT, check=True, timeout=180,
+    )
+    browser_receipt = json.loads((browser_dir / "receipt.json").read_text())
+    row, = browser_receipt["results"]
+    if (
+        row.get("scene_source") != "accepted_https_temp_editor_service"
+        or row.get("source_sha256") != expected_hash
+        or row.get("rendered") is not True
+        or row.get("host_image_paint_proof", {}).get("admitted_image_resources") != 4
+        or row.get("host_image_paint_proof", {}).get("painted_image_resources") != 4
+        or row.get("host_image_paint_proof", {}).get("all_decoded_and_positive_geometry") is not True
+        or len(row.get("screenshots", [])) != 1
+        or browser_receipt.get("errors") or browser_receipt.get("foreign")
+    ):
+        raise AssertionError("R1 accepted real-editor Scene was not physically painted in Chromium")
+    shot = row["screenshots"][0]
+    png_path = browser_dir / shot["filename"]
+    if live.sha256_file(png_path) != shot["sha256"]:
+        raise AssertionError("R1 Chromium screenshot identity drift")
+    browser = Image.open(png_path).convert("RGB")
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as physical_pdf:
+        if physical_pdf.page_count != 1:
+            raise AssertionError("R1 own PDF page count differs from current Scene")
+        page = physical_pdf[0]
+        if page.rotation != 0:
+            raise AssertionError("R1 own PDF introduced unsupported page rotation")
+        pix = page.get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
+        own_pdf = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    width_diff = browser.width - own_pdf.width
+    height_diff = browser.height - own_pdf.height
+    if abs(width_diff) > 1 or abs(height_diff) > 1:
+        raise AssertionError("R1 browser and own-PDF physical page geometry diverged")
+    # Millimetre-to-point and SVG rounding can disagree by one edge pixel.
+    width = min(browser.width, own_pdf.width)
+    height = min(browser.height, own_pdf.height)
+    browser = browser.crop((0, 0, width, height))
+    own_pdf = own_pdf.crop((0, 0, width, height))
+    page_info, = edited_scene["pages"]
+    page_width = page_info["width_emu"]
+    page_height = page_info["height_emu"]
+    if abs(page_width / 914400 * 144 - width) > 1.5:
+        raise AssertionError("R1 raster width does not match source page units")
+    if abs(page_height / 914400 * 144 - height) > 1.5:
+        raise AssertionError("R1 raster height does not match source page units")
+
+    def red_ink(image: Image.Image, bounds: dict) -> dict:
+        left = max(0, round(bounds["x"] * width / page_width))
+        top = max(0, round(bounds["y"] * height / page_height))
+        right = min(width, round((bounds["x"] + bounds["width"]) * width / page_width))
+        bottom = min(height, round((bounds["y"] + bounds["height"]) * height / page_height))
+        if right - left < 6 or bottom - top < 6:
+            raise AssertionError("current star frame is too small for pixel comparison")
+        crop = image.crop((left, top, right, bottom))
+        pixels = crop.load()
+        red = [
+            (x + left, y + top) for y in range(crop.height)
+            for x in range(crop.width)
+            if (lambda c: c[0] > 180 and c[1] < 75 and c[2] < 155
+                and c[0] - c[1] > 140)(pixels[x, y])
+        ]
+        if len(red) < 8:
+            raise AssertionError("a source-backed star has no red pixels in the rendered page")
+        return {
+            "count": len(red),
+            "center_x": sum(p[0] for p in red) / len(red),
+            "center_y": sum(p[1] for p in red) / len(red),
+        }
+
+    star_metrics = []
+    for bounds in star_bounds.values():
+        a = red_ink(browser, bounds)
+        b = red_ink(own_pdf, bounds)
+        delta = ((a["center_x"] - b["center_x"]) ** 2
+                 + (a["center_y"] - b["center_y"]) ** 2) ** 0.5
+        # Geometry tolerance guards major shifts while allowing distinct
+        # uncalibrated CMYK ICC conversion and raster antialiasing.
+        tolerance = max(6.0, min(
+            bounds["width"] * width / page_width,
+            bounds["height"] * height / page_height,
+        ) * 0.20)
+        if delta > tolerance:
+            raise AssertionError("R1 star centroid differs between actual browser and own PDF")
+        star_metrics.append({
+            "browser_red_pixels": a["count"],
+            "pdf_red_pixels": b["count"],
+            "center_offset_px": round(delta, 3),
+            "center_tolerance_px": round(tolerance, 3),
+        })
+    diff = compare_rasters(
+        {"width": width, "height": height, "samples": browser.tobytes()},
+        {"width": width, "height": height, "samples": own_pdf.tobytes()},
+    )
+    if not diff["raster_size_match"]:
+        raise AssertionError("R1 own PDF and browser raster consumer cannot be compared")
+    return {
+        "schema": "chaptera.sbdc034-r1-browser-ownpdf-raster.v1",
+        "source_r1_exact": True,
+        "render_dpi": 144,
+        "browser_source": "real_https_temporary_editor_scene",
+        "pdf_source": "own_exact_r1_fixed_pdf",
+        "page_pixels": [width, height],
+        "page_rounding_edge_delta_px": [width_diff, height_diff],
+        "browser_all_images_decoded": True,
+        "four_star_red_pixels_in_both_rasters": True,
+        "star_roi_metrics": star_metrics,
+        "full_page_significant_fraction": round(diff["significant_fraction"], 6),
+        "full_page_mean_abs_channel_delta": round(diff["mean_abs_channel_delta"], 4),
+        "full_page_significant_pixel_count": diff["significant_pixel_count"],
+        "fidelity_claim": "partial_not_publisher_or_pixel_exact",
+        "private_scene_pdf_png_uploaded": False,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     for key in ("chaptera", "caddy", "fixture", "out"):
         ap.add_argument("--" + key, type=pathlib.Path, required=True)
     ap.add_argument("--fixture-sha256", required=True)
     ap.add_argument("--sbdc-cmyk-picture-proof", action="store_true")
+    ap.add_argument("--sbdc-browser-pdf-visual", action="store_true")
     args = ap.parse_args()
+    if args.sbdc_browser_pdf_visual and not args.sbdc_cmyk_picture_proof:
+        raise AssertionError("browser/PDF raster mode requires exact SBDC source gate")
 
     fixture = args.fixture.resolve()
     expected_hash = live.sha256_file(fixture)
@@ -173,17 +352,6 @@ def main() -> int:
     original_config = config.read_text(encoding="utf-8")
     if original_config.count('provider = "s3-compatible"') != 1:
         raise AssertionError("expected exactly one fixture provider declaration")
-    # The opt-in *browser* fixture uses a nonstandard local Caddy HTTPS port.
-    # Match the production-style exact Origin/Host/CSRF contract instead of
-    # disabling it. Keep the default non-browser acceptance unchanged.
-    if args.sbdc_cmyk_picture_proof:
-        old_origin = f'public_origin = "https://{live.EDGE_HOST}"'
-        if original_config.count(old_origin) != 1:
-            raise AssertionError("SBDC browser fixture expected one pinned origin")
-        original_config = original_config.replace(
-            old_origin,
-            f'public_origin = "https://{live.EDGE_HOST}:{httpsport}"',
-        )
     config.write_text(
         original_config.replace('provider = "s3-compatible"', 'provider = "filesystem"'),
         encoding="utf-8",
@@ -235,7 +403,6 @@ def main() -> int:
                 path=path,
                 output=response,
                 headers=headers,
-                port_aware_origin=args.sbdc_cmyk_picture_proof,
                 **other,
             )
             if status != 429 or attempt == 7:
@@ -639,6 +806,7 @@ def main() -> int:
         edited_formats = []
         unavailable_formats = []
         export_receipts = []
+        sbdc_visual_pair = None
         # The exact SBDC034 visual proof only owns the current fixed PDF.
         # Imported picture objects need not be editable ODG/IDML frames.
         # Keep the original all-format geometry gate for other real fixtures.
@@ -721,6 +889,12 @@ def main() -> int:
                 sbdc_pdf_r1_uses = require_sbdc_fixed_pdf_image_uses(
                     artifact, sbdc_r1["star_resource_id"]
                 )
+                if args.sbdc_browser_pdf_visual:
+                    sbdc_visual_pair = sbdc_r1_browser_own_pdf_raster(
+                        fixture, expected_hash, opened["classification"],
+                        session_id, revision, accepted["revision_id"],
+                        edited_rich_scene, artifact, sbdc_r1["star_node_bounds"], work,
+                    )
             export_receipts.append({
                 "target": target, "sha256": actual_sha,
                 "artifact_length": len(artifact),
@@ -1081,6 +1255,7 @@ def main() -> int:
             "early_delete_physical_original_removed": True,
             "early_delete_foreign_capability_rejected": True,
             "persistent_export_artifacts": False, "v0_go": False,
+            **({"sbdc_browser_own_pdf_r1": sbdc_visual_pair} if sbdc_visual_pair else {}),
             **({"sbdc_picture_proof": {
                 "source_exact_batch01_034": True,
                 "source_star_picture_nodes_r0": len(sbdc_r0["star_node_bounds"]),
@@ -1094,8 +1269,7 @@ def main() -> int:
                 "unmodified_star_bounds_preserved_after_move": True,
                 "star_xobject_emitted_physically": True,
                 "source_bytes_or_picture_payload_reported": False,
-                "r1_editor_chromium_star_pixel_counts":
-                    sbdc_browser_r1["r1_star_additional_red_pixels"],
+                "r1_editor_chromium_star_pixel_counts": sbdc_browser_r1["r1_star_additional_red_pixels"],
                 "r1_editor_chromium_logo_painted": True,
                 "r1_editor_chromium_revision_bound": True,
                 "r1_editor_chromium_private_images_uploaded": False,
