@@ -29,7 +29,7 @@ BASE = "/v1/editor/temporary-sessions"
 GUEST_API = [
     BASE, BASE + "/" + SID,
     *(BASE + "/" + SID + "/" + part for part in (
-        "current", "scene", "move-node",
+        "current", "scene", "move-node", "create-shape",
         "exports/idml", "exports/odg", "exports/pdf",
     )),
 ]
