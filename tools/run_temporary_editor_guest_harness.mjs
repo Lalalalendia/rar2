@@ -8,6 +8,7 @@ const id = "tempedit:" + "a".repeat(32);
 const token = "b".repeat(64);
 const source = "c".repeat(64);
 const pageId = "20000000-0000-4000-8000-000000000001";
+const secondPageId = "20000000-0000-4000-8000-000000000002";
 const nodeId = "30000000-0000-4000-8000-000000000001";
 const before = "sha256:" + "d".repeat(64);
 const after = "sha256:" + "e".repeat(64);
@@ -48,7 +49,8 @@ const scene = () => ({
   revision_id: created ? afterShape : accepted ? after : before,
   scene_authority: "isolated_reader_scene_synthetic",
   stacking_fidelity: "partial", fidelity: { state: "partial", reasons: ["browser_harness"] },
-  pages: [{ page_id: pageId, order: 0, width_emu: 952500, height_emu: 952500 }],
+  pages: [{ page_id: pageId, order: 0, width_emu: 952500, height_emu: 952500 },
+    { page_id: secondPageId, order: 1, width_emu: 952500, height_emu: 952500 }],
   nodes: [
     { node_id: nodeId, page_id: pageId, kind: "shape", bounds: bounds(),
       transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
@@ -236,6 +238,56 @@ try {
       " body=" + JSON.stringify(bodyText.slice(0,900)) +
       " requests=" + JSON.stringify(requests.map(x=>x.method+" "+x.path)));
   }
+  // Camera controls must work in a real Chromium DOM before we send a
+  // canonical MoveNode. The synthetic page is exactly 100 CSS px at 100%.
+  const cameraPage=page.locator("svg.page[data-page-id='"+pageId+"']").first();
+  const canonicalViewBox=await cameraPage.getAttribute("viewBox");
+  if (canonicalViewBox!=="0 0 952500 952500") {
+    throw new Error("synthetic Reader page viewBox changed or unavailable");
+  }
+  if (await page.locator("#temporary-zoom-actual").isDisabled()) {
+    throw new Error("Guest zoom toolbar stayed disabled after scene open");
+  }
+  if (await page.locator("#temporary-page-position").textContent()!=="1 / 2" ||
+      await page.locator("#temporary-page-next").isDisabled()) {
+    throw new Error("Guest multipage control did not receive canonical ReaderScene page order");
+  }
+  await page.locator("#temporary-page-next").click();
+  if (await page.locator("#temporary-page-position").textContent()!=="2 / 2" ||
+      await page.locator("#temporary-page-next").isEnabled()) {
+    throw new Error("Next page navigation exceeded second page");
+  }
+  await page.locator("#temporary-page-prev").click();
+  if (await page.locator("#temporary-page-position").textContent()!=="1 / 2" ||
+      await page.locator("#temporary-page-prev").isEnabled()) {
+    throw new Error("Previous page navigation did not return to first page");
+  }
+  await page.locator("#temporary-zoom-actual").click();
+  if (Number(await cameraPage.getAttribute("width"))!==100) {
+    throw new Error("100% Guest zoom is not source-unit 100 CSS px");
+  }
+  await page.locator("#temporary-zoom-out").click();
+  await page.locator("#temporary-zoom-out").click();
+  if (Number(await cameraPage.getAttribute("width"))!==50 ||
+      !(await page.locator("#temporary-zoom-out").isDisabled())) {
+    throw new Error("50% Guest zoom/limit did not apply in Chromium");
+  }
+  await page.locator("#temporary-zoom-actual").click();
+  for (let step=0;step<4;step++) await page.locator("#temporary-zoom-in").click();
+  if (Number(await cameraPage.getAttribute("width"))!==200 ||
+      await page.locator("#temporary-zoom-percent").textContent()!=="200%" ||
+      !(await page.locator("#temporary-zoom-in").isDisabled())) {
+    throw new Error("200% Guest zoom/limit did not apply in Chromium");
+  }
+  await page.locator("#temporary-zoom-out").click();
+  if (Number(await cameraPage.getAttribute("width"))!==175) {
+    throw new Error("Guest zoom-out did not resize page viewport");
+  }
+  await page.locator("#temporary-zoom-in").click();
+  if (await cameraPage.getAttribute("viewBox")!==canonicalViewBox ||
+      await cameraPage.getAttribute("data-page-id")!==pageId) {
+    throw new Error("camera zoom modified authoritative page coordinates");
+  }
   await direct.scrollIntoViewIfNeeded();
   const rect=await direct.boundingBox();
   if(!rect)throw Error("source-neutral initial shape did not render");
@@ -270,6 +322,11 @@ try {
       + " pointer=" + JSON.stringify(pointerContext) + " accepted=" + JSON.stringify(accepted)
       + " browserErrors=" + JSON.stringify(pageErrors)
       + " requests=" + JSON.stringify(requests.map(x => x.method + " " + x.path)));
+  }
+  // The server-confirmed Scene is repainted, yet user camera scale is local.
+  const paintedWidth=Number(await page.locator("svg.page[data-page-id='"+pageId+"']").first().getAttribute("width"));
+  if (paintedWidth!==200 || await page.locator("#temporary-zoom-percent").textContent()!=="200%") {
+    throw new Error("confirmed Guest revision discarded current viewport zoom");
   }
   if(!accepted)throw Error("Chromium did not send canonical guest MoveNode");
   const newNode=page.locator('[data-node-id="'+nodeId+'"] rect');
@@ -337,6 +394,8 @@ try {
     status:"PASS",real_chromium_pointer:true,synthetic_backend:true,
     private_guest_capability:true,commit_count:movePosts.length+shapePosts.length,
     exact_scene_after_move:true,exact_scene_after_reload:true,
+    chromium_page_navigation_two_pages:true,
+    chromium_zoom_50_200_pointer_safe:true,zoom_retained_after_move:true,
     chromium_rectangle_pointer:true,synthetic_created_rectangle_scene:true,
     changed_download_preflighted:true,edited_download_offered:true,
     synthetic_pdf_download_preflighted:true,synthetic_pdf_download_offered:true,
