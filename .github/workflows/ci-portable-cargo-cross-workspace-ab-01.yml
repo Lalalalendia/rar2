@@ -1,0 +1,115 @@
+name: CI-PORTABLE-CARGO-CROSS-WORKSPACE-AB-01
+
+on:
+  push:
+    branches:
+      - ci/portable-cargo-cross-workspace-ab-01-20261014
+    paths:
+      - .github/workflows/ci-portable-cargo-cross-workspace-ab-01.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Windows Cargo E1 (${{ matrix.mode }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [split, shared]
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
+
+      - name: Record exact source and toolchain
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne '${{ github.sha }}') { throw "wrong checkout: $actual" }
+          Write-Host "E1_SOURCE mode=${{ matrix.mode }} sha=$actual ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion RUSTFLAGS=$env:RUSTFLAGS"
+          rustc --version --verbose
+          cargo --version
+
+      - name: Restore trusted read-only Windows Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-local-portable-crtstatic-deps-v1
+          add-job-id-key: 'false'
+          key: ${{ hashFiles('Cargo.toml', 'Cargo.lock', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock') }}
+          workspaces: |
+            . -> target
+            vendor/producer-a -> target
+          cache-bin: 'false'
+          cache-targets: 'true'
+          cache-workspace-crates: 'false'
+          cache-on-failure: 'false'
+          save-if: 'false'
+
+      - name: Build Chaptera release binary
+        shell: pwsh
+        run: |
+          $errlog = Join-Path $env:RUNNER_TEMP 'e1-server-stderr.log'
+          $outlog = Join-Path $env:RUNNER_TEMP 'e1-server-stdout.log'
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','-p','chaptera-server','--release','--timings') -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          $watch.Stop()
+          if ($proc.ExitCode -ne 0) {
+            Get-Content $errlog -Tail 80
+            throw "root cargo build failed with exit code $($proc.ExitCode)"
+          }
+          $compiles = @(Select-String -Path $errlog -Pattern '^\s*Compiling\s+').Count
+          $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
+          Write-Host "E1_RESULT mode=${{ matrix.mode }} phase=root seconds=$duration compiling=$compiles exit=0"
+          Get-Content $errlog -Tail 3
+
+      - name: Build Producer A release binary
+        shell: pwsh
+        run: |
+          $mode = '${{ matrix.mode }}'
+          if ($mode -eq 'shared') {
+            $env:CARGO_TARGET_DIR = Join-Path $env:GITHUB_WORKSPACE 'target'
+          }
+          $effective = if ($mode -eq 'shared') { $env:CARGO_TARGET_DIR } else { Join-Path $env:GITHUB_WORKSPACE 'vendor/producer-a/target' }
+          Write-Host "E1_SECOND_TARGET mode=$mode effective=$effective"
+          $errlog = Join-Path $env:RUNNER_TEMP 'e1-producer-stderr.log'
+          $outlog = Join-Path $env:RUNNER_TEMP 'e1-producer-stdout.log'
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','--manifest-path','vendor/producer-a/Cargo.toml','-p','chaptera-producer-a','--release','--timings') -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          $watch.Stop()
+          if ($proc.ExitCode -ne 0) {
+            Get-Content $errlog -Tail 80
+            throw "producer cargo build failed with exit code $($proc.ExitCode)"
+          }
+          $compiles = @(Select-String -Path $errlog -Pattern '^\s*Compiling\s+').Count
+          $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
+          Write-Host "E1_RESULT mode=$mode phase=producer seconds=$duration compiling=$compiles exit=0"
+          Get-Content $errlog -Tail 3
+
+      - name: Check both PE files and MSVC runtime closure
+        shell: pwsh
+        run: |
+          $mode = '${{ matrix.mode }}'
+          $vswhere = Join-Path "${env:ProgramFiles(x86)}" 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw 'vswhere.exe missing' }
+          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin -or -not (Test-Path $dumpbin)) { throw 'dumpbin.exe missing' }
+          $producer = if ($mode -eq 'shared') { 'target/release/chaptera-producer-a.exe' } else { 'vendor/producer-a/target/release/chaptera-producer-a.exe' }
+          foreach ($exe in @('target/release/chaptera.exe', $producer)) {
+            if (-not (Test-Path $exe)) { throw "missing binary $exe" }
+            $headers = (& $dumpbin /headers $exe | Out-String)
+            if ($LASTEXITCODE -ne 0 -or $headers -notmatch '8664 machine \(x64\)') { throw "wrong PE architecture or dumpbin failure: $exe" }
+            $deps = (& $dumpbin /dependents $exe | Out-String)
+            if ($LASTEXITCODE -ne 0 -or $deps -match '(?i)VCRUNTIME[0-9_]*\.dll|MSVCP[0-9_]*\.dll') { throw "dynamic MSVC runtime dependency or dumpbin failure: $exe" }
+            $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "E1_PE mode=$mode path=$exe arch=x64 msvc_dynamic=none sha256=$hash"
+          }
+          Write-Host "E1_PASS mode=$mode source=${{ github.sha }}"
