@@ -46,6 +46,7 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-pdf
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli report_label_ --bin pub
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli resource_scene_ --bin pub
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli trace_image_placement_ --bin pub
 
       - name: Build public CLI
         run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
@@ -214,6 +215,34 @@ jobs:
           assert events and links
           painted = {event["node_origin"] for event in events}
           assert painted == {link["node_origin"] for link in links}
+          image_events = [
+              event for event in events if event["kind"] == "image"
+          ]
+          image_inputs = trace["image_inputs"]
+          assert len(image_inputs) == len(image_events)
+          assert {
+              (entry["node_origin"], entry["resource_origin"])
+              for entry in image_inputs
+          } == {
+              (event["node_origin"], event["resource_origin"])
+              for event in image_events
+          }
+          allowed_image_statuses = {
+              "unmatched_or_ambiguous_image_identity",
+              "ambiguous_placement_records",
+              "pdf_has_unmatched_placement",
+              "no_explicit_viewer_placement",
+              "viewer_crop_not_forwarded",
+              "pdf_crop_not_in_viewer",
+              "viewer_recolor_not_forwarded",
+              "pdf_recolor_not_in_viewer",
+              "viewer_rotation_not_forwarded",
+              "placement_fields_forwarded",
+          }
+          assert all(
+              item["transfer_status"] in allowed_image_statuses
+              for item in image_inputs
+          )
           statuses = {
               "exact_source_byte_range",
               "exact_source_object_only",
@@ -242,6 +271,10 @@ jobs:
               "paint_event_count": len(events),
               "source_link_count": len(links),
               "source_status_counts": dict(collections.Counter(link["status"] for link in links)),
+              "painted_image_input_count": len(image_inputs),
+              "image_transfer_status_counts": dict(
+                  collections.Counter(item["transfer_status"] for item in image_inputs)
+              ),
               "unchanged_pdf_and_loss_bytes": True,
           }, sort_keys=True))
           PY

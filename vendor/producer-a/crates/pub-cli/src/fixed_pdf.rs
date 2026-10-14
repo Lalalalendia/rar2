@@ -15,7 +15,7 @@ use pub_output::{
 };
 use pub_pdf::{
     FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfTargetProfile, render_bounded_pdf,
+    FixedStroke, FixedTextRun, PdfPaintTraceKindV1, PdfTargetProfile, render_bounded_pdf,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -97,6 +97,39 @@ fn fixed_image_placement_has_output_semantics(
     placement.content_rotation_degrees.is_some()
         || (mime == "image/gif"
             && (placement.source_window.is_some() || placement.recolor.is_some()))
+}
+
+fn image_placement_transfer_status(
+    viewer: Option<&pub_viewer::ViewerImagePlacementV1>,
+    output: Option<&FixedImagePlacement>,
+) -> &'static str {
+    let Some(viewer) = viewer else {
+        return if output.is_some() {
+            "pdf_has_unmatched_placement"
+        } else {
+            "no_explicit_viewer_placement"
+        };
+    };
+    let source_crop = viewer.source_window.is_some();
+    let output_crop = output.is_some_and(|value| value.source_window_present);
+    if source_crop && !output_crop {
+        return "viewer_crop_not_forwarded";
+    }
+    if !source_crop && output_crop {
+        return "pdf_crop_not_in_viewer";
+    }
+    let source_recolor = viewer.recolor.is_some();
+    let output_recolor = output.is_some_and(|value| value.recolor_present);
+    if source_recolor && !output_recolor {
+        return "viewer_recolor_not_forwarded";
+    }
+    if !source_recolor && output_recolor {
+        return "pdf_recolor_not_in_viewer";
+    }
+    if viewer.content_rotation_degrees != output.and_then(|value| value.content_rotation_degrees) {
+        return "viewer_rotation_not_forwarded";
+    }
+    "placement_fields_forwarded"
 }
 
 fn retain_scene_node_ids(
@@ -651,6 +684,87 @@ fn build_pdf_artifact(
             .iter()
             .map(|event| event.node_origin)
             .collect::<BTreeSet<_>>();
+
+        // Compare the exact Viewer image-placement evidence used for this
+        // conversion with the *actual* FixedPdfResources handed to the PDF
+        // backend. A PNG/JPEG crop may be omitted by the bounded adapter:
+        // that omission is reported, not silently described as uncropped.
+        let image_inputs = rendered
+            .paint_trace
+            .iter()
+            .filter(|event| event.kind == PdfPaintTraceKindV1::Image)
+            .map(|event| {
+                let source_images = visual
+                    .images
+                    .iter()
+                    .filter(|image| {
+                        Some(image.resource_id) == event.resource_origin
+                            && image.node_ids.contains(&event.node_origin)
+                    })
+                    .collect::<Vec<_>>();
+                let output_images = resources
+                    .images
+                    .iter()
+                    .filter(|image| {
+                        Some(image.resource_id) == event.resource_origin
+                            && image.node_ids.contains(&event.node_origin)
+                    })
+                    .collect::<Vec<_>>();
+                if source_images.len() != 1 || output_images.len() != 1 {
+                    return serde_json::json!({
+                        "node_origin": event.node_origin,
+                        "resource_origin": event.resource_origin,
+                        "transfer_status": "unmatched_or_ambiguous_image_identity",
+                    });
+                }
+                let viewer_image = source_images[0];
+                let output_image = output_images[0];
+                let viewer_placements = viewer_image
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.node_id == event.node_origin)
+                    .collect::<Vec<_>>();
+                let output_placements = output_image
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.node_id == event.node_origin)
+                    .collect::<Vec<_>>();
+                if viewer_placements.len() > 1 || output_placements.len() > 1 {
+                    return serde_json::json!({
+                        "node_origin": event.node_origin,
+                        "resource_origin": event.resource_origin,
+                        "transfer_status": "ambiguous_placement_records",
+                    });
+                }
+                let viewer_placement = viewer_placements.first().copied();
+                let output_placement = output_placements.first().copied();
+                let source_window_q16 = viewer_placement
+                    .and_then(|placement| placement.source_window.as_ref())
+                    .map(|window| {
+                        [
+                            window.left_q16,
+                            window.top_q16,
+                            window.right_q16,
+                            window.bottom_q16,
+                        ]
+                    });
+                serde_json::json!({
+                    "node_origin": event.node_origin,
+                    "resource_origin": event.resource_origin,
+                    "source_exact": viewer_image.source_exact,
+                    "mime": &viewer_image.mime,
+                    "viewer_placement_present": viewer_placement.is_some(),
+                    "viewer_source_window_q16": source_window_q16,
+                    "viewer_recolor_present": viewer_placement.is_some_and(|p| p.recolor.is_some()),
+                    "viewer_rotation_degrees": viewer_placement.and_then(|p| p.content_rotation_degrees),
+                    "pdf_placement_present": output_placement.is_some(),
+                    "pdf_source_window_present": output_placement.is_some_and(|p| p.source_window_present),
+                    "pdf_recolor_present": output_placement.is_some_and(|p| p.recolor_present),
+                    "pdf_rotation_degrees": output_placement.and_then(|p| p.content_rotation_degrees),
+                    "transfer_status": image_placement_transfer_status(viewer_placement, output_placement),
+                })
+            })
+            .collect::<Vec<_>>();
         let source_nodes = painted
             .iter()
             .map(|node_id| {
@@ -687,6 +801,7 @@ fn build_pdf_artifact(
             "pages": &rendered.report.pages,
             "paint_trace": &rendered.paint_trace,
             "source_nodes": source_nodes,
+            "image_inputs": image_inputs,
         })
     });
 
@@ -702,8 +817,8 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        authoritative_source_refs, fixed_image_placement_has_output_semantics, report_path_label,
-        retain_scene_node_ids,
+        authoritative_source_refs, fixed_image_placement_has_output_semantics,
+        image_placement_transfer_status, report_path_label, retain_scene_node_ids,
     };
     use pub_model::{CanonicalId, NodeId};
     use pub_viewer::{ViewerImagePlacementV1, ViewerImageRecolorV1, ViewerImageSourceWindowV1};
@@ -748,6 +863,56 @@ mod tests {
         let collected = authoritative_source_refs(&candidates, &source);
         assert_eq!(collected, vec![&candidates[0]]);
         assert!(candidates[0].validate_primary_source(&source).is_ok());
+    }
+
+    #[test]
+    fn trace_image_placement_does_not_silently_hide_png_crop_loss() {
+        use pub_pdf::FixedImagePlacement;
+        use pub_viewer::ViewerImagePlacementV1;
+
+        let node = NodeId::from_canonical(CanonicalId::from_bytes([8; 16]));
+        let source = ViewerImagePlacementV1 {
+            node_id: node,
+            source_window: Some(pub_viewer::ViewerImageSourceWindowV1 {
+                left_q16: 8_192,
+                top_q16: 0,
+                right_q16: 57_344,
+                bottom_q16: 65_536,
+            }),
+            content_rotation_degrees: None,
+            recolor: None,
+        };
+        assert!(
+            !fixed_image_placement_has_output_semantics("image/png", &source),
+            "current bounded PDF adapter drops standalone PNG crop metadata"
+        );
+        assert_eq!(
+            image_placement_transfer_status(Some(&source), None),
+            "viewer_crop_not_forwarded"
+        );
+        let passed = FixedImagePlacement {
+            node_id: node,
+            content_rotation_degrees: None,
+            source_window_present: true,
+            recolor_present: false,
+        };
+        assert_eq!(
+            image_placement_transfer_status(Some(&source), Some(&passed)),
+            "placement_fields_forwarded"
+        );
+        let pure_rotation = ViewerImagePlacementV1 {
+            source_window: None,
+            content_rotation_degrees: Some(90),
+            ..source.clone()
+        };
+        assert_eq!(
+            image_placement_transfer_status(Some(&pure_rotation), None),
+            "viewer_rotation_not_forwarded"
+        );
+        assert_eq!(
+            image_placement_transfer_status(None, None),
+            "no_explicit_viewer_placement"
+        );
     }
 
     #[test]
