@@ -66,7 +66,7 @@ function harness(replies) {
       const next = messages.shift();
       if (next instanceof Error) throw next;
       if (!next) throw new Error("scripted reply missing");
-      return reply(next);
+      return Array.isArray(next) ? reply(...next) : reply(next);
     },
   });
   return {client, calls};
