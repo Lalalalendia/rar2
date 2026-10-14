@@ -75,7 +75,8 @@ export class WebResourceWindowIndexV1 {
       // scene object references, source bytes, delivery handles or credentials.
       this.descriptors.set(id, Object.freeze({
         resource_id: id,
-        content_hash: descriptor.content_hash,
+        // SafePreview provides an exact hash of the host-encoded artifact.
+        content_hash: descriptor.content_hash ?? descriptor.encoded_artifact_sha256,
         expected_sha256: descriptor.expected_sha256,
         derivative_id: descriptor.derivative_id,
         byte_len: descriptor.byte_len,

@@ -7,6 +7,8 @@ on:
       - "apps/web/web-resource-scheduler-v1.test.mjs"
       - "apps/web/web-resource-window-v1.mjs"
       - "apps/web/web-resource-window-v1.test.mjs"
+      - "apps/web/reader-scene-editor-adapter-v1.mjs"
+      - "apps/web/reader-scene-editor-adapter-v1.test.mjs"
       - "apps/web/resource-readiness-v1.mjs"
       - "apps/web/resource-readiness-v1.test.mjs"
       - ".github/workflows/web-resource-scheduler-v1.yml"
@@ -29,4 +31,4 @@ jobs:
         with:
           node-version: "22"
       - name: Test scheduler against production resource readiness contract
-        run: node --test apps/web/resource-readiness-v1.test.mjs apps/web/web-resource-scheduler-v1.test.mjs apps/web/web-resource-window-v1.test.mjs
+        run: node --test apps/web/resource-readiness-v1.test.mjs apps/web/web-resource-scheduler-v1.test.mjs apps/web/web-resource-window-v1.test.mjs apps/web/reader-scene-editor-adapter-v1.test.mjs

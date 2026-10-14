@@ -70,12 +70,19 @@ product route already supplies the required adapters or has been wired.
 
 ## Exact remaining product gap (as of 2026-10-14)
 
-The current `chaptera.reader-scene.v1` used by
-`apps/web/product-editor-entry-v1.mjs` and
-`apps/web/rich-reader-editor-shell-v1.mjs` transports image resources as
-`inline_data_url`. `apps/web/reader-scene-editor-adapter-v1.mjs` currently maps
-image `content_hash` to `null`. Fonts may carry `expected_sha256`. Therefore a
-ResourceId/hash/derivative descriptor cannot be assumed for every image.
+The source-neutral SafePreview host already freshly encodes approved image
+derivatives and verifies `encoded_artifact_sha256` against its worker receipt.
+The new Reader Scene delivery metadata now carries that **derivative artifact**
+hash, its `safe-preview:<encode_spec_sha256>` identity and exact `byte_len`
+*only if the host admits the inline preview within the Scene size budget*.
+The Editor adapter maps that verified server receipt to `content_hash` without
+confusing it with the original PUB resource hash. The page-window index also
+understands the direct Reader Scene field. Legacy/unadmitted resources without
+the receipt remain explicitly unschedulable and render with existing behavior.
+
+The `chaptera.reader-scene.v1` still embeds the complete admitted image's
+`inline_data_url` inside the Scene: no page-scoped HTTP demand/cache savings
+are claimed by carrying a verified hash.
 
 `apps/cloud-reader/render-v1.mjs` currently sets SVG image `href` directly and
 installs all inline fonts during initial rendering. Simply invoking a resource
@@ -86,10 +93,10 @@ ready state and leave physical decoding unbounded.
 
 Required before claiming **actual online editor integration**:
 
-1. The source-neutral Reader Scene / approved delivery adapter must expose or
-   provide per-image **verified** immutable `content_hash` and derivative
-   identities, plus cost hints when known, without hashing the complete 500-page
-   manifest up front or leaking raw PUB bytes.
+1. The SafePreview variant now exposes server-verified encoded-artifact
+   identities. Other derivative routes/legacy descriptors still require their
+   own approved immutable hash, policy-scoped access and cost/size hints; never
+   confuse a source container hash with its safe preview derivative.
 2. Supply the existing authorized fetch/cache adapter and a real materialization
    adapter. Avoid double-decoding and ensure decode reservations correspond to
    physical work; use the already owned image-decode and HTTP-cache boundaries.
@@ -110,6 +117,6 @@ apps/web/web-resource-scheduler-v1.test.mjs
 apps/web/web-resource-window-v1.test.mjs`
 
 Includes 500-page bounded selection, shared resources, priorities, page 1->80,
-verified-hash fail-closed handling, font/border dependents, hidden-tab policies,
+verified-hash fail-closed handling, SafePreview host artifact identity, font/border dependents, hidden-tab policies,
 uncancellable prior work, observer scroll coalescing, IntersectionObserver
 500-page fast path, and real scheduler + readiness composition.

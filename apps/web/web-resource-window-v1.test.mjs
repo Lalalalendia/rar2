@@ -64,6 +64,23 @@ test('missing content hash is reported and never invented or admitted', () => {
   assert.equal(res.all_visible_resources_schedulable,false);
 });
 
+test('host-reencoded SafePreview metadata yields exact bounded Reader Scene demands',()=>{
+  const s=scene(1);
+  delete s.resources[0].content_hash;
+  s.resources[0].encoded_artifact_sha256=hex(77);
+  s.resources[0].derivative_id='safe-preview:'+hex(78);
+  s.resources[0].byte_len=9876;
+  const res=new WebResourceWindowIndexV1(s).select({current_page_id:'p1'});
+  assert.equal(res.all_visible_resources_schedulable,true);
+  assert.deepEqual(res.demands.map(d=>[d.content_hash,d.derivative_id,d.estimated_network_bytes]),
+    [[hex(77),'safe-preview:'+hex(78),9876]]);
+  const legacy=scene(1);
+  delete legacy.resources[0].content_hash;
+  assert.equal(new WebResourceWindowIndexV1(legacy).select({current_page_id:'p1'}).unsupported_visible_count,1);
+  s.resources[0].encoded_artifact_sha256='SHA-256:wrong';
+  assert.equal(new WebResourceWindowIndexV1(s).select({current_page_id:'p1'}).unsupported_visible_count,1);
+});
+
 test('SHA-256 format is strict, including uppercase and prefixed hashes',()=>{
   for(const hash of ['A'.repeat(64),'sha256:'+hex(1),'001','']) {
     const s=scene(1);s.resources[0].content_hash=hash;
