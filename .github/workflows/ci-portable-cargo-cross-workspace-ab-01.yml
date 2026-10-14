@@ -60,15 +60,37 @@ jobs:
           $errlog = Join-Path $env:RUNNER_TEMP 'e1-server-stderr.log'
           $outlog = Join-Path $env:RUNNER_TEMP 'e1-server-stdout.log'
           $watch = [Diagnostics.Stopwatch]::StartNew()
-          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','-p','chaptera-server','--release','--timings') -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','-p','chaptera-server','--release','--timings','--message-format=json') -NoNewWindow -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          # Wait only for cargo.exe, not for its surviving descendant process tree.
+          $proc.WaitForExit()
           $watch.Stop()
           if ($proc.ExitCode -ne 0) {
             Get-Content $errlog -Tail 80
             throw "root cargo build failed with exit code $($proc.ExitCode)"
           }
-          $compiles = @(Select-String -Path $errlog -Pattern 'Compiling\s+[^\s]+\s+v[0-9]').Count
+          # Cargo JSON is uncolored; the fresh field tells whether rustc ran.
+          # Fail closed if structured evidence is missing, rather than returning 0.
+          $compiled = 0
+          $reused = 0
+          $artifacts = 0
+          $buildFinished = $false
+          foreach ($line in [System.IO.File]::ReadLines($outlog)) {
+            if ($line -notmatch '"reason"\s*:\s*"(compiler-artifact|build-finished)"') { continue }
+            $message = $line | ConvertFrom-Json -ErrorAction Stop
+            if ($message.reason -eq 'compiler-artifact') {
+              $artifacts++
+              if ($message.fresh -eq $true) { $reused++ }
+              elseif ($message.fresh -eq $false) { $compiled++ }
+              else { throw "Cargo artifact missing freshness evidence" }
+            } elseif ($message.reason -eq 'build-finished') {
+              $buildFinished = $message.success -eq $true
+            }
+          }
+          if (-not $buildFinished -or $artifacts -eq 0) {
+            throw "Cargo JSON evidence incomplete: buildFinished=$buildFinished artifacts=$artifacts"
+          }
           $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
-          Write-Host "E1_RESULT mode=${{ matrix.mode }} phase=root seconds=$duration compiling=$compiles exit=0"
+          Write-Host "E1_RESULT mode=${{ matrix.mode }} phase=root seconds=$duration compiled=$compiled reused=$reused artifacts=$artifacts exit=0"
           Get-Content $errlog -Tail 3
 
       - name: Build Producer A release binary
@@ -83,15 +105,37 @@ jobs:
           $errlog = Join-Path $env:RUNNER_TEMP 'e1-producer-stderr.log'
           $outlog = Join-Path $env:RUNNER_TEMP 'e1-producer-stdout.log'
           $watch = [Diagnostics.Stopwatch]::StartNew()
-          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','--manifest-path','vendor/producer-a/Cargo.toml','-p','chaptera-producer-a','--release','--timings') -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          $proc = Start-Process -FilePath 'cargo.exe' -ArgumentList @('build','--manifest-path','vendor/producer-a/Cargo.toml','-p','chaptera-producer-a','--release','--timings','--message-format=json') -NoNewWindow -PassThru -RedirectStandardOutput $outlog -RedirectStandardError $errlog
+          # Wait only for cargo.exe, not for its surviving descendant process tree.
+          $proc.WaitForExit()
           $watch.Stop()
           if ($proc.ExitCode -ne 0) {
             Get-Content $errlog -Tail 80
             throw "producer cargo build failed with exit code $($proc.ExitCode)"
           }
-          $compiles = @(Select-String -Path $errlog -Pattern 'Compiling\s+[^\s]+\s+v[0-9]').Count
+          # Cargo JSON is uncolored; the fresh field tells whether rustc ran.
+          # Fail closed if structured evidence is missing, rather than returning 0.
+          $compiled = 0
+          $reused = 0
+          $artifacts = 0
+          $buildFinished = $false
+          foreach ($line in [System.IO.File]::ReadLines($outlog)) {
+            if ($line -notmatch '"reason"\s*:\s*"(compiler-artifact|build-finished)"') { continue }
+            $message = $line | ConvertFrom-Json -ErrorAction Stop
+            if ($message.reason -eq 'compiler-artifact') {
+              $artifacts++
+              if ($message.fresh -eq $true) { $reused++ }
+              elseif ($message.fresh -eq $false) { $compiled++ }
+              else { throw "Cargo artifact missing freshness evidence" }
+            } elseif ($message.reason -eq 'build-finished') {
+              $buildFinished = $message.success -eq $true
+            }
+          }
+          if (-not $buildFinished -or $artifacts -eq 0) {
+            throw "Cargo JSON evidence incomplete: buildFinished=$buildFinished artifacts=$artifacts"
+          }
           $duration = $watch.Elapsed.TotalSeconds.ToString('F2',[Globalization.CultureInfo]::InvariantCulture)
-          Write-Host "E1_RESULT mode=$mode phase=producer seconds=$duration compiling=$compiles exit=0"
+          Write-Host "E1_RESULT mode=$mode phase=producer seconds=$duration compiled=$compiled reused=$reused artifacts=$artifacts exit=0"
           Get-Content $errlog -Tail 3
 
       - name: Check both PE files and MSVC runtime closure
