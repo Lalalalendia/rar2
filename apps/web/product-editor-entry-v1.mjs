@@ -3,8 +3,10 @@ import { ChapteraProductEditorServiceV1 } from "./chaptera-product-editor-servic
 import { RichReaderEditorShellV1 } from "./rich-reader-editor-shell-v1.mjs";
 import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
 import {
+  canonicalStorySelectionFromTextarea,
   prepareStoryTextForTextarea,
   restoreStoryTextFromTextarea,
+  textareaSelectionFromCanonicalStory,
 } from "./story-line-endings-v1.mjs";
 
 
@@ -364,7 +366,15 @@ export async function bootProductEditor({
     storyApply.addEventListener("click",()=>{
       if(textBusy||textUnconfirmed||!context?.story_id||composing) return;
       let intent;
+      let canonicalSelection;
       try{
+        canonicalSelection=canonicalStorySelectionFromTextarea(
+          context.canonical_text,
+          storyInput.value,
+          storyInput.selectionStart,
+          storyInput.selectionEnd,
+          storyInput.selectionDirection||"none",
+        );
         intent=oneShotStoryIntent({
           documentId,
           sourceHash:context.source_hash,
@@ -410,8 +420,21 @@ export async function bootProductEditor({
             canonical_text:confirmed.text,
           };
           storyInput.value=storyTextForTextarea(confirmed.text);
-          textState("Exact server revision and reopened Story text confirmed.","ok");
           lockDocument(false);
+          const selection=textareaSelectionFromCanonicalStory(
+            confirmed.text,
+            canonicalSelection.start_scalar,
+            canonicalSelection.end_scalar,
+            canonicalSelection.direction,
+          );
+          storyInput.focus();
+          storyInput.setSelectionRange(
+            selection.start_utf16,selection.end_utf16,selection.direction,
+          );
+          textState(
+            "Exact server revision and reopened Story text confirmed; canonical selection restored.",
+            "ok",
+          );
         }catch(error){
           // A POST or post-ACK Scene failure may have happened after a durable
           // commit. Preserve the operation and disallow all new mutations.

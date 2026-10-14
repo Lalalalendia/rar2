@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".github/workflows/cloud-reader-linux-release.yml"
 EMBEDDED = ROOT / "apps/chaptera-server/src/product_editor_assets.rs"
 LEGACY_PRODUCTION_DEPLOY = ROOT / ".github/workflows/cloud-reader-deploy.yml"
+HOST_INSTALL = ROOT / "deploy/install-reader-host.sh"
 
 # All exposed Temporary Editor modules are include_bytes! in the Chaptera Rust
 # release binary. Source-only UI edits must trigger a *new* immutable packet.
@@ -92,6 +93,22 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertFalse(
             LEGACY_PRODUCTION_DEPLOY.exists(),
             "rar2 must not auto-deploy production; use chaptera-site pinned deploy",
+        )
+
+
+    def test_reader_host_install_preserves_verified_previous_release(self):
+        install = HOST_INSTALL.read_text(encoding="utf-8")
+        self.assertIn('PREVIOUS="/opt/chaptera/previous"', install)
+        self.assertIn('readlink -f "${CURRENT}"', install)
+        self.assertIn('^/opt/chaptera/releases/[0-9a-f]{40}$', install)
+        self.assertIn('[[ ! -x "${old_release}/chaptera" ]]', install)
+        self.assertIn('if [[ "${old_release}" != "${RELEASE}" ]]; then', install)
+        self.assertIn('ln -sfn "${old_release}" "${PREVIOUS}"', install)
+        self.assertIn('ln -sfn "${RELEASE}" "${CURRENT}"', install)
+        self.assertLess(
+            install.index('ln -sfn "${old_release}" "${PREVIOUS}"'),
+            install.index('ln -sfn "${RELEASE}" "${CURRENT}"'),
+            "rollback target must be recorded before current is switched",
         )
 
 

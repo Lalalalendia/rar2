@@ -40,12 +40,12 @@ function accepted(replayed = false) {
     scene_refresh: "current", canonical_operation: { move_node: { node_id: nodeId } },
   };
 }
-function reply(body, code = 200) {
+function reply(body, code = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
-    status: code, headers: { "content-type": "application/json" },
+    status: code, headers: { "content-type": "application/json", ...extraHeaders },
   });
 }
-function harness(responses) {
+function harness(responses, { sleepImpl } = {}) {
   const requests = [];
   const feed = [...responses];
   const fetchImpl = async (url, options) => {
@@ -57,12 +57,100 @@ function harness(responses) {
   };
   const client = new TemporaryGuestMoveClientV1({
     sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
-    fetchImpl, operationIdFactory: () => "test-move-1",
+    fetchImpl, operationIdFactory: () => "test-move-1", sleepImpl,
   });
   return { client, requests };
 }
 
 const move = { nodeId, xEmu: 150, yEmu: 230 };
+
+const rateLimitedRead = retryAfter =>
+  [{ error: "public_rate_limited" }, 429,
+    retryAfter === undefined ? {} : { "Retry-After": retryAfter }];
+const validScene = {
+  protocol_version: "chaptera.temporary-editor-scene.v1",
+  document_id: session, source_hash: source,
+  revision_id: beforeRev, expires_at_ms: oldExpiry,
+  scene: { protocol_version: "chaptera.reader-scene.v1",
+    document_id: session, source_hash: source, revision_id: beforeRev,
+    pages: [], nodes: [] },
+};
+
+test("private current GET honors server Retry-After once, preserving exact bearer", async () => {
+  const waits = [];
+  const { client, requests } = harness([rateLimitedRead("2"), before], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  assert.equal((await client.refresh()).revision_id, beforeRev);
+  assert.deepEqual(waits, [2000]);
+  assert.equal(client.status.refresh_required, false);
+  assert.equal(requests.length, 2);
+  for (const {url,options} of requests) {
+    assert.equal(url, "/v1/editor/temporary-sessions/" + session + "/current");
+    assert.equal(options.method, "GET");
+    assert.equal(options.headers["x-chaptera-reader-session"], bearer);
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.cache, "no-store");
+    assert.ok(!url.includes(bearer));
+  }
+});
+
+test("private scene GET retries only the server-confirmed 429 and checks canonical scene", async () => {
+  const waits = [];
+  const { client, requests } = harness([before, rateLimitedRead("1"), validScene], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await client.refresh();
+  assert.equal((await client.readerScene()).revision_id, beforeRev);
+  assert.deepEqual(waits, [1000]);
+  assert.deepEqual(requests.map(x => [x.options.method, x.url]), [
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/current"],
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/scene"],
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/scene"],
+  ]);
+  assert.equal(client.status.refresh_required, false);
+});
+
+test("missing, forged, or too-long Retry-After keeps scene and edit fenced", async () => {
+  for (const retryAfter of [undefined, "0", "11", "Wed, 14 Oct 2026 11:00:00 GMT"]) {
+    const waits = [];
+    const { client, requests } = harness([before, rateLimitedRead(retryAfter)], {
+      sleepImpl: async ms => waits.push(ms),
+    });
+    await client.refresh();
+    await assert.rejects(client.readerScene(), error => error.status === 429);
+    assert.equal(client.status.refresh_required, true);
+    await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(waits, []);
+  }
+});
+
+test("a second 429 after permitted read retry stops without replaying writes", async () => {
+  const waits = [];
+  const { client, requests } = harness([rateLimitedRead("1"), rateLimitedRead("1")], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await assert.rejects(client.refresh(), error => error.status === 429);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(client.status.refresh_required, true);
+});
+
+test("429 on a MoveNode POST is never retried even with Retry-After", async () => {
+  const waits = [];
+  const { client, requests } = harness([before, rateLimitedRead("1")], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await client.refresh();
+  await assert.rejects(client.moveNode(move), error => error.status === 429);
+  assert.deepEqual(waits, []);
+  assert.equal(requests.filter(x => x.options.method === "POST").length, 1);
+  // A server 429 on POST is a definitive 4xx rejection, not an unknown ACK.
+  assert.equal(client.status.pending_reconciliation, false);
+  assert.equal(client.status.refresh_required, true);
+  await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
+});
 
 test("private tab capability is reused only from valid existing browser record", async () => {
   const record = {
@@ -516,6 +604,109 @@ test("Guest Story keeps original paragraph positions: reordering a separator is 
   assert.throws(() =>
     temporaryStoryObservedToCanonicalStory(original, "al\nphabeta"),
     /temporary_story_intent_invalid/);
+});
+
+
+const resizedRect = {x: 80, y: 180, width: 40, height: 60};
+const priorRect = {x: 100, y: 200, width: 10, height: 20};
+const resizedCurrent = {
+  ...after,
+  authoring_graph: {nodes: {[nodeId]: {header: {bounds: resizedRect}}}},
+};
+function resizeAck(replayed = false) {
+  return {
+    ...accepted(replayed),
+    protocol_version: "chaptera.temporary-editor-resize-node.v1",
+    canonical_operation: {
+      kind: "resize_node", node_id: nodeId, before: priorRect, after: resizedRect,
+    },
+  };
+}
+
+test("Guest ResizeNode posts canonical bounded rectangle and reopens exact physical geometry", async () => {
+  const {client, requests} = harness([before, resizeAck(), resizedCurrent]);
+  await client.refresh();
+  const receipt = await client.resizeNode({nodeId, bounds: resizedRect});
+  assert.deepEqual(receipt.current.authoring_graph.nodes[nodeId].header.bounds, resizedRect);
+  assert.equal(receipt.accepted.canonical_operation.kind, "resize_node");
+  assert.deepEqual(requests.map(x => [x.options.method, x.url]), [
+    ["GET", "/v1/editor/temporary-sessions/"+session+"/current"],
+    ["POST", "/v1/editor/temporary-sessions/"+session+"/resize-node"],
+    ["GET", "/v1/editor/temporary-sessions/"+session+"/current"],
+  ]);
+  const sent = JSON.parse(requests[1].options.body);
+  assert.deepEqual(sent, {
+    protocol_version: "chaptera.commit-request.v1",
+    document_id: session, source_hash: source, base_revision_id: beforeRev,
+    client_operation_id: "test-move-1",
+    command: {
+      kind:"resize_node", node_id: nodeId, x_emu:80, y_emu:180,
+      width_emu:40, height_emu:60,
+    },
+  });
+  for (const {url,options} of requests) {
+    assert.equal(options.headers["x-chaptera-reader-session"],bearer);
+    assert.equal(options.headers["x-csrf-token"],csrf);
+    assert.equal(options.credentials,"omit");
+    assert.equal(options.redirect,"error");
+    assert.ok(!url.includes(bearer));
+  }
+});
+
+test("Guest ResizeNode never posts nonpositive, overflowed, unchanged or translation-only bounds", async () => {
+  const {client,requests}=harness([before]);
+  await client.refresh();
+  const failures=[
+    {nodeId, bounds:{...resizedRect,width:0}},
+    {nodeId, bounds:{...resizedRect,height:-1}},
+    {nodeId, bounds:{...resizedRect,x:Number.MAX_SAFE_INTEGER}},
+    {nodeId, bounds:{...priorRect}},
+    {nodeId, bounds:{...priorRect,x:900}},
+    {nodeId:"foreign", bounds:resizedRect},
+  ];
+  for (const item of failures) {
+    await assert.rejects(client.resizeNode(item),/temporary_resize_intent_invalid/);
+  }
+  assert.equal(requests.length,1);
+});
+
+test("Guest ResizeNode lost ACK replays same private operation and fences different edits", async () => {
+  const {client,requests}=harness([before,new TypeError("lost"),resizeAck(true),resizedCurrent]);
+  await client.refresh();
+  await assert.rejects(client.resizeNode({nodeId,bounds:resizedRect}),/lost/);
+  assert.equal(client.status.pending_reconciliation,true);
+  await assert.rejects(client.resizeNode({nodeId,bounds:{...resizedRect,width:50}}),
+    /temporary_move_reconciliation_required/);
+  const recovery=await client.reconcileUnknown();
+  assert.equal(recovery.accepted.replayed,true);
+  const posts=requests.filter(x=>x.options.method==="POST");
+  assert.equal(posts.length,2);
+  assert.equal(posts[0].options.body,posts[1].options.body);
+  assert.equal(client.status.pending_reconciliation,false);
+});
+
+test("Guest ResizeNode forged ACK or mismatched canonical rectangle cannot unlock further writes", async () => {
+  const badAck={...resizeAck(),canonical_operation:{
+    ...resizeAck().canonical_operation,
+    after:{...resizedRect,height:6000},
+  }};
+  const {client: forged}=harness([before,badAck,resizeAck(true),resizedCurrent]);
+  await forged.refresh();
+  await assert.rejects(forged.resizeNode({nodeId,bounds:resizedRect}),
+    /temporary_resize_ack_operation_mismatch/);
+  assert.equal(forged.status.pending_reconciliation,true);
+  await forged.reconcileUnknown();
+
+  const badCurrent={
+    ...resizedCurrent,
+    authoring_graph:{nodes:{[nodeId]:{header:{bounds:{...resizedRect,height:99}}}}},
+  };
+  const {client}=harness([before,resizeAck(),badCurrent,resizeAck(true),resizedCurrent]);
+  await client.refresh();
+  await assert.rejects(client.resizeNode({nodeId,bounds:resizedRect}),
+    /temporary_move_reopened_state_mismatch/);
+  assert.equal(client.status.pending_reconciliation,true);
+  await client.reconcileUnknown();
 });
 
 test("nine-card A4 PDF report and download bind exact edited revision and checked bytes", async () => {
