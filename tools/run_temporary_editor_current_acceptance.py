@@ -779,8 +779,35 @@ def main() -> int:
             finally:
                 browser_private.unlink(missing_ok=True)
             if executed.returncode != 0:
+                # One bounded source-safe failure code, never a raw Playwright
+                # stack: an exception may otherwise reveal a private URL or
+                # temporary bearer/session identity in an Actions log.
+                lines = [
+                    line.split(" ", 1)[1]
+                    for line in executed.stderr.splitlines()
+                    if line.startswith("SBDC034_R1_BROWSER_FAILURE ")
+                ]
+                evidence = json.loads(lines[-1]) if lines else {}
+                stage = evidence.get("stage")
+                code = evidence.get("code")
+                allowed_stages = {
+                    "browser_launch", "browser_load", "resume_ui",
+                    "revision_readback", "render_dom", "r1_screenshot",
+                    "r1_pixel_scan", "source_safe_receipt",
+                }
+                allowed_codes = {
+                    "missing_picture_dom", "image_transport",
+                    "logo_dom_or_decode", "pixel_roi", "revision_identity",
+                    "browser_timeout", "network_or_origin",
+                    "assertion_unclassified", "browser_unclassified",
+                }
+                if stage not in allowed_stages:
+                    stage = "unclassified_stage"
+                if code not in allowed_codes:
+                    code = "unclassified_code"
                 raise AssertionError(
-                    "SBDC R1 Chromium Editor four-ROI paint proof failed"
+                    "SBDC R1 Chromium Editor four-ROI paint proof failed: "
+                    + stage + "/" + code
                 )
             physical_lines = [
                 line.split(" ", 1)[1] for line in executed.stdout.splitlines()
