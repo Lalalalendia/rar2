@@ -1,4 +1,5 @@
 name: CI-PORTABLE-CARGO-CROSS-WORKSPACE-AB-01
+# E1 capacity-released single run receipt 2026-10-14
 
 on:
   push:
