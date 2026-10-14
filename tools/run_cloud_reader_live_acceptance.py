@@ -539,7 +539,13 @@ def curl_request(
     body_json: dict[str, Any] | None = None,
     upload: pathlib.Path | None = None,
     dump_headers: pathlib.Path | None = None,
+    port_aware_origin: bool = False,
 ) -> tuple[int, bytes]:
+    # Browser test origins include the ephemeral HTTPS listener port; preserve
+    # that exact Host/Origin contract only when explicitly requested.
+    effective_origin_host = (
+        f"{EDGE_HOST}:{https_port}" if port_aware_origin else EDGE_HOST
+    )
     command = [
         "curl",
         "--noproxy",
@@ -550,9 +556,9 @@ def curl_request(
         "--resolve",
         f"{EDGE_HOST}:{https_port}:127.0.0.1",
         "--header",
-        f"Host: {EDGE_HOST}",
+        f"Host: {effective_origin_host}",
         "--header",
-        f"Origin: https://{EDGE_HOST}",
+        f"Origin: https://{effective_origin_host}",
         "--request",
         method,
         "--output",
