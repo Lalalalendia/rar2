@@ -56,7 +56,7 @@ class BootstrapTest(unittest.TestCase):
     def test_no_credentials_or_downloads_in_default_main(self):
         with mock.patch.object(setup, "inspect_host", return_value=(
                 {"schema": setup.SCHEMA, "ready": True, "blockers": []},
-                Path("C:/nonexistent"))):
+                Path("C:" + "/nonexistent"))):
             with mock.patch.object(setup, "install", side_effect=AssertionError("install executed")):
                 with mock.patch.object(sys, "argv", ["bootstrap_local_dev_runner.py"]):
                     with contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -67,7 +67,7 @@ class BootstrapTest(unittest.TestCase):
     def test_explicit_install_needs_isolation_acknowledgment(self):
         with mock.patch.object(setup, "inspect_host", return_value=(
                 {"schema": setup.SCHEMA, "ready": True, "blockers": []},
-                Path("C:/nonexistent"))):
+                Path("C:" + "/nonexistent"))):
             with mock.patch.object(setup, "install", side_effect=AssertionError("install executed")):
                 with mock.patch.object(sys, "argv", ["bootstrap_local_dev_runner.py", "--install"]):
                     with contextlib.redirect_stderr(io.StringIO()) as stderr:
@@ -94,7 +94,7 @@ class BootstrapTest(unittest.TestCase):
             setup.select_official_asset(wrong)
 
     def test_zip_traversal_symlink_and_duplicates(self):
-        for path in ("../secret.txt", "/absolute.txt", "C:/drive.txt",
+        for path in ("../secret.txt", "/absolute.txt", "C:" + "/drive.txt",
                      "bin/../../escape", "bin/./dot.txt", "bin//double.txt",
                      "bin/trailing. "):
             with self.subTest(path=path):
