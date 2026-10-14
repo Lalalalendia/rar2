@@ -50,14 +50,18 @@ pub(crate) fn render_current_fixed_pdf(
         return Err("edited_pdf_source_identity_mismatch");
     }
 
-    // The guest contract only admits MoveNode and (when enabled) StoryRange.
+    // The Guest contract admits exactly MoveNode, ResizeNode and plain Story.
     // Unknown operations must never be silently discarded by a fixed exporter.
     let mut moved = BTreeSet::<NodeId>::new();
+    let mut resized = BTreeSet::<NodeId>::new();
     let mut edited_stories = 0usize;
     for operation in session.operations() {
         match operation {
             EditOperation::MoveNode { node_id, .. } => {
                 moved.insert(*node_id);
+            }
+            EditOperation::ResizeNode { node_id, .. } => {
+                resized.insert(*node_id);
             }
             EditOperation::ReplaceStoryRange { .. } => edited_stories += 1,
             _ => return Err("edited_pdf_operation_unsupported"),
@@ -65,9 +69,11 @@ pub(crate) fn render_current_fixed_pdf(
     }
 
     // Preserve the Viewer page-role, paints and exact image-resource authority.
-    // Only direct page-local MoveNode geometry may be overridden from authoring.
+    // Only admitted direct-page MoveNode/ResizeNode geometry may be
+    // projected. ResizeNode can keep x/y unchanged and must use its own
+    // canonical eligibility gate rather than a synthetic move.
     for scene_node in &mut bundle.geometry.scene.nodes {
-        if !moved.contains(&scene_node.origin) {
+        if !moved.contains(&scene_node.origin) && !resized.contains(&scene_node.origin) {
             continue;
         }
         let authored = session
@@ -75,20 +81,24 @@ pub(crate) fn render_current_fixed_pdf(
             .nodes
             .get(&scene_node.origin)
             .ok_or("edited_pdf_node_missing")?;
-        if authored.header.parent_id != scene_node.parent_origin
-            || session
+        let move_admitted = moved.contains(&scene_node.origin)
+            && session
                 .can_move_node_to(
                     scene_node.origin,
                     authored.header.bounds.x,
                     authored.header.bounds.y,
                 )
-                .is_err()
+                .is_ok();
+        let resize_admitted = resized.contains(&scene_node.origin)
+            && session.can_resize_node(scene_node.origin).is_ok();
+        if authored.header.parent_id != scene_node.parent_origin
+            || !(move_admitted || resize_admitted)
         {
             return Err("edited_pdf_node_not_page_local");
         }
         scene_node.bounds = authored.header.bounds;
     }
-    for node_id in &moved {
+    for node_id in moved.iter().chain(resized.iter()) {
         let authored = session
             .graph()
             .nodes
