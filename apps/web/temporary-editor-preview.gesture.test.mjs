@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bootTemporaryEditorPreview } from "./temporary-editor-preview.mjs";
+import { bootTemporaryEditorPreview, temporaryCanvasStoryId } from "./temporary-editor-preview.mjs";
 
 const id = "tempedit:" + "a".repeat(32);
 const token = "b".repeat(64);
@@ -293,7 +293,7 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   const dom = fakeDom();
   for (const key of [
     "temporary-story-panel", "temporary-story-select",
-    "temporary-story-text", "temporary-story-apply",
+    "temporary-story-text", "temporary-story-apply", "temporary-story-discard",
   ]) {
     dom.nodes[key] = {
       hidden: false, disabled: false, value: "", textContent: "",
@@ -308,12 +308,23 @@ test("temporary Guest plain Story field posts exact private range and repaints a
     return {value: "", textContent: ""};
   };
   const storyId = "01234567-89ab-4def-8abc-123456789abc";
+  const otherStoryId = "00000000-0000-7000-8000-000000000001";
+  const otherNodeId = "30000000-0000-7000-8000-000000000003";
   const network = server(), renders = [];
   let savedText = null;
   const storyCurrent = (rev, cursor, text) => {
     const reply = current(rev, cursor, 100, 200);
+    reply.authoring_graph.pages = {[pageId]: {size: {width: 3000, height: 4000}}};
+    reply.authoring_graph.nodes[nodeId].header.parent_id = pageId;
     reply.authoring_graph.nodes[nodeId].payload = { story_frame: { story_id: storyId } };
-    reply.authoring_graph.stories = { [storyId]: {text, runs: [], paragraphs: [], fields: [], hyperlinks: []} };
+    reply.authoring_graph.nodes[otherNodeId] = {
+      header: {parent_id: pageId, bounds: {x: 800, y: 900, width: 300, height: 300}},
+      payload: {story_frame: {story_id: otherStoryId}},
+    };
+    reply.authoring_graph.stories = {
+      [storyId]: {text, runs: [], paragraphs: [], fields: [], hyperlinks: []},
+      [otherStoryId]: {text: "Other\\r", runs: [], paragraphs: [], fields: [], hyperlinks: []},
+    };
     return reply;
   };
   const seen = [];
@@ -370,11 +381,31 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   assert.equal(dom.nodes["temporary-story-select"].disabled, false);
   assert.equal(dom.nodes["temporary-story-text"].disabled, false);
   assert.equal(dom.nodes["temporary-story-apply"].disabled, false);
-  assert.equal(dom.nodes["temporary-story-select"].value, storyId);
+  assert.equal(dom.nodes["temporary-story-select"].value, otherStoryId,
+    "the dropdown initially shows the first eligible Story, not the clicked frame");
+  const svg = dom.pointer(110, 210).target.closest("svg.page");
+  svg.appendChild = () => {};
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
+  assert.equal(dom.nodes["temporary-story-select"].value, storyId,
+    "canvas selection must activate the Story owned by its canonical TextFrame");
   assert.equal(dom.nodes["temporary-story-text"].value, "Initial");
+  assert.equal(seen.filter(call => /\\/(?:story-range|move-node)$/.test(call.url)).length, 0,
+    "selection never commits or extends the TTL");
   const editor = dom.nodes["temporary-story-text"];
   const apply = dom.nodes["temporary-story-apply"];
   editor.value = "Edited";
+  editor.handlers.input();
+  const selector = dom.nodes["temporary-story-select"];
+  selector.value = otherStoryId;
+  selector.handlers.change();
+  assert.equal(selector.value, storyId, "dirty Story must veto switching candidates");
+  assert.equal(editor.value, "Edited", "dirty text must survive a blocked switch");
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110, 210));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(110, 210));
+  assert.equal(seen.filter(call => call.url.endsWith("/move-node")).length, 0,
+    "canvas gestures cannot discard a dirty Story");
+  assert.equal(editor.value, "Edited");
   editor.handlers.compositionstart();
   assert.equal(apply.disabled, true, "IME composition must disable Story submission");
   await apply.handlers.click();
@@ -390,6 +421,18 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   assert.equal(dom.nodes["temporary-story-text"].disabled, false);
   assert.equal(dom.nodes["temporary-story-apply"].disabled, false);
   assert.match(dom.nodes["temporary-status"].textContent, /Текст подтверждён сервером/);
+  editor.value = "Unsaved local change";
+  editor.handlers.input();
+  const editsBeforeDiscard = seen.filter(call => call.url.endsWith("/story-range")).length;
+  assert.equal(dom.nodes["temporary-story-discard"].disabled, false);
+  dom.nodes["temporary-story-discard"].handlers.click();
+  assert.equal(editor.value, "Edited", "explicit discard restores authoritative Story");
+  assert.equal(seen.filter(call => call.url.endsWith("/story-range")).length, editsBeforeDiscard,
+    "discard is not a mutation");
+  selector.value = otherStoryId;
+  selector.handlers.change();
+  assert.equal(selector.value, otherStoryId, "clean draft permits selecting a different Story");
+  assert.equal(editor.value, "Other", "the new Story text is rendered from canonical state");
 });
 
 test("A4 nine-card control is available only for the exact edited 85x55 mm page", async () => {
@@ -635,4 +678,25 @@ test("nudge cannot escape canvas focus, modifiers, composition, missing selectio
   await key({});
   assert.equal(network.calls.filter(call => call.url.endsWith("/move-node")).length, 0);
   assert.equal(prevented, 0, "unsupported keyboard routes must not consume Arrow");
+});
+
+test("canvas Story join refuses wrong-page, foreign, missing and unadmitted owners", () => {
+  const storyId = "story-a";
+  const graph = {
+    pages: {[pageId]: {}, ["40000000-0000-7000-8000-000000000004"]: {}},
+    nodes: {[nodeId]: {header: {parent_id: pageId},
+      payload: {story_frame: {story_id: storyId}}}},
+  };
+  const candidates = [{story_id: storyId, text: "Hello"}];
+  assert.equal(temporaryCanvasStoryId(graph, candidates, nodeId, pageId), storyId);
+  assert.equal(temporaryCanvasStoryId(graph, candidates, nodeId,
+    "40000000-0000-7000-8000-000000000004"), null);
+  assert.equal(temporaryCanvasStoryId(graph, candidates, "foreign-node", pageId), null);
+  assert.equal(temporaryCanvasStoryId(graph, [], nodeId, pageId), null,
+    "unsupported linked/table/rich Stories are never client-admitted");
+  assert.equal(temporaryCanvasStoryId({pages: {}, nodes: graph.nodes},
+    candidates, nodeId, pageId), null);
+  assert.equal(temporaryCanvasStoryId({pages: graph.pages, nodes: {
+    [nodeId]: {header: {parent_id: pageId}, payload: {table: {story_id: storyId}}},
+  }}, candidates, nodeId, pageId), null);
 });
