@@ -2092,6 +2092,48 @@ mod tests {
     }
 
     #[test]
+    fn reader_scene_reprojects_exact_resize_bounds_from_canonical_editor() {
+        let source_bytes = sample3_pub();
+        let source_sha256 = fixture_hash(&source_bytes);
+        let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
+        let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
+        let (node_id, before) = session
+            .graph()
+            .nodes
+            .iter()
+            .find(|(node_id, _)| session.can_resize_node(**node_id).is_ok())
+            .map(|(node_id, node)| (*node_id, node.header.bounds))
+            .expect("Sample3 has a direct resize-capable source node");
+        let after = pub_editor::RectEmu {
+            x: before.x,
+            y: before.y,
+            width: LengthEmu::new(before.width.get() + 1000),
+            height: before.height,
+        };
+        session.resize_node_to(node_id, after).unwrap();
+        let project = crate::revision_materializer::cloud_revision_project(&session.project());
+        let scene = project_reader_scene_from_exact_source(
+            "document-sample3".to_owned(),
+            source_sha256.clone(),
+            format!("sha256:{}", "c".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            &source_bytes,
+            &project,
+        )
+        .expect("canonical ResizeNode must be visible in exact Reader scene");
+        let node_key = serde_json::to_value(node_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let rendered = scene.nodes.iter().find(|node| node.node_id == node_key)
+            .expect("resized source node remains visible in Reader scene");
+        assert_eq!(rendered.bounds.width, after.width.get());
+        assert_eq!(rendered.bounds.height, after.height.get());
+        assert_eq!(scene.source_hash, source_sha256);
+    }
+
+    #[test]
     fn reader_scene_reprojects_exact_story_range_text_from_canonical_editor() {
         let source_bytes = sample3_pub();
         let source_sha256 = fixture_hash(&source_bytes);
