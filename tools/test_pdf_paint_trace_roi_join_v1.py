@@ -103,6 +103,57 @@ class PaintTraceRoiJoinTests(unittest.TestCase):
         rows = join_paint_trace(trace, oracle)["pages"][0]["candidate_paint_events"]
         self.assertEqual([r["resource_origin"] for r in rows], ["team-resource"])
 
+
+    def test_verified_pub_source_refs_follow_candidate_node_identity(self):
+        trace, oracle = fixture()
+        trace["source_sha256"] = "b" * 64
+        authoritative = {
+            "format": "pub",
+            "adapter_version": "synthetic-v1",
+            "source_hash": "b" * 64,
+            "carrier": "PUB/Contents",
+            "object_key": "synthetic-seq",
+            "path": "SpContainer/FOPT",
+            "byte_range": {"offset": 64, "length": 16},
+            "role": "semantic",
+            "authority": "authoritative",
+            "confidence": "exact",
+        }
+        trace["source_nodes"] = [
+            {
+                "node_origin": "background-node-higher-identity",
+                "status": "exact_source_byte_range",
+                "source_refs": [authoritative],
+            },
+            {
+                "node_origin": "foreground-node-lower-identity",
+                "status": "no_exact_authoritative_source_ref",
+                "source_refs": [],
+            },
+        ]
+        rows = join_paint_trace(trace, oracle)["pages"][0]["candidate_paint_events"]
+        self.assertEqual(rows[0]["source_link_status"], "exact_source_byte_range")
+        self.assertEqual(rows[0]["source_refs"][0]["byte_range"], {"offset": 64, "length": 16})
+        self.assertEqual(rows[1]["source_link_status"], "no_exact_authoritative_source_ref")
+        self.assertEqual(rows[1]["source_refs"], [])
+
+        bad = copy.deepcopy(trace)
+        bad["source_nodes"][0]["source_refs"][0]["confidence"] = "inferred"
+        with self.assertRaisesRegex(TraceJoinError, "non-authoritative"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["source_nodes"][0]["source_refs"][0]["source_hash"] = "c" * 64
+        with self.assertRaisesRegex(TraceJoinError, "differs from primary"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["source_nodes"][0]["source_refs"][0]["byte_range"]["offset"] = 2**64 - 1
+        with self.assertRaisesRegex(TraceJoinError, "overflowing"):
+            join_paint_trace(bad, oracle)
+        bad = copy.deepcopy(trace)
+        bad["source_nodes"][1]["node_origin"] = "unknown-private-node"
+        with self.assertRaisesRegex(TraceJoinError, "unknown or duplicate"):
+            join_paint_trace(bad, oracle)
+
     def test_rejects_rotated_mismatched_or_overlapping_receipts(self):
         tr, ref = fixture()
         bad = copy.deepcopy(ref)

@@ -18,7 +18,11 @@ Unsupported/unemitted objects remain in existing `PdfNodeReport` diagnostics and
 
 For an authorized local source and licensed explicit fallback font, run the existing `pub-cli convert --to pdf --fallback-font ...` command with the environment variable `CHAPTERA_PDF_PAINT_TRACE=1`. It writes an additional local `<output.pdf>.paint-trace.json` alongside normal `<output.pdf>.loss.json` and `.loss.txt`. Default conversion writes **no** diagnostic sidecar.
 
-The opt-in trace has `schema_version: chaptera.pdf-paint-trace.v1`, the exact output PDF SHA-256, `pages`, and `paint_trace`. If a file is private, its geometry and IDs are also private: do not collect it in public CI or telemetry. The CLI uses the existing `AdmittedSource::commit_derived_output` output boundary. Normal PDF bytes and standard loss report remain unchanged.
+The opt-in trace has `schema_version: chaptera.pdf-paint-trace.v1`, the exact output PDF SHA-256, `pages`, and `paint_trace`. It also includes the **primary source PUB SHA-256** and `source_nodes`, joined by the *same* canonical `NodeId` from the already loaded `resolved_graph`. No new PUB parsing is performed.
+
+For each painted node, `source_nodes` reports only `SourceRef` values that satisfy **all** conditions: validate against the same primary source descriptor, `authority=authoritative`, `confidence=exact` and `role=semantic|projection`. It labels links `exact_source_byte_range` when the verified ref includes a byte offset/length, `exact_source_object_only` when only its carrier/object identity is available, `no_exact_authoritative_source_ref` if the canonical graph node is present without admitted refs, and `unmapped_projected_node` if it is not found in the canonical graph. No stage invents object links from nearby rectangles. A SourceRef is provenance, **not** proof of crop, font, transform or exact raster ink.
+
+If a file is private, its geometry, carrier/keys/offsets and IDs are also private: do not collect it in public CI or telemetry. The CLI uses the existing `AdmittedSource::commit_derived_output` output boundary. Normal PDF bytes and standard loss report remain unchanged.
 
 ## Stage 2 — join with visual differences
 
@@ -33,7 +37,7 @@ python tools/pdf_paint_trace_roi_join_v1.py \
   --output private/paint-roi-candidates.json
 ```
 
-The join requires matching candidate PDF SHA-256, page counts, boxes, unrotated/untranslated coordinates, MuPDF RGB + deterministic DPI, valid bounded RLE, contiguous per-page painter indices and one physical output copy. It refuses mismatches; it does **not** guess a geometric registration. It reports:
+The join requires matching candidate PDF SHA-256, page counts, boxes, unrotated/untranslated coordinates, MuPDF RGB + deterministic DPI, valid bounded RLE, contiguous per-page painter indices and one physical output copy. When `source_nodes` is supplied, it additionally validates primary PUB SHA-256 against every admitted SourceRef, exact authority, non-overflowing byte ranges and the painted NodeId set, and joins refs only by exact ID. Older trace receipts without `source_nodes` remain supported with `source_link_status=trace_not_available`. It refuses mismatches; it does **not** guess a geometric registration. It reports:
 
 - significant-pixel count and changed tile count by page;
 - unmatched changed tiles that no emitted node envelope overlaps;
@@ -46,4 +50,4 @@ These candidate tile counts **cannot be summed** into a pixel contribution score
 
 `Free PUB PDF CLI V1` runs the source-neutral Rust tests for exact overlapping images, page-local ordinal ordering and byte-offset correspondence while retaining PDF/loss hashes. `FIDELITY-REFERENCE-PDF-01` runs `tools/test_pdf_paint_trace_roi_join_v1.py` against synthetic 100pt pages with deliberately overlapping objects, reverse source order, unrelated objects, stale PDF SHA, malformed RLE and rotated/cropped inputs.
 
-Next integration work, **not yet implemented**: source-`SourceRef` carrier/byte-range admission and per-stage origin map; exact image crop/clip and glyph ink bounds; isolated per-object raster; parity against Editor SVG of the same exact revision. The current trace proves actual PDF painter order but is not full pixel-to-PUB provenance.
+Next integration work, **not yet implemented**: resolve inherited/derived or indirect shape mappings not represented by a direct `NodeId`, exact image crop/clip and glyph ink bounds, isolated per-object raster, and parity against Editor SVG of the same exact revision. Exact-authority direct `NodeId → SourceRef` is implemented when available, but many nodes will correctly remain unresolved: the trace is **not** blanket pixel-to-PUB attribution.
