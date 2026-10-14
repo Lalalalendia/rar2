@@ -563,8 +563,8 @@ fn decode_jpeg(
     let height = u32::from(info.height);
     validate_limits(bytes.len(), width, height, 0, limits)?;
 
-    let adobe_cmyk = info.pixel_format == PixelFormat::CMYK32
-        && has_explicit_adobe_cmyk_transform0(bytes);
+    let adobe_cmyk =
+        info.pixel_format == PixelFormat::CMYK32 && has_explicit_adobe_cmyk_transform0(bytes);
     let (source_model, decoded_model, source_precision, decoded_precision, alpha_present) =
         match info.pixel_format {
             PixelFormat::L8 => ("jpeg_grayscale", "gray", 8, 8, false),
@@ -917,38 +917,30 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_jpeg_is_detected_not_silently_treated_as_rgb() {
+    fn explicit_adobe_cmyk_jpeg_is_classified_as_unprofiled_rgb_preview() {
         let cmyk = jpeg_fixture(
             JpegColorType::Cmyk,
             &[0, 255, 255, 0, 255, 0, 255, 0, 255, 255, 0, 0, 0, 0, 0, 0],
             false,
             None,
         );
-        let err = decode_image_v1(
-            &cmyk,
-            "image/jpeg",
-            &hash(&cmyk),
-            "color:test",
-            &DecodePolicyV1::reference(),
-            &DecodeLimitsV1::default(),
-        )
-        .unwrap_err();
-        assert_eq!(err.code, "cmyk_or_ycck_unsupported");
+        let decoded = decode(&cmyk, "image/jpeg");
+        assert_eq!(decoded.source_sample_model, "jpeg_adobe_cmyk");
+        assert_eq!(decoded.decoded_sample_model, "rgb");
+        assert_eq!(decoded.decoded_byte_count, 12);
+        assert!(decoded.color_disposition_ref.contains("unprofiled-rgb-v1"));
     }
 
     #[test]
     fn explicit_adobe_cmyk0_has_bounded_unprofiled_rgb_preview() {
         let mut pixels = vec![
             0, 255, 255, 0, // cyan=0 magenta=255 yellow=255 -> red
-            0, 0, 0, 0,     // white
-            0, 0, 0, 255,   // black
+            0, 0, 0, 0, // white
+            0, 0, 0, 255, // black
             255, 255, 255, 0, // black
         ];
         adobe_cmyk_to_unprofiled_rgb_in_place(&mut pixels);
-        assert_eq!(
-            pixels,
-            vec![255, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0]
-        );
+        assert_eq!(pixels, vec![255, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0]);
 
         let original = jpeg_fixture(
             JpegColorType::Cmyk,
