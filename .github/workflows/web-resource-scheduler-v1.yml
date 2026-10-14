@@ -1,0 +1,30 @@
+name: WEB-RESOURCE-SCHEDULER-01 bounded admission
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/web-resource-scheduler-v1.mjs"
+      - "apps/web/web-resource-scheduler-v1.test.mjs"
+      - "apps/web/resource-readiness-v1.mjs"
+      - "apps/web/resource-readiness-v1.test.mjs"
+      - ".github/workflows/web-resource-scheduler-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scheduler-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test scheduler against production resource readiness contract
+        run: node --test apps/web/resource-readiness-v1.test.mjs apps/web/web-resource-scheduler-v1.test.mjs
