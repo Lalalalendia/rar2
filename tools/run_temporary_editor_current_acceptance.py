@@ -808,7 +808,7 @@ def main() -> int:
                     "r1_pixel_scan", "source_safe_receipt",
                 }
                 allowed_codes = {
-                    "missing_picture_dom", "image_transport",
+                    "browser_origin_http", "missing_picture_dom", "image_transport",
                     "logo_dom_or_decode", "pixel_roi", "revision_identity",
                     "browser_timeout", "network_or_origin",
                     "assertion_unclassified", "browser_unclassified",
@@ -817,9 +817,17 @@ def main() -> int:
                     stage = "unclassified_stage"
                 if code not in allowed_codes:
                     code = "unclassified_code"
+                numeric_status = evidence.get("http_status")
+                status_note = (
+                    f"/http{numeric_status}"
+                    if code == "browser_origin_http"
+                    and type(numeric_status) is int
+                    and 100 <= numeric_status <= 599
+                    else ""
+                )
                 raise AssertionError(
                     "SBDC R1 Chromium Editor four-ROI paint proof failed: "
-                    + stage + "/" + code
+                    + stage + "/" + code + status_note
                 )
             physical_lines = [
                 line.split(" ", 1)[1] for line in executed.stdout.splitlines()
