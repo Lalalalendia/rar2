@@ -16,8 +16,8 @@ use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, EditOperation,
-    EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest,
-    Srgb8V1, StoryId, open_mature_0x2c_editor,
+    EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, Srgb8V1,
+    StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -71,7 +71,6 @@ pub struct IsolatedResizeNodeReceiptV1 {
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1303,7 +1302,6 @@ pub fn run_product_replay_worker(
         None
     };
 
-
     let create_shape_intent = if let Some(path) = create_shape_intent_path {
         let bytes = read_bounded(path, MAX_CREATE_SHAPE_INTENT_BYTES)?;
         let intent: IsolatedCreateShapeIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
@@ -1506,7 +1504,6 @@ pub fn run_product_replay_worker(
     } else {
         None
     };
-
 
     let create_shape = if let Some(intent) = create_shape_intent {
         let expected_operation = exact_create_shape_operation(&intent)?;
@@ -2364,11 +2361,9 @@ impl IsolatedProductReplayProducer {
         Ok((mutation.operation, mutation.resulting_project))
     }
 
-
     /// Isolated, source-bound authored Rectangle mutation. The host must mint a
     /// collision-resistant UUIDv7 NodeId and authorize the exact PageId before
     /// invoking this method. No mutable PUB bytes or source parsing on the host.
-    #[expect(clippy::too_many_arguments, reason = "exact authorized source and project identity")]
     pub async fn create_shape(
         &self,
         document_id: &str,
@@ -2445,10 +2440,12 @@ impl IsolatedProductReplayProducer {
         }
         let expected_project =
             append_event_operation(base_project.clone(), created.operation.clone()).map_err(
-                |_| ProductReplayWorkerError::new(
-                    "product_replay_receipt_invalid",
-                    "CreateShape cannot form an exact event append",
-                ),
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "CreateShape cannot form an exact event append",
+                    )
+                },
             )?;
         if expected_project != created.resulting_project {
             return Err(ProductReplayWorkerError::new(
@@ -2867,7 +2864,9 @@ impl IsolatedProductReplayProducer {
             command.arg("--resize-intent-json").arg(&resize_intent_path);
         }
         if create_shape.is_some() {
-            command.arg("--create-shape-intent-json").arg(&create_shape_intent_path);
+            command
+                .arg("--create-shape-intent-json")
+                .arg(&create_shape_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);
@@ -3055,7 +3054,6 @@ mod tests {
             filesystem_confinement: true,
         }
     }
-
 
     #[test]
     fn create_shape_private_intent_denies_nonpositive_geometry_and_unknown_fields() {

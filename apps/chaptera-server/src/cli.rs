@@ -192,7 +192,6 @@ mod tests {
         assert!(Cli::try_parse_from(admitted).is_err());
     }
 
-
     #[test]
     fn create_shape_mode_requires_project_and_exclusive_private_file() {
         let base = [
@@ -210,10 +209,12 @@ mod tests {
         assert!(Cli::try_parse_from(missing_project).is_err());
         let mut valid = base.to_vec();
         valid.extend([
-            "--project-json", "/tmp/project.json",
+            "--project-json",
+            "/tmp/project.json",
             "--expected-project-sha256",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "--create-shape-intent-json", "/tmp/create.json",
+            "--create-shape-intent-json",
+            "/tmp/create.json",
         ]);
         assert!(matches!(
             Cli::try_parse_from(valid.clone()).unwrap().command,
