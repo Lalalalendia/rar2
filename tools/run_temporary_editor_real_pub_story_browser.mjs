@@ -6,6 +6,7 @@ import {
   prepareStoryTextForTextarea, restoreStoryTextFromTextarea,
 } from "../apps/web/story-line-endings-v1.mjs";
 import { diffObservedTextToScalarReplacement } from "../apps/web/text-protocol-v1.mjs";
+import { temporaryPlainStoryCandidates } from "../apps/web/temporary-edit-move-client-v1.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
@@ -234,7 +235,79 @@ try {
       JSON.stringify(eligibility) + " visible=" + visible +
       " wait_error=" + error.name);
   }
-  const storyId = await page.locator("#temporary-story-select").inputValue();
+  const beforeScene = await readCurrent("scene", sessionId);
+  assert.equal(beforeScene.status, 200);
+  assert.equal(beforeScene.body.revision_id, head.revision_id);
+  assert.equal(beforeScene.body.scene.source_hash, fixtureHash);
+
+  // Physical user path: click an actually painted source-backed TextFrame.
+  // The DOM hit identifies a rendered NodeId, while the canonical graph owns
+  // its StoryId. A GET, programmatic select(), or invented click is insufficient.
+  const graph = head.authoring_graph;
+  const admittedIds = new Set(temporaryPlainStoryCandidates(graph)
+    .map(candidate => candidate.story_id));
+  const sourceFrames = beforeScene.body.scene.nodes.filter(node => {
+    const owner = graph?.nodes?.[node.node_id];
+    const bounds = node.bounds;
+    return !node.origin_node_id && !node.parent_node_id &&
+      graph?.pages?.[node.page_id] && owner?.header?.parent_id === node.page_id &&
+      admittedIds.has(owner?.payload?.story_frame?.story_id) &&
+      ["x", "y", "width", "height"].every(key => Number.isSafeInteger(bounds?.[key])) &&
+      bounds.width > 0 && bounds.height > 0;
+  }).sort((a, b) => a.bounds.width * a.bounds.height -
+    b.bounds.width * b.bounds.height);
+  assert.ok(sourceFrames.length > 0,
+    "real PUB has no source-backed, page-owned visual plain TextFrame");
+
+  let picked = null;
+  for (const node of sourceFrames.slice(0, 100)) {
+    const group = page.locator('#temporary-pages g[data-node-id="' + node.node_id + '"]').first();
+    if (await group.count() === 0) continue;
+    try { await group.scrollIntoViewIfNeeded({timeout: 2200}); } catch { continue; }
+    const screen = await page.evaluate(choice => {
+      const svg = [...document.querySelectorAll("#temporary-pages svg.page[data-page-id]")]
+        .find(item => item.getAttribute("data-page-id") === choice.pageId);
+      const group = [...(svg?.querySelectorAll("g[data-node-id]") ?? [])]
+        .find(item => item.getAttribute("data-node-id") === choice.nodeId);
+      if (!svg || !group || !svg.getScreenCTM()) return null;
+      const visibleHit = (x, y) => {
+        if (!(x >= 0 && x < innerWidth && y >= 0 && y < innerHeight)) return false;
+        const target = document.elementFromPoint(x, y);
+        return target?.closest?.("svg.page[data-page-id]") === svg &&
+          target.closest?.("[data-node-id]")?.getAttribute("data-node-id") === choice.nodeId;
+      };
+      const fractions = [[.5,.5],[.3,.3],[.7,.3],[.3,.7],[.7,.7]];
+      for (const element of [...group.querySelectorAll("text,tspan,rect,path,ellipse,image"), group]) {
+        const rect = element.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) continue;
+        for (const [fx,fy] of fractions) {
+          const x = rect.left + rect.width * fx, y = rect.top + rect.height * fy;
+          if (visibleHit(x, y)) return {x, y};
+        }
+      }
+      const p = svg.createSVGPoint();
+      for (const [fx,fy] of fractions) {
+        p.x = choice.bounds.x + choice.bounds.width * fx;
+        p.y = choice.bounds.y + choice.bounds.height * fy;
+        const point = p.matrixTransform(svg.getScreenCTM());
+        if (visibleHit(point.x, point.y)) return {x:point.x, y:point.y};
+      }
+      return null;
+    }, {nodeId: node.node_id, pageId: node.page_id, bounds: node.bounds});
+    if (!screen) continue;
+    await page.mouse.click(screen.x, screen.y);
+    const storyId = graph.nodes[node.node_id].payload.story_frame.story_id;
+    if ((await page.locator("#temporary-story-select").inputValue()) === storyId &&
+        (await page.locator("#temporary-status").textContent())?.includes("Текстовая рамка выбрана")) {
+      picked = {storyId, nodeId: node.node_id};
+      break;
+    }
+  }
+  assert.ok(picked, "real Chromium could not select any painted canonical plain TextFrame");
+  assert.equal(requests.filter(r => r.method === "POST" &&
+    /(story-range|move-node|resize-node|create-shape)$/.test(r.path)).length, 0,
+    "canvas text pick must not mutate document state");
+  const storyId = picked.storyId;
   const priorText = head.authoring_graph?.stories?.[storyId]?.text;
   assert.ok(typeof priorText === "string" && priorText.length > 0,
     "source-backed real Publisher Story is not exposed in Guest Current");
@@ -251,11 +324,6 @@ try {
   assert.notEqual(priorText, desiredCanonical);
   assert.ok(!/[\p{Cc}]/u.test(expectedRange.replacement_text),
     "Story fixture change must not insert or remove existing Publisher separators");
-
-  const beforeScene = await readCurrent("scene", sessionId);
-  assert.equal(beforeScene.status, 200);
-  assert.equal(beforeScene.body.revision_id, head.revision_id);
-  assert.equal(beforeScene.body.scene.source_hash, fixtureHash);
 
   // Guest's 6-request admission burst is shared by page bootstrap and
   // inspection GETs; allow a bounded refill before the *UI-owned* mutation.
@@ -498,6 +566,7 @@ try {
     source_sha256: fixtureHash, source_byte_len: original.length,
     real_pub: true, real_chromium: true, tls_caddy: true,
     guest_story_ui_commit: true, browser_story_commits: 1,
+    canvas_story_pick_proven: true, canvas_pick_no_mutation: true,
     story_id_sha256: sha256(Buffer.from(storyId, "utf8")),
     initial_revision_id: head.revision_id,
     accepted_revision_id: accepted.revision_id,

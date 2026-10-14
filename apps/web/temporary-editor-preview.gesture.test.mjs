@@ -336,12 +336,16 @@ test("temporary Guest plain Story field posts exact private range and repaints a
         storyCurrent(afterRev, 1, savedText));
     }
     if (url === base + "/scene") {
+      const scene = readerScene(savedText === null ? beforeRev : afterRev);
+      // Overlapping Source shapes make geometric hit ordering ambiguous.
+      // Real DOM data-node-id still identifies a safe UI-only Story choice.
+      scene.nodes.push({...initialNode, node_id: otherNodeId});
       return response({
         protocol_version: "chaptera.temporary-editor-scene.v1",
         document_id: id, source_hash: source,
         revision_id: savedText === null ? beforeRev : afterRev,
         expires_at_ms: savedText === null ? 4_600_000 : 8_200_000,
-        scene: readerScene(savedText === null ? beforeRev : afterRev),
+        scene,
       });
     }
     if (url === base + "/story-range") {
@@ -390,6 +394,8 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   assert.equal(dom.nodes["temporary-story-select"].value, storyId,
     "canvas selection must activate the Story owned by its canonical TextFrame");
   assert.equal(dom.nodes["temporary-story-text"].value, "Initial");
+  assert.match(dom.nodes["temporary-status"].textContent, /Текстовая рамка выбрана/,
+    "ambiguous stacking still admits exact visual TextFrame UI selection");
   assert.equal(seen.filter(call => call.url.endsWith("/story-range") || call.url.endsWith("/move-node")).length, 0,
     "selection never commits or extends the TTL");
   const editor = dom.nodes["temporary-story-text"];
@@ -423,6 +429,13 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   assert.match(dom.nodes["temporary-status"].textContent, /Текст подтверждён сервером/);
   editor.value = "Unsaved local change";
   editor.handlers.input();
+  assert.equal(dom.nodes["temporary-download-idml"].disabled, true,
+    "dirty text cannot download a stale previously edited revision");
+  const exportsBefore = seen.filter(call => call.url.includes("/exports/")).length;
+  await dom.nodes["temporary-download-idml"].handlers.click();
+  assert.equal(seen.filter(call => call.url.includes("/exports/")).length, exportsBefore,
+    "even a direct button event cannot bypass the draft gate");
+  assert.match(dom.nodes["temporary-status"].textContent, /Сначала сохраните или сбросьте/);
   const editsBeforeDiscard = seen.filter(call => call.url.endsWith("/story-range")).length;
   assert.equal(dom.nodes["temporary-story-discard"].disabled, false);
   dom.nodes["temporary-story-discard"].handlers.click();

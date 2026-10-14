@@ -197,7 +197,8 @@ export async function bootTemporaryEditorPreview({
       actions.hidden = !moveClient;
       const canExport = !busy && !editBusy && moveClient &&
         !moveClient.status.pending_reconciliation &&
-        !moveClient.status.refresh_required && canonicalCurrent !== null;
+        !moveClient.status.refresh_required && canonicalCurrent !== null &&
+        !storyDraftDirty() && !composingStory;
       const canDownloadEdited = canExport && canonicalCurrent.revision_cursor > 0;
       if (drawEnabled) {
         drawButton.disabled = !canExport || !interaction?.pages?.length;
@@ -511,6 +512,10 @@ export async function bootTemporaryEditorPreview({
 
   async function deleteServer() {
     if (busy || editBusy || !deleteButton || !client.hasSavedSession()) return;
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед удалением сессии.";
+      return;
+    }
     if (typeof confirmDelete !== "function" ||
         !confirmDelete("Удалить временный PUB и все изменения с сервера? Отменить удаление нельзя.")) {
       return;
@@ -592,13 +597,26 @@ export async function bootTemporaryEditorPreview({
         gesture = new ResizeTransactionV1(nodeId, candidate.bounds, handle, point);
       } else {
         const visualId = event.target?.closest?.("[data-node-id]")?.getAttribute?.("data-node-id");
-        const hit = hitTestSnapshot(interaction, svg.getAttribute("data-page-id"), point);
-        if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
-        gesture = new MoveGestureV1(interaction, hit.node_id, point);
+        const pageId = svg.getAttribute("data-page-id");
+        const hit = hitTestSnapshot(interaction, pageId, point);
+        const selectedNodeId = hit.kind === "hit" &&
+          (!visualId || hit.node_id === visualId) ? hit.node_id
+          : hit.kind === "ambiguous" && visualId && hit.node_ids.includes(visualId)
+            ? visualId : null;
+        if (!selectedNodeId) return;
         const selectedStoryId = temporaryCanvasStoryId(
-          canonicalCurrent?.authoring_graph, storyCandidates,
-          hit.node_id, svg.getAttribute("data-page-id"));
-        if (selectedStoryId) activateStory(selectedStoryId);
+          canonicalCurrent?.authoring_graph, storyCandidates, selectedNodeId, pageId);
+        if (selectedStoryId && activateStory(selectedStoryId)) {
+          status.textContent = "Текстовая рамка выбрана на странице. Измените текст в панели и сохраните правку.";
+        }
+        // Visual SVG identity is enough for a non-mutating Story pick even
+        // when stacking is ambiguous. It is never enough to authorize MoveNode.
+        if (hit.kind !== "hit") {
+          clearResizeHandles({forget: true});
+          event.preventDefault?.();
+          return;
+        }
+        gesture = new MoveGestureV1(interaction, hit.node_id, point);
         drawResizeHandles(svg, hit.node_id);
         // Keyboard authoring belongs to the canvas, not the Story textarea.
         pages.focus?.({preventScroll: true});
@@ -766,7 +784,7 @@ export async function bootTemporaryEditorPreview({
       ArrowDown: [0, TEMPORARY_NUDGE_STEP_EMU],
     }[event.key];
     if (!delta || storyDraftDirty() || composingStory || event.target !== pages || event.defaultPrevented ||
-        event.isComposing || composingStory || event.altKey || event.ctrlKey ||
+        event.isComposing || event.altKey || event.ctrlKey ||
         event.metaKey || event.shiftKey || gesture || busy || editBusy ||
         !moveClient || !canonicalCurrent || !interaction ||
         moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
@@ -865,6 +883,10 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function previewNineUp() {
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед предпросмотром.";
+      return;
+    }
     if (!sheetPreviewEnabled || !moveClient || !canonicalCurrent ||
         sheetPreviewButton.disabled || busy || editBusy) return;
     editBusy = true;
@@ -891,6 +913,10 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function download(target) {
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед скачиванием файла.";
+      return;
+    }
     if (!moveClient || !canonicalCurrent || busy || editBusy) return;
     editBusy = true;
     controls();
