@@ -620,3 +620,66 @@ test("Guest ResizeNode forged ACK or mismatched canonical rectangle cannot unloc
   assert.equal(client.status.pending_reconciliation,true);
   await client.reconcileUnknown();
 });
+
+test("nine-card A4 PDF report and download bind exact edited revision and checked bytes", async () => {
+  const pdf = new TextEncoder().encode("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", pdf));
+  const hash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+  const report = {
+    protocol_version: "chaptera.temporary-edited-export-report.v1",
+    revision_id: afterRev, canonical_authoring_revision_id: afterCanon,
+    source_hash: source, target: "pdf9up", artifact_sha256: hash,
+    loss_report: { counts: { blocking: 0 } },
+  };
+  const calls = [];
+  const client = new TemporaryGuestMoveClientV1({
+    sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+    fetchImpl: async (url, options) => {
+      calls.push({url, options});
+      if (calls.length === 1) return reply(after);
+      if (calls.length === 2) return reply(report);
+      if (calls.length === 3) return new Response(pdf, {headers: {
+        "content-type": "application/pdf",
+        "x-chaptera-edit-revision": afterRev,
+        "x-chaptera-export-sha256": hash,
+      }});
+      throw Error("unexpected HTTP request");
+    },
+  });
+  await client.refresh();
+  assert.equal((await client.exportEdited("pdf9up", {reportOnly: true})).target, "pdf9up");
+  const output = await client.exportEdited("pdf9up");
+  assert.equal(output.target, "pdf9up");
+  assert.equal(output.revision_id, afterRev);
+  assert.equal(output.sha256, hash);
+  assert.equal(new TextDecoder().decode(await output.blob.arrayBuffer()),
+    new TextDecoder().decode(pdf));
+  assert.equal(calls[1].options.headers.accept, "application/json");
+  assert.equal(calls[2].options.headers.accept, "application/pdf");
+  assert.ok(calls[1].url.includes("/exports/pdf9up?"));
+  assert.ok(calls[2].url.includes("/exports/pdf9up?"));
+  assert.equal(new URL(calls[2].url, "https://reader.example").searchParams.get("revision_id"), afterRev);
+  assert.equal(new URL(calls[2].url, "https://reader.example").searchParams.get("canonical_authoring_revision_id"), afterCanon);
+  assert.ok(calls.every(c => c.options.headers["x-chaptera-reader-session"] === bearer &&
+    !c.url.includes(bearer) && c.options.credentials === "omit"));
+});
+
+test("nine-card A4 PDF refuses stale revision despite valid PDF signature and digest", async () => {
+  const pdf = new TextEncoder().encode("%PDF-1.7\n%%EOF\n");
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", pdf));
+  const hash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+  let calls = 0;
+  const client = new TemporaryGuestMoveClientV1({
+    sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
+    fetchImpl: async () => ++calls === 1 ? reply(after) : new Response(pdf, {headers: {
+      "content-type": "application/pdf",
+      "x-chaptera-edit-revision": beforeRev,
+      "x-chaptera-export-sha256": hash,
+    }}),
+  });
+  await client.refresh();
+  await assert.rejects(client.exportEdited("pdf9up"), /temporary_export_download_identity_mismatch/);
+  assert.equal(client.status.refresh_required, true);
+  await assert.rejects(client.exportEdited("pdf9up"), /temporary_export_current_required/);
+  assert.equal(calls, 2);
+});

@@ -257,7 +257,11 @@ export async function bootProductEditor({
   for(const [button,command] of [[undoButton,"undo"],[redoButton,"redo"]]){
     button?.addEventListener("click",()=>{
       if(shell.historyInFlight||shell.historyUncertain||shell.historyRecoveryInFlight) return;
-      void shell[command]().catch(()=>{});
+      void shell[command]().then(()=>{
+        // History owns a new canonical revision. Re-read the Story panel from
+        // that revision instead of leaving browser-local text visible.
+        documentObject.querySelector("#story-load-action")?.click();
+      }).catch(()=>{});
     });
   }
 

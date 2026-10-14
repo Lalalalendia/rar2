@@ -37,3 +37,8 @@ button:disabled { opacity: .65; cursor: wait; }
 .temporary-resize-handle[data-temporary-resize-handle="left"],
 .temporary-resize-handle[data-temporary-resize-handle="right"] { cursor: ew-resize; }
 .temporary-resize-handle:focus-visible { stroke: #e2961b; outline: none; }
+
+/* The sheet uses the exact verified PDF bytes offered for download. */
+.sheet-preview { margin-top: 1.25rem; }
+.sheet-preview h3 { font-size: 1rem; margin-bottom: .35rem; }
+.sheet-preview iframe { display: block; width: 100%; max-width: 920px; aspect-ratio: 297 / 210; border: 1px solid #d6dde5; background: #fff; }

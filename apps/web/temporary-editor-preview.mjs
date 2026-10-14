@@ -119,6 +119,11 @@ export async function bootTemporaryEditorPreview({
   const idmlButton = documentObject?.getElementById("temporary-download-idml");
   const odgButton = documentObject?.getElementById("temporary-download-odg");
   const pdfButton = documentObject?.getElementById("temporary-download-pdf");
+  const pdf9upButton = documentObject?.getElementById("temporary-download-pdf9up");
+  const sheetPreviewButton = documentObject?.getElementById("temporary-preview-pdf9up");
+  const sheetPreview = documentObject?.getElementById("temporary-sheet-preview");
+  const sheetFrame = documentObject?.getElementById("temporary-sheet-pdf-frame");
+  const sheetPreviewEnabled = !!(sheetPreviewButton && sheetPreview && sheetFrame);
   const editorEnabled = !!(actions && idmlButton && odgButton);
   const storyPanel = documentObject?.getElementById("temporary-story-panel");
   const storySelect = documentObject?.getElementById("temporary-story-select");
@@ -144,6 +149,7 @@ export async function bootTemporaryEditorPreview({
   let selectedResizeNodeId = null;
   let selectedResizePageId = null;
   let resizeHandleElements = [];
+  let sheetPreviewUrl = null;
   const buttons = [startButton, resumeButton, forgetButton, deleteButton].filter(Boolean);
 
   function controls() {
@@ -160,6 +166,19 @@ export async function bootTemporaryEditorPreview({
       idmlButton.disabled = !canDownload;
       odgButton.disabled = !canDownload;
       if (pdfButton) pdfButton.disabled = !canDownload;
+      if (pdf9upButton || sheetPreviewEnabled) {
+        const validCard = interaction?.pages?.length === 1 &&
+          interaction.pages[0]?.width_emu === 3060000 &&
+          interaction.pages[0]?.height_emu === 1980000;
+        if (pdf9upButton) {
+          pdf9upButton.hidden = !validCard;
+          pdf9upButton.disabled = !canDownload || !validCard;
+        }
+        if (sheetPreviewEnabled) {
+          sheetPreviewButton.hidden = !validCard;
+          sheetPreviewButton.disabled = !canDownload || !validCard;
+        }
+      }
     }
     if (storyEnabled) {
       const locked = busy || editBusy || !moveClient ||
@@ -168,6 +187,16 @@ export async function bootTemporaryEditorPreview({
       storySelect.disabled = locked;
       storyText.disabled = locked;
       storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
+    }
+  }
+
+  function clearSheetPreview() {
+    if (!sheetPreviewEnabled) return;
+    sheetFrame.src = "";
+    sheetPreview.hidden = true;
+    if (sheetPreviewUrl !== null) {
+      URL.revokeObjectURL(sheetPreviewUrl);
+      sheetPreviewUrl = null;
     }
   }
 
@@ -271,6 +300,7 @@ export async function bootTemporaryEditorPreview({
   }
 
   function clearEditor() {
+    clearSheetPreview();
     clearGesture();
     clearResizeHandles({forget: true});
     moveClient = null;
@@ -348,6 +378,7 @@ export async function bootTemporaryEditorPreview({
   async function guarded(operation) {
     if (busy || editBusy) return;
     busy = true;
+    clearSheetPreview();
     controls();
     status.textContent = "Обработка временной сессии…";
     try {
@@ -491,9 +522,9 @@ export async function bootTemporaryEditorPreview({
     const old = interaction.nodes.find(n => n.node_id === active.nodeId)?.bounds;
     clearGesture();
     if (!old || !next || update?.kind === "invalid" ||
-        (resizing
-          ? (old.width === next.width && old.height === next.height)
-          : (old.x === next.x && old.y === next.y))) return;
+        (resizing ? (old.width === next.width && old.height === next.height)
+                  : (old.x === next.x && old.y === next.y))) return;
+    clearSheetPreview();
     editBusy = true;
     controls();
     status.textContent = "Сохраняется каноническая правка…";
@@ -548,6 +579,7 @@ export async function bootTemporaryEditorPreview({
       status.textContent = "Поддерживается правка обычной текстовой рамки с сохранением существующих границ абзацев; новые разрывы и управляющие символы запрещены (до 8192 байт).";
       return;
     }
+    clearSheetPreview();
     editBusy = true;
     controls();
     status.textContent = "Сохраняется текст в канонической ревизии…";
@@ -577,24 +609,54 @@ export async function bootTemporaryEditorPreview({
     }
   }
 
+  async function previewNineUp() {
+    if (!sheetPreviewEnabled || !moveClient || !canonicalCurrent ||
+        sheetPreviewButton.disabled || busy || editBusy) return;
+    editBusy = true;
+    clearSheetPreview();
+    controls();
+    status.textContent = "Формируется и проверяется печатный лист А4…";
+    try {
+      const report = await moveClient.exportEdited("pdf9up", { reportOnly: true });
+      const result = await moveClient.exportEdited("pdf9up", {
+        expectedSha256: report.artifact_sha256,
+      });
+      // Never display bytes that disagree with the revision-bound export report.
+      sheetPreviewUrl = URL.createObjectURL(result.blob);
+      sheetFrame.src = sheetPreviewUrl;
+      sheetPreview.hidden = false;
+      status.textContent = "Печатный лист А4 проверен по редакции и контрольной сумме. Девять визиток готовы к просмотру.";
+    } catch {
+      clearSheetPreview();
+      status.textContent = "Предпросмотр не подтверждён. Восстановите актуальную ревизию перед печатью.";
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
+
   async function download(target) {
     if (!moveClient || !canonicalCurrent || busy || editBusy) return;
     editBusy = true;
     controls();
     try {
-      status.textContent = "Проверка потерь и подготовка изменённого " + target.toUpperCase() + "…";
+      const printableName = target === "pdf9up" ? "листа А4 с девятью карточками (PDF)" :
+        "изменённого " + target.toUpperCase();
+      status.textContent = "Проверка потерь и подготовка " + printableName + "…";
       const report = await moveClient.exportEdited(target, { reportOnly: true });
       // Explicit disclosure before the response bytes are offered for download.
       const losses = report.loss_report?.counts;
       status.textContent = "Отчёт об экспорте: " +
         (losses && typeof losses === "object" ? JSON.stringify(losses) : "частично поддерживаемый формат") +
         ". Скачивание изменённой ревизии…";
-      const result = await moveClient.exportEdited(target);
+      const result = await moveClient.exportEdited(target, {
+        expectedSha256: report.artifact_sha256,
+      });
       const blobUrl = URL.createObjectURL(result.blob);
       try {
         const anchor = documentObject.createElement("a");
         anchor.href = blobUrl;
-        anchor.download = "chaptera-edited." + target;
+        anchor.download = target === "pdf9up" ? "chaptera-edited-a4-9up.pdf" : "chaptera-edited." + target;
         anchor.hidden = true;
         documentObject.body.appendChild(anchor);
         anchor.click();
@@ -602,10 +664,13 @@ export async function bootTemporaryEditorPreview({
       } finally {
         globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       }
-      status.textContent = "Скачан " + target.toUpperCase() + " из изменённой ревизии. Потери: " +
+      const downloadedName = target === "pdf9up" ? "лист А4 с девятью карточками (PDF)" :
+        target.toUpperCase();
+      status.textContent = "Скачан " + downloadedName + " из изменённой ревизии. Потери: " +
         (losses && typeof losses === "object" ? JSON.stringify(losses) : "см. отчёт формата") +
         (partialFidelity ? ". Needs review / Partial: обязательно проверьте экспорт." : ".");
     } catch {
+      clearSheetPreview();
       status.textContent = "Выгрузка текущей ревизии не подтверждена. Восстановите сессию и проверьте срок действия.";
     } finally {
       editBusy = false;
@@ -649,6 +714,8 @@ export async function bootTemporaryEditorPreview({
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
     pdfButton?.addEventListener("click", () => download("pdf"));
+    pdf9upButton?.addEventListener("click", () => download("pdf9up"));
+    if (sheetPreviewEnabled) sheetPreviewButton.addEventListener("click", () => previewNineUp());
   }
   controls();
   return { start, resume, forget, deleteServer };

@@ -1265,10 +1265,13 @@ async fn commit_history_transition(
                     "the current revision has no undoable canonical operation",
                 )
             })?;
-        if !matches!(operation, EditOperation::MoveNode { .. }) {
+        if !matches!(
+            operation,
+            EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+        ) {
             return Err(ProductApiError::conflict(
                 "undo_operation_unsupported",
-                "bounded history admits Undo only for the latest MoveNode",
+                "bounded history admits Undo only for the latest MoveNode or plain StoryRange",
             ));
         }
         let resulting_project =
@@ -1301,10 +1304,13 @@ async fn commit_history_transition(
             ));
         }
         let operation = undone.operation;
-        if !matches!(operation, EditOperation::MoveNode { .. }) {
+        if !matches!(
+            operation,
+            EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+        ) {
             return Err(ProductApiError::conflict(
                 "redo_operation_unsupported",
-                "bounded Redo admits only the immediately preceding MoveNode",
+                "bounded Redo admits only the immediately preceding MoveNode or plain StoryRange",
             ));
         }
         let resulting_project =
@@ -1313,6 +1319,7 @@ async fn commit_history_transition(
         (operation, resulting_project)
     };
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
+    let history_uses_text_authority = matches!(operation, EditOperation::ReplaceStoryRange { .. });
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
     let identities = derive_history_revision_identities(
@@ -1384,17 +1391,30 @@ async fn commit_history_transition(
         canonical_revision_id: canonical_child,
         bound_at_ms: now,
     };
-    let committed = state
-        .committer
-        .commit_geometry_revision(
-            &source.tenant_id,
-            &principal.principal_id,
-            edge,
-            binding,
-            now,
-        )
-        .await
-        .map_err(ProductApiError::Authz)?;
+    let committed = if history_uses_text_authority {
+        state
+            .committer
+            .commit_text_revision(
+                &source.tenant_id,
+                &principal.principal_id,
+                edge,
+                binding,
+                now,
+            )
+            .await
+    } else {
+        state
+            .committer
+            .commit_geometry_revision(
+                &source.tenant_id,
+                &principal.principal_id,
+                edge,
+                binding,
+                now,
+            )
+            .await
+    }
+    .map_err(ProductApiError::Authz)?;
 
     accepted_history_from_receipt(&state, &source, committed, false).await
 }

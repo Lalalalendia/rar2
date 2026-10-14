@@ -13,7 +13,7 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
-    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'" always;
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'" always;
 
     location = / {
         proxy_pass http://127.0.0.1:8080;
@@ -70,7 +70,7 @@ server {
     # bounded edited exports and explicit DELETE. Restrict path to the
     # canonical tempedit:hex32 identity; arbitrary Product routes remain 404.
     # Quantified {32} requires quoted PCRE for Nginx config lexer.
-    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|story-range|resize-node|exports/(?:idml|odg|pdf)))?)?$" {
+    location ~ "^/v1/editor/temporary-sessions(?:/tempedit:[0-9a-f]{32}(?:/(?:current|scene|move-node|story-range|resize-node|exports/(?:idml|odg|pdf9up|pdf)))?)?$" {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
