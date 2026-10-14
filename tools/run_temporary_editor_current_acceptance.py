@@ -173,6 +173,17 @@ def main() -> int:
     original_config = config.read_text(encoding="utf-8")
     if original_config.count('provider = "s3-compatible"') != 1:
         raise AssertionError("expected exactly one fixture provider declaration")
+    # The opt-in *browser* fixture uses a nonstandard local Caddy HTTPS port.
+    # Match the production-style exact Origin/Host/CSRF contract instead of
+    # disabling it. Keep the default non-browser acceptance unchanged.
+    if args.sbdc_cmyk_picture_proof:
+        old_origin = f'public_origin = "https://{live.EDGE_HOST}"'
+        if original_config.count(old_origin) != 1:
+            raise AssertionError("SBDC browser fixture expected one pinned origin")
+        original_config = original_config.replace(
+            old_origin,
+            f'public_origin = "https://{live.EDGE_HOST}:{httpsport}"',
+        )
     config.write_text(
         original_config.replace('provider = "s3-compatible"', 'provider = "filesystem"'),
         encoding="utf-8",
@@ -224,6 +235,7 @@ def main() -> int:
                 path=path,
                 output=response,
                 headers=headers,
+                port_aware_origin=args.sbdc_cmyk_picture_proof,
                 **other,
             )
             if status != 429 or attempt == 7:
