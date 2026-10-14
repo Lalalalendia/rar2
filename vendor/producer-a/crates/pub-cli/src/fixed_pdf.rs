@@ -739,12 +739,10 @@ mod tests {
         cache.role = SourceRole::Cache;
         let mut overflowing = exact.clone();
         overflowing.byte_range = Some(ByteRange::new(u64::MAX, 1));
-        let collected = authoritative_source_refs(
-            &[exact.clone(), stale, derived, unknown, cache, overflowing],
-            &source,
-        );
-        assert_eq!(collected, vec![&exact]);
-        assert!(exact.validate_primary_source(&source).is_ok());
+        let candidates = vec![exact, stale, derived, unknown, cache, overflowing];
+        let collected = authoritative_source_refs(&candidates, &source);
+        assert_eq!(collected, vec![&candidates[0]]);
+        assert!(candidates[0].validate_primary_source(&source).is_ok());
     }
 
     #[test]
