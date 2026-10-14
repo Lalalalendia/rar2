@@ -40,12 +40,12 @@ function accepted(replayed = false) {
     scene_refresh: "current", canonical_operation: { move_node: { node_id: nodeId } },
   };
 }
-function reply(body, code = 200) {
+function reply(body, code = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
-    status: code, headers: { "content-type": "application/json" },
+    status: code, headers: { "content-type": "application/json", ...extraHeaders },
   });
 }
-function harness(responses) {
+function harness(responses, { sleepImpl } = {}) {
   const requests = [];
   const feed = [...responses];
   const fetchImpl = async (url, options) => {
@@ -57,12 +57,98 @@ function harness(responses) {
   };
   const client = new TemporaryGuestMoveClientV1({
     sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
-    fetchImpl, operationIdFactory: () => "test-move-1",
+    fetchImpl, operationIdFactory: () => "test-move-1", sleepImpl,
   });
   return { client, requests };
 }
 
 const move = { nodeId, xEmu: 150, yEmu: 230 };
+
+const rateLimitedRead = retryAfter =>
+  [{ error: "public_rate_limited" }, 429,
+    retryAfter === undefined ? {} : { "Retry-After": retryAfter }];
+const validScene = {
+  protocol_version: "chaptera.temporary-editor-scene.v1",
+  document_id: session, source_hash: source,
+  revision_id: beforeRev, expires_at_ms: oldExpiry,
+  scene: { protocol_version: "chaptera.reader-scene.v1",
+    document_id: session, source_hash: source, revision_id: beforeRev,
+    pages: [], nodes: [] },
+};
+
+test("private current GET honors server Retry-After once, preserving exact bearer", async () => {
+  const waits = [];
+  const { client, requests } = harness([rateLimitedRead("2"), before], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  assert.equal((await client.refresh()).revision_id, beforeRev);
+  assert.deepEqual(waits, [2000]);
+  assert.equal(client.status.refresh_required, false);
+  assert.equal(requests.length, 2);
+  for (const {url,options} of requests) {
+    assert.equal(url, "/v1/editor/temporary-sessions/" + session + "/current");
+    assert.equal(options.method, "GET");
+    assert.equal(options.headers["x-chaptera-reader-session"], bearer);
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.cache, "no-store");
+    assert.ok(!url.includes(bearer));
+  }
+});
+
+test("private scene GET retries only the server-confirmed 429 and checks canonical scene", async () => {
+  const waits = [];
+  const { client, requests } = harness([before, rateLimitedRead("1"), validScene], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await client.refresh();
+  assert.equal((await client.readerScene()).revision_id, beforeRev);
+  assert.deepEqual(waits, [1000]);
+  assert.deepEqual(requests.map(x => [x.options.method, x.url]), [
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/current"],
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/scene"],
+    ["GET", "/v1/editor/temporary-sessions/" + session + "/scene"],
+  ]);
+  assert.equal(client.status.refresh_required, false);
+});
+
+test("missing, forged, or too-long Retry-After keeps scene and edit fenced", async () => {
+  for (const retryAfter of [undefined, "0", "11", "Wed, 14 Oct 2026 11:00:00 GMT"]) {
+    const waits = [];
+    const { client, requests } = harness([before, rateLimitedRead(retryAfter)], {
+      sleepImpl: async ms => waits.push(ms),
+    });
+    await client.refresh();
+    await assert.rejects(client.readerScene(), error => error.status === 429);
+    assert.equal(client.status.refresh_required, true);
+    await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(waits, []);
+  }
+});
+
+test("a second 429 after permitted read retry stops without replaying writes", async () => {
+  const waits = [];
+  const { client, requests } = harness([rateLimitedRead("1"), rateLimitedRead("1")], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await assert.rejects(client.refresh(), error => error.status === 429);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(client.status.refresh_required, true);
+});
+
+test("429 on a MoveNode POST is never retried even with Retry-After", async () => {
+  const waits = [];
+  const { client, requests } = harness([before, rateLimitedRead("1")], {
+    sleepImpl: async ms => waits.push(ms),
+  });
+  await client.refresh();
+  await assert.rejects(client.moveNode(move), error => error.status === 429);
+  assert.deepEqual(waits, []);
+  assert.equal(requests.filter(x => x.options.method === "POST").length, 1);
+  assert.equal(client.status.pending_reconciliation, true);
+  await assert.rejects(client.moveNode(move), /temporary_move_reconciliation_required/);
+});
 
 test("private tab capability is reused only from valid existing browser record", async () => {
   const record = {
