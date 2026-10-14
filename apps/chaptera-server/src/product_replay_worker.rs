@@ -1849,7 +1849,6 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -1930,6 +1929,7 @@ impl IsolatedProductReplayProducer {
                 source_bytes,
                 Some((&project_bytes, expected_base_sha256)),
                 Some(intent),
+                None,
                 None,
                 None,
                 None,
