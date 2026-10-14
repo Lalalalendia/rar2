@@ -333,18 +333,22 @@ export class TemporaryGuestMoveClientV1 {
     return response.scene;
   }
 
-  // A private current-revision report/download; pristine PDF is allowed.
-  // This never downloads the original PUB bytes.
+  // Private current-revision reports/downloads: pristine PDF is allowed.
+  // Original PUB bytes are never downloaded here.
   // Only query-bound public revision identities appear in the URL, never bearer.
-  async exportEdited(target, { reportOnly = false } = {}) {
-    if (!["idml", "odg", "pdf"].includes(target)) {
+  async exportEdited(target, { reportOnly = false, expectedSha256 = null } = {}) {
+    if (!["idml", "odg", "pdf", "pdf9up"].includes(target)) {
       throw failure("temporary_export_target_invalid");
     }
     if (this.#busy || this.#pending || this.#refreshRequired ||
         !this.#current || (this.#current.revision_cursor === 0 && target !== "pdf")) {
       throw failure("temporary_export_current_required");
     }
+    if (expectedSha256 !== null && (reportOnly || !SECRET.test(expectedSha256))) {
+      throw failure("temporary_export_expected_hash_invalid");
+    }
     const head = this.#current;
+    const physicalPdf = target === "pdf" || target === "pdf9up";
     const query = new URLSearchParams({
       revision_id: head.revision_id,
       canonical_authoring_revision_id: head.canonical_authoring_revision_id,
@@ -355,7 +359,7 @@ export class TemporaryGuestMoveClientV1 {
       {
         method: "GET",
         headers: {
-          accept: reportOnly ? "application/json" : target === "pdf" ? "application/pdf" : "application/octet-stream",
+          accept: reportOnly ? "application/json" : physicalPdf ? "application/pdf" : "application/octet-stream",
           "x-chaptera-reader-session": this.#token,
           "x-csrf-token": this.#csrf,
         },
@@ -403,7 +407,7 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_export_download_size_invalid");
     }
     // PDF is never admitted by MIME and digest alone: require physical PDF signature.
-    if (target === "pdf") {
+    if (physicalPdf) {
       const signature = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
       if (signature.length !== 5 ||
           String.fromCharCode(...signature) !== "%PDF-") {
@@ -427,6 +431,10 @@ export class TemporaryGuestMoveClientV1 {
     if (actualHash !== expectedHash) {
       this.#refreshRequired = true;
       throw failure("temporary_export_hash_mismatch");
+    }
+    if (expectedSha256 !== null && actualHash !== expectedSha256) {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_report_hash_mismatch");
     }
     return { blob, target, sha256: actualHash, revision_id: head.revision_id };
   }

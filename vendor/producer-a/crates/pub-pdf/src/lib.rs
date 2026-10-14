@@ -16,7 +16,7 @@ pub use text::{FixedFontResource, FixedTextRun, PdfTextPreparationError};
 
 use image::{AnimationDecoder, ImageFormat};
 use pub_layout::{BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface};
-use pub_model::{Affine2D, CanonicalId, NodeId, PageId, ResourceId};
+use pub_model::{Affine2D, CanonicalId, EMU_PER_MILLIMETER, NodeId, PageId, ResourceId};
 use pub_output::{FontIdentity, OutputFontPlan};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -210,6 +210,7 @@ pub enum PdfRenderError {
         message: String,
     },
     Text(PdfTextPreparationError),
+    NineUpCardGeometryUnsupported,
 }
 
 impl fmt::Display for PdfRenderError {
@@ -279,6 +280,9 @@ impl fmt::Display for PdfRenderError {
                 "could not decode fixed image resource {resource_id:?}: {message}"
             ),
             Self::Text(error) => write!(f, "resolved text preparation failed: {error}"),
+            Self::NineUpCardGeometryUnsupported => {
+                f.write_str("9-up A4 needs exactly one 85 x 55 mm page")
+            }
         }
     }
 }
@@ -302,6 +306,34 @@ pub fn render_bounded_pdf(
     scene: &BoundedResolvedScene,
     resources: &FixedPdfResources,
     target: &PdfTargetProfile,
+) -> Result<PdfRenderOutput, PdfRenderError> {
+    render_bounded_pdf_with_sheet(scene, resources, target, false)
+}
+
+/// One physical 297 x 210 mm A4 sheet, nine full-size copies of one logical
+/// 85 x 55 mm card. This is the existing vector renderer, not PUB re-parsing.
+///
+/// Layout: 3 x 3 row-major, 5 mm gutters, centered margins 16 x 17.5 mm.
+/// Unsupported geometry is rejected rather than silently scaled or cropped.
+pub fn render_bounded_pdf_a4_card_9up(
+    scene: &BoundedResolvedScene,
+    resources: &FixedPdfResources,
+    target: &PdfTargetProfile,
+) -> Result<PdfRenderOutput, PdfRenderError> {
+    if scene.surfaces.len() != 1
+        || scene.surfaces[0].size.width.get() != 85 * EMU_PER_MILLIMETER
+        || scene.surfaces[0].size.height.get() != 55 * EMU_PER_MILLIMETER
+    {
+        return Err(PdfRenderError::NineUpCardGeometryUnsupported);
+    }
+    render_bounded_pdf_with_sheet(scene, resources, target, true)
+}
+
+fn render_bounded_pdf_with_sheet(
+    scene: &BoundedResolvedScene,
+    resources: &FixedPdfResources,
+    target: &PdfTargetProfile,
+    nine_up: bool,
 ) -> Result<PdfRenderOutput, PdfRenderError> {
     let mut surfaces = if resources.page_order.is_empty() {
         let mut surfaces = scene.surfaces.clone();
@@ -634,6 +666,36 @@ pub fn render_bounded_pdf(
     }
     reports.sort_by_key(|node| node.origin);
     diagnostics.sort_by(|left, right| (left.origin, &left.code).cmp(&(right.origin, &right.code)));
+
+    if nine_up {
+        // Stamp the already painted, source-neutral physical content. The
+        // ordinary write_pdf applies the page-height Y flip exactly once.
+        // Existing font/image XObjects are reused by all nine placements.
+        let page_id = surfaces[0].origin;
+        let source = content_by_page
+            .get(&page_id)
+            .ok_or(PdfRenderError::NineUpCardGeometryUnsupported)?
+            .clone();
+        let mut sheet = String::with_capacity(source.len().saturating_mul(9).saturating_add(600));
+        for row in 0_i64..3 {
+            for column in 0_i64..3 {
+                let x = (16 + column * 90) * EMU_PER_MILLIMETER;
+                let y = (35 * EMU_PER_MILLIMETER / 2) + row * 60 * EMU_PER_MILLIMETER;
+                sheet.push_str("q\n1 0 0 1 ");
+                sheet.push_str(&format_points(x));
+                sheet.push(' ');
+                sheet.push_str(&format_points(y));
+                sheet.push_str(" cm\n");
+                sheet.push_str(&source);
+                sheet.push_str("Q\n");
+            }
+        }
+        content_by_page.insert(page_id, sheet);
+        surfaces[0].size = pub_model::Size2D::new(
+            pub_model::LengthEmu::new(297 * EMU_PER_MILLIMETER),
+            pub_model::LengthEmu::new(210 * EMU_PER_MILLIMETER),
+        );
+    }
 
     let page_reports = surfaces.iter().map(page_report).collect::<Vec<_>>();
 
@@ -1300,6 +1362,56 @@ mod tests {
             images: Vec::new(),
             ..FixedPdfResources::default()
         }
+    }
+
+    #[test]
+    fn a4_nine_up_stamps_vector_card_nine_times_and_replays_exactly() {
+        let mut card = scene();
+        card.surfaces.retain(|surface| surface.origin == page_id(1));
+        card.surfaces[0].size = Size2D::new(
+            LengthEmu::new(85 * EMU_PER_MILLIMETER),
+            LengthEmu::new(55 * EMU_PER_MILLIMETER),
+        );
+        card.nodes
+            .retain(|node| node.parent_origin == page_id(1).into_canonical());
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        let normal = render_bounded_pdf(&card, &resources(), &target).unwrap();
+        let first = render_bounded_pdf_a4_card_9up(&card, &resources(), &target).unwrap();
+        let replay = render_bounded_pdf_a4_card_9up(&card, &resources(), &target).unwrap();
+        assert_eq!(first, replay);
+        assert_ne!(first.bytes, normal.bytes);
+        assert_eq!(first.report.pages.len(), 1);
+        assert_eq!(first.report.pages[0].width_emu, 297 * EMU_PER_MILLIMETER);
+        assert_eq!(first.report.pages[0].height_emu, 210 * EMU_PER_MILLIMETER);
+        let bytes = String::from_utf8_lossy(&first.bytes);
+        assert_eq!(bytes.matches("q\n1 0 0 1 ").count(), 9);
+        assert!(bytes.contains(&format!(
+            "q\n1 0 0 1 {} {} cm\n",
+            format_points(16 * EMU_PER_MILLIMETER),
+            format_points(35 * EMU_PER_MILLIMETER / 2),
+        )));
+        assert_eq!(card.surfaces[0].size.width.get(), 85 * EMU_PER_MILLIMETER);
+    }
+
+    #[test]
+    fn a4_nine_up_rejects_multipage_or_non_card_geometry() {
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        assert!(matches!(
+            render_bounded_pdf_a4_card_9up(&scene(), &resources(), &target),
+            Err(PdfRenderError::NineUpCardGeometryUnsupported)
+        ));
+        let mut wrong = scene();
+        wrong
+            .surfaces
+            .retain(|surface| surface.origin == page_id(1));
+        wrong.surfaces[0].size = Size2D::new(
+            LengthEmu::new(90 * EMU_PER_MILLIMETER),
+            LengthEmu::new(55 * EMU_PER_MILLIMETER),
+        );
+        assert!(matches!(
+            render_bounded_pdf_a4_card_9up(&wrong, &resources(), &target),
+            Err(PdfRenderError::NineUpCardGeometryUnsupported)
+        ));
     }
 
     #[test]
