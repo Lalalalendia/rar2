@@ -146,8 +146,10 @@ test("429 on a MoveNode POST is never retried even with Retry-After", async () =
   await assert.rejects(client.moveNode(move), error => error.status === 429);
   assert.deepEqual(waits, []);
   assert.equal(requests.filter(x => x.options.method === "POST").length, 1);
-  assert.equal(client.status.pending_reconciliation, true);
-  await assert.rejects(client.moveNode(move), /temporary_move_reconciliation_required/);
+  // A server 429 on POST is a definitive 4xx rejection, not an unknown ACK.
+  assert.equal(client.status.pending_reconciliation, false);
+  assert.equal(client.status.refresh_required, true);
+  await assert.rejects(client.moveNode(move), /temporary_move_current_required/);
 });
 
 test("private tab capability is reused only from valid existing browser record", async () => {
