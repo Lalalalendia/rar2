@@ -352,10 +352,21 @@ def main() -> int:
     original_config = config.read_text(encoding="utf-8")
     if original_config.count('provider = "s3-compatible"') != 1:
         raise AssertionError("expected exactly one fixture provider declaration")
-    config.write_text(
-        original_config.replace('provider = "s3-compatible"', 'provider = "filesystem"'),
-        encoding="utf-8",
+    test_config = original_config.replace(
+        'provider = "s3-compatible"', 'provider = "filesystem"'
     )
+    if args.sbdc_cmyk_picture_proof:
+        # The same exact public Origin/Host authority must be used by curl
+        # and the real Chromium UI. Keep the canonical unported behavior for
+        # all pre-existing non-browser Guest acceptance controls.
+        original_origin = f'public_origin = "https://{live.EDGE_HOST}"'
+        if test_config.count(original_origin) != 1:
+            raise AssertionError("pinned Caddy browser authority not configured")
+        test_config = test_config.replace(
+            original_origin,
+            f'public_origin = "https://{live.EDGE_HOST}:{httpsport}"',
+        )
+    config.write_text(test_config, encoding="utf-8")
     live.write_caddy(caddyfile, app_port=appport, http_port=httpport, https_port=httpsport)
     site = caddyfile.read_text(encoding="utf-8")
     # Validate the production guest allowlist instead of patching the
@@ -403,6 +414,7 @@ def main() -> int:
                 path=path,
                 output=response,
                 headers=headers,
+                include_origin_port=args.sbdc_cmyk_picture_proof,
                 **other,
             )
             if status != 429 or attempt == 7:
