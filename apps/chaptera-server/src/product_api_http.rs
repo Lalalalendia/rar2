@@ -2121,7 +2121,8 @@ mod tests {
         let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
         let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
         let baseline_revision_id = format!("sha256:{}", "b".repeat(64));
-        let baseline_project = crate::revision_materializer::cloud_revision_project(&session.project());
+        let baseline_project =
+            crate::revision_materializer::cloud_revision_project(&session.project());
         let initial_scene = project_reader_scene_from_exact_source(
             "document-sample3-resize".to_owned(),
             source_sha256.clone(),
@@ -2145,14 +2146,21 @@ mod tests {
             .map(|(node_id, node)| (*node_id, node.header.bounds))
             .expect("Sample3 contains an eligible directly page-owned visible resize node");
         let after = pub_editor::RectEmu::new(
-            before.x, before.y,
+            before.x,
+            before.y,
             LengthEmu::new(before.width.get() + 12_700),
             before.height,
         );
-        assert!(session.can_move_node_to(node_id, before.x, before.y).is_err(),
-            "a pure resize must not masquerade as a MoveNode");
-        assert!(matches!(session.resize_node_to(node_id, after).unwrap(),
-            EditOperation::ResizeNode { .. }));
+        assert!(
+            session
+                .can_move_node_to(node_id, before.x, before.y)
+                .is_err(),
+            "a pure resize must not masquerade as a MoveNode"
+        );
+        assert!(matches!(
+            session.resize_node_to(node_id, after).unwrap(),
+            EditOperation::ResizeNode { .. }
+        ));
         let project = crate::revision_materializer::cloud_revision_project(&session.project());
         let accepted_revision = format!("sha256:{}", "c".repeat(64));
         let scene = project_reader_scene_from_exact_source(
@@ -2164,8 +2172,15 @@ mod tests {
             &project,
         )
         .expect("current Reader Scene must materialize the canonical ResizeNode");
-        let key = serde_json::to_value(node_id).unwrap().as_str().unwrap().to_owned();
-        let resized = scene.nodes.iter().find(|n| n.node_id == key)
+        let key = serde_json::to_value(node_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let resized = scene
+            .nodes
+            .iter()
+            .find(|n| n.node_id == key)
             .expect("resized source node stays visible");
         assert_eq!(resized.bounds.x, after.x.get());
         assert_eq!(resized.bounds.y, after.y.get());
