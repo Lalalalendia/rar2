@@ -22,7 +22,7 @@
       <summary>Возможности и ограничения</summary>
       <div class="workspace-about-content">
         <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
-        <p class="notice"><strong>Просмотр и PDF без правки.</strong> Откройте поддерживаемый PUB и скачайте PDF с отчётом об ограничениях точности. Также можно перемещать поддерживаемые фигуры (после выбора — стрелками клавиатуры по 1 пункту), изменять их размер и редактировать простой текст рамок, затем скачивать изменённые PDF, IDML или ODG. Сохранение изменённого .pub не обещается. Исходный PUB неизменен.</p>
+        <p class="notice"><strong>Просмотр и PDF без правки.</strong> Откройте поддерживаемый PUB и скачайте PDF с отчётом об ограничениях точности. Можно перемещать поддерживаемые объекты (после выбора — стрелками по 1 пункту), менять размер, редактировать простой текст и создавать прямоугольники. Изменённые PDF, IDML или ODG доступны после подтверждённой правки. Порядок наложения новых объектов может быть частичным. Сохранение изменённого .pub не обещается; исходный PUB неизменен.</p>
       </div>
     </details>
   </header>
@@ -59,9 +59,10 @@
     <div class="actions"><button id="temporary-story-apply" type="button" disabled>Сохранить текст</button></div>
   </section>
   <section class="panel" aria-labelledby="pages-heading">
-    <h2 id="pages-heading">Страницы <span class="canvas-hint">Выберите объект, затем переместите или измените его размер</span></h2>
+    <h2 id="pages-heading">Страницы <span class="canvas-hint">Выберите объект или включите инструмент прямоугольника и протяните по странице</span></h2>
     <div id="temporary-pages" class="pages" role="region" aria-label="Страницы временного PUB" tabindex="0"></div>
     <div id="temporary-export-actions" class="actions" hidden>
+      <button id="temporary-draw-rectangle" type="button" aria-pressed="false" disabled>Прямоугольник</button>
       <button id="temporary-download-idml" type="button" disabled>Скачать изменённый IDML</button>
       <button id="temporary-download-odg" type="button" disabled>Скачать изменённый ODG</button>
       <button id="temporary-download-pdf" type="button" disabled>Скачать PDF</button>
