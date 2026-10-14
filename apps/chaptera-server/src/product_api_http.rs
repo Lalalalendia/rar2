@@ -2152,9 +2152,7 @@ mod tests {
             before.height,
         );
         assert!(
-            session
-                .move_node_to(node_id, before.x, before.y)
-                .is_err(),
+            session.move_node_to(node_id, before.x, before.y).is_err(),
             "a pure resize must not masquerade as a MoveNode"
         );
         assert!(matches!(
