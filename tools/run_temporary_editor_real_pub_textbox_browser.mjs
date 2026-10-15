@@ -62,7 +62,7 @@ page.on("response", response => {
     bucket=observed.accepted;
   } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/story-range$/.test(path)) {
     bucket=observed.storyAccepted;
-  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/exports\/(?:idml|odg)$/.test(path)
+  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/exports\/(?:idml|odg|pdf)$/.test(path)
       && url.searchParams.get("report_only")==="true") {
     bucket=observed.reports;
   }
@@ -260,6 +260,43 @@ try {
   assert.equal(consumer.target_application_consumer?.reopened,true);
   assert.equal(consumer.target_application_consumer?.story_marker_retained,true);
 
+
+  // IDML/ODG import cannot prove the newly authored Story is painted in the
+  // PDF exported from this exact canonical R2 revision. Inspect the actual
+  // Chromium-downloaded PDF through an independent physical text consumer.
+  phase = "physical_pdf_consumer";
+  const pdfDownloadWait=page.waitForEvent("download",{timeout:90000});
+  await page.locator("#temporary-download-pdf").click();
+  const pdfDownload=await pdfDownloadWait;
+  await settle();
+  assert.equal(pdfDownload.suggestedFilename(),"chaptera-edited.pdf");
+  const pdfPath=await pdfDownload.path(),pdfBytes=await readFile(pdfPath);
+  assert.ok(pdfBytes.subarray(0,5).equals(Buffer.from("%PDF-")),
+    "new Story export did not have a physical PDF header");
+  const pdfReport=observed.reports.at(-1);
+  assert.equal(pdfReport?.target,"pdf","new Story PDF report missing");
+  assert.equal(pdfReport.source_hash,expectedSourceHash);
+  assert.equal(pdfReport.revision_id,storyAck.revision_id);
+  assert.equal(pdfReport.canonical_authoring_revision_id,
+    storyAck.canonical_authoring_revision_id);
+  assert.equal(pdfReport.artifact_sha256,sha256(pdfBytes));
+  assert.equal(pdfReport.loss_report?.can_serialize,true);
+  assert.equal(pdfReport.loss_report?.counts?.blocking,0);
+  const authoredPdf=spawnSync("python3",[
+    "tools/verify_temporary_guest_story_pdf_export.py",
+    "--artifact",pdfPath,"--expected-text",textMarker,
+  ],{encoding:"utf-8",timeout:120000});
+  assert.equal(authoredPdf.status,0,
+    "new Story physically absent in same R2 PDF (independent text-paint proof): "+
+    String(authoredPdf.stderr||authoredPdf.stdout).slice(-400));
+  const pdfConsumer=JSON.parse(authoredPdf.stdout.trim().split("\n").at(-1));
+  assert.equal(pdfConsumer.schema,
+    "chaptera.tempedit-independent-authored-text-pdf-consumer.v1");
+  assert.equal(pdfConsumer.status,"PASS");
+  assert.equal(pdfConsumer.artifact_sha256,sha256(pdfBytes));
+  assert.equal(pdfConsumer.authored_text_recovered,true);
+  assert.equal(pdfConsumer.marker_page_count,1);
+
   phase = "reopen";
   await page.reload({waitUntil:"domcontentloaded"});
   await page.locator("#temporary-resume").click();
@@ -325,6 +362,7 @@ try {
     authoring_node_uuidv7:true,authoring_story_uuidv7:true,
     browser_story_commits:storyWrites.length,story_selected_after_create:true,
     created_story_exact_reopened:true,physical_target_xml_consumer:true,
+    physical_new_story_pdf_text_consumer:true,changed_pdf_sha256:sha256(pdfBytes),
     target_application_reopened:consumer.target_application_consumer.reopened,
     target_application_consumer:consumer.target_application_consumer.application,
     export_target:target,changed_artifact_sha256:sha256(artifact),
