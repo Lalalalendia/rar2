@@ -135,7 +135,7 @@ def main() -> int:
     ap.add_argument("--target", choices=(
         "idml", "pdf", "story-idml", "story-odg",
         "resize-idml", "resize-odg", "keyboard-idml",
-        "create-idml", "create-odg"), default="idml")
+        "create-idml", "create-odg", "textbox-idml", "textbox-odg"), default="idml")
     args = ap.parse_args()
     binary = args.chaptera.resolve()
     caddy = args.caddy.resolve()
@@ -145,6 +145,7 @@ def main() -> int:
         raise AssertionError("canonical Chaptera binary and pinned Caddy required")
     story_mode = args.target.startswith("story-")
     create_mode = args.target.startswith("create-")
+    textbox_mode = args.target.startswith("textbox-")
     resize_mode = args.target.startswith("resize-")
     keyboard_mode = args.target == "keyboard-idml"
     expected_length = 72192 if story_mode else 291840
@@ -251,12 +252,14 @@ def main() -> int:
                          if story_mode else
                          "run_temporary_editor_real_pub_create_browser.mjs"
                          if create_mode else
+                         "run_temporary_editor_real_pub_textbox_browser.mjs"
+                         if textbox_mode else
                          "run_temporary_editor_real_pub_browser.mjs")),
             "--origin", origin,
             "--fixture", str(fixture),
             "--fixture-sha256", args.fixture_sha256,
             "--out", str(out / "receipt.json"),
-            "--target", args.target.removeprefix("story-").removeprefix("resize-").removeprefix("keyboard-").removeprefix("create-"),
+            "--target", args.target.removeprefix("story-").removeprefix("resize-").removeprefix("keyboard-").removeprefix("create-").removeprefix("textbox-"),
         ]
         if resize_mode:
             command.append("--resize")
@@ -283,6 +286,42 @@ def main() -> int:
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
 
+        if textbox_mode:
+            target = args.target.removeprefix("textbox-")
+            consumer = "Scribus" if target == "idml" else "LibreOffice Draw"
+            required = {
+                "schema": "chaptera.tempedit-real-pub-create-textbox-chromium-https.v1",
+                "status": "PASS",
+                "source_sha256": args.fixture_sha256,
+                "source_byte_len": expected_length,
+                "browser_pointer_create_commits": 1,
+                "browser_story_commits": 1,
+                "target_application_consumer": consumer,
+                "export_target": target,
+                "v0_go": False,
+            }
+            flags = [
+                "real_pub", "real_chromium", "real_isolated_rust_guest",
+                "authoring_node_uuidv7", "authoring_story_uuidv7",
+                "story_selected_after_create", "created_story_exact_reopened",
+                "exact_current_reopened", "exact_reader_scene_created_node",
+                "physical_target_xml_consumer", "target_application_reopened",
+                "same_browser_delete_and_revoke", "private_bearer_not_in_urls",
+                "read_replay_export_no_ttl_extension", "original_pub_immutable",
+                "loss_report_checked",
+            ]
+            if (any(receipt.get(k) != value for k, value in required.items()) or
+                    any(receipt.get(k) is not True for k in flags) or
+                    not isinstance(receipt.get("changed_artifact_sha256"), str) or
+                    len(receipt["changed_artifact_sha256"]) != 64):
+                raise AssertionError("real Publisher Guest CreateTextBox/Story receipt invalid")
+            print(json.dumps({
+                "schema": receipt["schema"], "status": "PASS",
+                "target": target, "real_pub_browser_https": True,
+                "physical_native_app": consumer,
+                "artifact_sha256": receipt["changed_artifact_sha256"],
+            }, sort_keys=True))
+            return 0
         if create_mode:
             target = args.target.removeprefix("create-")
             consumer = "Scribus" if target == "idml" else "LibreOffice Draw"
