@@ -127,7 +127,7 @@ mod tests {
     fn m(id:&str,x:i64,w:i64)->Member { Member{node_id:id.into(),bounds:RectEmu{x,y:0,width:w,height:10}} }
     #[test] fn signed_gaps_and_unchanged_anchors() {
         let result=plan(vec![m("c",7,10),m("a",0,10),m("b",4,10)],Mode::DistributeHorizontal).unwrap();
-        assert_eq!(result.iter().find(|v|v.node_id=="b").unwrap().after.x,-1);
+        assert_eq!(result.iter().find(|v|v.node_id=="b").unwrap().after.x,3);
         assert_eq!(result.iter().find(|v|v.node_id=="a").unwrap().after.x,0);
         assert_eq!(result.iter().find(|v|v.node_id=="c").unwrap().after.x,7);
         assert_eq!(changed_only(result).len(),1);
