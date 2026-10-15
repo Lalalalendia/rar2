@@ -2299,6 +2299,82 @@ mod tests {
         assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[malformed]).is_err());
     }
 
+    #[test]
+    fn authored_reader_textbox_requires_page_proof_and_marks_preview_partial() {
+        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
+        fn empty_scene() -> ReaderSceneV1 {
+            ReaderSceneV1 {
+                protocol_version: READER_SCENE_V1,
+                document_id: "tempedit:0123456789abcdef0123456789abcdef".into(),
+                source_hash: "a".repeat(64),
+                revision_id: format!("sha256:{}", "b".repeat(64)),
+                scene_authority: "server_viewer_projection",
+                stacking_fidelity: "source_back_to_front",
+                fidelity: ReaderFidelityV1 {
+                    state: "supported",
+                    reasons: Vec::new(),
+                },
+                pages: vec![ReaderPageV1 {
+                    page_id: "page-A".into(),
+                    order: 0,
+                    width_emu: 2_000_000,
+                    height_emu: 2_000_000,
+                }],
+                nodes: Vec::new(),
+                stories: Vec::new(),
+                resources: Vec::new(),
+                fonts: Vec::new(),
+                text_layout_fallback_counts: std::collections::BTreeMap::new(),
+                diagnostics: Vec::new(),
+            }
+        }
+        fn frame() -> AuthoredTextFrameReaderV1 {
+            AuthoredTextFrameReaderV1 {
+                node_id: "created-node".into(),
+                story_id: "created-story".into(),
+                page_id: "page-A".into(),
+                bounds: ReaderRectV1 {
+                    x: 100_000, y: 200_000, width: 400_000, height: 300_000,
+                },
+                text: "ChapteraNewTextBoxProof42".into(),
+                font_size_emu: 114_300,
+            }
+        }
+
+        let mut scene = empty_scene();
+        append_authored_text_frames_to_reader_scene(&mut scene, &[frame()]).unwrap();
+        assert_eq!(scene.nodes.len(), 1);
+        assert_eq!(scene.nodes[0].kind, "text_frame");
+        assert_eq!(scene.nodes[0].node_id, "created-node");
+        assert_eq!(scene.nodes[0].page_id, "page-A");
+        assert_eq!(scene.nodes[0].text.as_deref(), Some("ChapteraNewTextBoxProof42"));
+        assert!(scene.nodes[0].text_layout.is_none(), "browser must not fabricate glyph advances");
+        assert_eq!(scene.stories.len(), 1);
+        assert_eq!(scene.stories[0].text, "ChapteraNewTextBoxProof42");
+        assert_eq!(scene.stories[0].story_id, "created-story");
+        assert_eq!(scene.stories[0].text_fidelity, "partial");
+        assert_eq!(scene.stacking_fidelity, "unknown");
+        assert_eq!(scene.fidelity.state, "partial");
+        assert!(scene.fidelity.reasons.contains(&"authored_text_frame_preview_only"));
+
+        assert!(append_authored_text_frames_to_reader_scene(&mut scene, &[frame()]).is_err(),
+            "duplicate canonical node/story ids cannot enter the scene");
+        let mut outside = frame();
+        outside.bounds.x = 1_900_000;
+        assert!(append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[outside]).is_err());
+        let mut missing_parent = frame();
+        missing_parent.page_id = "unbound-page".into();
+        assert!(append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[missing_parent]).is_err());
+        let mut forged_story = frame();
+        forged_story.text = "private\nsource".into();
+        assert!(append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[forged_story]).is_err());
+        let mut blank = frame();
+        blank.text.clear();
+        let mut blank_scene = empty_scene();
+        append_authored_text_frames_to_reader_scene(&mut blank_scene, &[blank]).unwrap();
+        assert_eq!(blank_scene.stories[0].text, "");
+    }
+
     #[derive(Clone)]
     struct FixtureSourceLoader {
         bytes: Arc<Vec<u8>>,
