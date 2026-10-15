@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bootTemporaryEditorPreview, temporaryCanvasStoryId } from "./temporary-editor-preview.mjs";
+import {
+  bootTemporaryEditorPreview,
+  applyTemporaryViewport,
+  temporaryViewportZoom,
+  temporaryEditorPagePoint,
+  temporaryCanvasStoryId,
+} from "./temporary-editor-preview.mjs";
 
 const id = "tempedit:" + "a".repeat(32);
 const token = "b".repeat(64);
@@ -712,4 +718,35 @@ test("canvas Story join refuses wrong-page, foreign, missing and unadmitted owne
   assert.equal(temporaryCanvasStoryId({pages: graph.pages, nodes: {
     [nodeId]: {header: {parent_id: pageId}, payload: {table: {story_id: storyId}}},
   }}, candidates, nodeId, pageId), null);
+});
+
+test("Guest viewport keeps PageId/viewBox and pointer EMU invariant at zoom 50/100/200%",()=>{
+  const attrs=new Map([["viewBox","0 0 9525000 12700000"],["data-page-id","page-1"]]);
+  const svg={
+    style:{},
+    getAttribute(k){return attrs.get(k)??null;},
+    setAttribute(k,v){attrs.set(k,v);},
+    createSVGPoint(){return {x:0,y:0,matrixTransform(m){
+      return {x:(this.x-m.left)/m.scale,y:(this.y-m.top)/m.scale};
+    }};},
+    getScreenCTM(){const w=Number(attrs.get("width")||1000);
+      return {inverse(){return {scale:w/9525000,left:24,top:36};}};},
+  };
+  const stage={clientWidth:800,querySelectorAll(){return [svg];}};
+  assert.equal(applyTemporaryViewport(stage,{mode:"fit"}).applied,1);
+  assert.equal(Number(svg.getAttribute("width")),736);
+  for(const percent of [50,100,200]){
+    assert.equal(applyTemporaryViewport(stage,{mode:"manual",percent}).applied,1);
+    const scale=Number(svg.getAttribute("width"))/9525000;
+    assert.deepEqual(temporaryEditorPagePoint(svg,24+1200000*scale,36+2400000*scale),
+      {x_emu:1200000,y_emu:2400000});
+    assert.equal(svg.getAttribute("viewBox"),"0 0 9525000 12700000");
+    assert.equal(svg.getAttribute("data-page-id"),"page-1");
+    assert.equal(svg.style.maxWidth,"none");
+  }
+  for(const bad of [0,25,201,500,100.5]){
+    assert.throws(()=>temporaryViewportZoom({mode:"manual",percent:bad}),RangeError);
+  }
+  svg.setAttribute("viewBox","0 0 -100 10");
+  assert.equal(applyTemporaryViewport(stage,{mode:"fit"}).applied,0);
 });
