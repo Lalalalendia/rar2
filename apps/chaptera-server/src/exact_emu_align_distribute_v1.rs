@@ -226,6 +226,23 @@ mod tests {
         assert_eq!(changed_only(result).len(), 1);
     }
     #[test]
+    fn euclidean_negative_remainder_and_fixed_outer_members() {
+        // X starts: 0, 2, 4, 5; widths: 10 each.
+        // Occupied span=15, total widths=40, total gap=-25.
+        // Euclidean gaps are [-8, -8, -9], preserving the first and last.
+        let result = plan(
+            vec![m("d", 5, 10), m("c", 4, 10), m("a", 0, 10), m("b", 2, 10)],
+            Mode::DistributeHorizontal,
+        )
+        .unwrap();
+        assert_eq!(result[0].after.x, 0);
+        assert_eq!(result[1].after.x, 2);
+        assert_eq!(result[2].after.x, 4);
+        assert_eq!(result[3].after.x, 5);
+        assert!(changed_only(result).is_empty());
+    }
+
+    #[test]
     fn half_away_from_zero() {
         assert_eq!(round_half_away(-5).unwrap(), -3);
         assert_eq!(round_half_away(5).unwrap(), 3);
