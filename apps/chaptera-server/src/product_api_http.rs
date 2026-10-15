@@ -42,7 +42,7 @@ use crate::{
     },
     reader_scene_v1::{
         MAX_SCENE_BYTES, ReaderLineV1, ReaderNodeV1, ReaderPaintV1, ReaderPreviewTextStyleV1,
-        ReaderRectV1, ReaderSceneV1, ReaderStoryV1, ReaderTransformV1, from_viewer_geometry,
+        ReaderRectV1, ReaderSceneV1, ReaderTransformV1, from_viewer_geometry,
     },
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
@@ -2368,7 +2368,7 @@ mod tests {
 
     #[test]
     fn authored_reader_textbox_requires_real_viewer_projection_and_partial_fidelity() {
-        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
+        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1, ReaderStoryV1};
         fn empty_scene() -> ReaderSceneV1 {
             ReaderSceneV1 {
                 protocol_version: READER_SCENE_V1,
