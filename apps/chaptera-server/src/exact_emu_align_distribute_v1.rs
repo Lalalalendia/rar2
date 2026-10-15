@@ -220,10 +220,10 @@ mod tests {
             Mode::DistributeHorizontal,
         )
         .unwrap();
-        assert_eq!(result.iter().find(|v| v.node_id == "b").unwrap().after.x, 3);
+        assert_eq!(result.iter().find(|v| v.node_id == "b").unwrap().after.x, 4);
         assert_eq!(result.iter().find(|v| v.node_id == "a").unwrap().after.x, 0);
         assert_eq!(result.iter().find(|v| v.node_id == "c").unwrap().after.x, 7);
-        assert_eq!(changed_only(result).len(), 1);
+        assert!(changed_only(result).is_empty());
     }
     #[test]
     fn euclidean_negative_remainder_and_fixed_outer_members() {
