@@ -67,7 +67,7 @@ function readerScene() {
         kind: "shape",
         bounds: { x: 50, y: 60, width: 70, height: 80 },
         transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
-        paint: { fill_rgb: [10, 20, 30] },
+        paint: { preset_shape: "ellipse", fill_rgb: [10, 20, 30] },
       },
     ],
     stories: [],
@@ -101,6 +101,8 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.nodes[0].z_order, 0);
   assert.equal(scene.nodes[1].z_order, 1);
   assert.deepEqual(scene.paints[0].fill, { r: 1, g: 2, b: 3, a: 255 });
+  assert.equal(scene.paints[0].preset_shape, null);
+  assert.equal(scene.paints[1].preset_shape, "ellipse");
   assert.equal(scene.resources[0].inline_data_url, PIXEL);
   assert.equal(scene.resources[0].expected_sha256, null);
   assert.equal(scene.resources[0].content_hash, IMAGE_SHA);
@@ -115,6 +117,13 @@ test("rich Reader Scene becomes an Editor Scene without changing revision author
   assert.equal(scene.stories[0].text, "Direct text");
   assert.equal(scene.stories[0].text_fidelity, "supported");
   assert.equal(scene.capabilities.find((item) => item.key === "render.paint").state, "supported");
+});
+
+test("unrecognised Reader presets never invent an ellipse", async () => {
+  const payload = readerScene();
+  payload.nodes[1].paint.preset_shape = "unsupported-custom-geometry";
+  const scene = await adaptReaderSceneToEditorScene(payload);
+  assert.equal(scene.paints[1].preset_shape, null);
 });
 
 test("Reader SafePreview artifact flows into the exact per-page scheduler demand", async () => {

@@ -48,9 +48,18 @@ pub struct FixedStroke {
     pub width_emu: i64,
 }
 
+/// Only source-authoritative geometry presets are admitted to fixed output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixedPaintPreset {
+    Ellipse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixedNodePaint {
     pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_shape: Option<FixedPaintPreset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_rgb: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +161,7 @@ pub struct PdfRenderCapabilities {
 #[serde(rename_all = "snake_case")]
 pub enum PdfPaintTraceKindV1 {
     Rectangle,
+    Ellipse,
     Image,
     Text,
 }
@@ -597,13 +607,17 @@ fn render_bounded_pdf_with_sheet(
 
         if let Some(paint) = valid_paint {
             let from = content.len();
-            append_rectangle(content, node, paint);
+            append_fixed_shape(content, node, paint);
             record_paint_trace(
                 &mut paint_trace,
                 &mut paint_indices_by_page,
                 surface.origin,
                 node,
-                PdfPaintTraceKindV1::Rectangle,
+                if paint.preset_shape == Some(FixedPaintPreset::Ellipse) {
+                    PdfPaintTraceKindV1::Ellipse
+                } else {
+                    PdfPaintTraceKindV1::Rectangle
+                },
                 None,
                 None,
                 from,
@@ -1015,7 +1029,41 @@ fn page_report(surface: &ResolvedSurface) -> PdfPageReport {
     }
 }
 
-fn append_rectangle(content: &mut String, node: &ResolvedPhysicalNode, paint: &FixedNodePaint) {
+/// Standard four-cubic, kappa=0.55228475, source ellipse geometry. Integer
+/// EMUs avoid nondeterministic platform-specific floating-point formatting.
+fn append_ellipse_path(content: &mut String, node: &ResolvedPhysicalNode) {
+    let x = node.bounds.x.get();
+    let y = node.bounds.y.get();
+    let width = node.bounds.width.get();
+    let height = node.bounds.height.get();
+    let radius_x = width / 2;
+    let radius_y = height / 2;
+    let center_x = x + radius_x;
+    let center_y = y + radius_y;
+    let right = x + width;
+    let bottom = y + height;
+    let control_x = ((i128::from(radius_x) * 552_284_750) / 1_000_000_000) as i64;
+    let control_y = ((i128::from(radius_y) * 552_284_750) / 1_000_000_000) as i64;
+    let at = |x: i64, y: i64| format!("{} {}", format_points(x), format_points(y));
+    content.push_str(&format!(
+        "{} m\n{} {} {} c\n{} {} {} c\n{} {} {} c\n{} {} {} c\nh\n",
+        at(center_x, y),
+        at(center_x + control_x, y),
+        at(right, center_y - control_y),
+        at(right, center_y),
+        at(right, center_y + control_y),
+        at(center_x + control_x, bottom),
+        at(center_x, bottom),
+        at(center_x - control_x, bottom),
+        at(x, center_y + control_y),
+        at(x, center_y),
+        at(x, center_y - control_y),
+        at(center_x - control_x, y),
+        at(center_x, y),
+    ));
+}
+
+fn append_fixed_shape(content: &mut String, node: &ResolvedPhysicalNode, paint: &FixedNodePaint) {
     content.push_str("q\n");
 
     let mut has_fill = false;
@@ -1043,13 +1091,17 @@ fn append_rectangle(content: &mut String, node: &ResolvedPhysicalNode, paint: &F
         has_stroke = true;
     }
 
-    content.push_str(&format!(
-        "{} {} {} {} re\n",
-        format_points(node.bounds.x.get()),
-        format_points(node.bounds.y.get()),
-        format_points(node.bounds.width.get()),
-        format_points(node.bounds.height.get())
-    ));
+    if paint.preset_shape == Some(FixedPaintPreset::Ellipse) {
+        append_ellipse_path(content, node);
+    } else {
+        content.push_str(&format!(
+            "{} {} {} {} re\n",
+            format_points(node.bounds.x.get()),
+            format_points(node.bounds.y.get()),
+            format_points(node.bounds.width.get()),
+            format_points(node.bounds.height.get())
+        ));
+    }
 
     content.push_str(match (has_fill, has_stroke) {
         (true, true) => "B\n",
@@ -1462,11 +1514,13 @@ mod tests {
             node_paints: vec![
                 FixedNodePaint {
                     node_id: node_id(10),
+                    preset_shape: None,
                     fill_rgb: Some([255, 0, 0]),
                     stroke: None,
                 },
                 FixedNodePaint {
                     node_id: node_id(11),
+                    preset_shape: None,
                     fill_rgb: None,
                     stroke: Some(FixedStroke {
                         rgb: [0, 0, 255],
@@ -1642,6 +1696,32 @@ mod tests {
         let trace_json = serde_json::to_string(trace).expect("serializable trace");
         assert!(!trace_json.contains("ActualText"));
         assert!(!trace_json.contains("font_binary"));
+    }
+
+    #[test]
+    fn source_ellipse_emits_four_cubic_segments_with_opaque_white_fill() {
+        let mut paints = resources();
+        paints.node_paints[0].preset_shape = Some(FixedPaintPreset::Ellipse);
+        paints.node_paints[0].fill_rgb = Some([255, 255, 255]);
+        paints.node_paints[0].stroke = Some(FixedStroke {
+            rgb: [112, 138, 139],
+            width_emu: 25_400,
+        });
+        let output =
+            render_bounded_pdf(&scene(), &paints, &PdfTargetProfile::basic_geometry_v0_1())
+                .unwrap();
+        let pdf = String::from_utf8_lossy(&output.bytes);
+        assert!(pdf.contains("1 1 1 rg\n"));
+        assert!(pdf.contains("0.439216 0.541176 0.545098 RG\n2 w\n"));
+        assert!(!pdf.contains("10 20 100 50 re\n"));
+        assert!(pdf.contains(" c\nh\nB\n"));
+        let ellipse = output
+            .paint_trace
+            .iter()
+            .find(|event| event.node_origin == node_id(10))
+            .unwrap();
+        assert_eq!(ellipse.kind, PdfPaintTraceKindV1::Ellipse);
+        assert_eq!(ellipse.page_paint_index, 1);
     }
 
     #[test]
@@ -2140,6 +2220,7 @@ mod tests {
         let dangling = FixedPdfResources {
             node_paints: vec![FixedNodePaint {
                 node_id: node_id(99),
+                preset_shape: None,
                 fill_rgb: Some([1, 2, 3]),
                 stroke: None,
             }],

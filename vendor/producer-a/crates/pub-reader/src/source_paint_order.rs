@@ -35,15 +35,31 @@ pub(super) fn index_escher_by_contents_seq(
     index
 }
 
-/// Group carrier-rank extension is deliberately limited to locally filled
-/// rectangles. Existing grouped ellipses and unproven primitives retain the
-/// original source-order exclusion.
+/// Group carrier-rank extension for already projected/painted bounded
+/// primitives. Unknown classes retain the original source-order exclusion.
 pub(super) fn admit_grouped_paint_participant(
     has_story: bool,
     has_image: bool,
     bounded_solid_rectangle: bool,
 ) -> bool {
     has_story || has_image || bounded_solid_rectangle
+}
+
+/// The Publisher-reduced 2.5.pub oracle proves this exact depth-1 OfficeArt
+/// group class: three msosptEllipse children share one serialized GROUP carrier.
+/// Only a source-authoritative ellipse preset may extend its page stack rank.
+fn admitted_grouped_ellipse(
+    is_ordinary_group: bool,
+    shape_type: Option<u16>,
+    has_story: bool,
+    has_image: bool,
+    exact_source_preset: bool,
+) -> bool {
+    is_ordinary_group
+        && shape_type == Some(OFFICEART_SHAPE_TYPE_ELLIPSE)
+        && !has_story
+        && !has_image
+        && exact_source_preset
 }
 
 type GroupedCarrierParticipant = (usize, NodeId);
@@ -121,13 +137,29 @@ pub(super) fn source_page_paint_orders_v1(
         if node.header.parent_id != page_id.into_canonical() {
             continue;
         }
-        // Grouped Story/image ordering remains unchanged. The only newly
-        // admitted primitive is a source-backed solid rectangle, with exact
-        // group ancestry and positive local fill/color evidence.
+        // Preserve already-proven grouped Story/image and bounded rectangle
+        // participants. Ellipse source order is admitted separately below,
+        // under its own exact FSP provenance and GROUP-carrier fences.
         let solid_rectangle = node.payload.officeart_shape_type
             == Some(super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE)
             && node.payload.explicit_paint.fill.visible == Some(true)
             && node.payload.explicit_paint.fill.color_rgb.is_some();
+        // Only an exact source FSP ellipse in an ordinary bounded depth-1
+        // group may be ranked alongside direct pages and their backgrounds.
+        // Actual group ancestry and unique child Escher membership are still
+        // checked below; no implicit order from NodeId or screen coordinates.
+        let grouped_ellipse = admitted_grouped_ellipse(
+            !page_logo && single_raw_type(group_reference) == Some(RAW_TYPE_GROUP),
+            node.payload.officeart_shape_type,
+            node.payload.story_frame.is_some(),
+            node.payload.image_slot.is_some(),
+            node.header.source_refs.iter().any(|source_ref| {
+                source_ref.path.as_deref() == Some("SpContainer/FSP/default-ellipse")
+                    && source_ref.authority == AuthorityClass::Authoritative
+                    && source_ref.confidence == Some(ReadConfidence::Exact)
+                    && matches!(source_ref.role, SourceRole::Projection)
+            }),
+        );
         // Source-backed depth-1 PAGE LOGO ellipses have a proven carrier
         // order even when their styling still needs visual validation. Do not
         // broaden the ordinary 0x30 ellipse paint admission here.
@@ -143,7 +175,8 @@ pub(super) fn source_page_paint_orders_v1(
             node.payload.story_frame.is_some(),
             node.payload.image_slot.is_some(),
             solid_rectangle,
-        ) && !page_logo_ellipse
+        ) && !grouped_ellipse
+            && !page_logo_ellipse
             && !page_logo_effective_rectangle
         {
             continue;
@@ -292,5 +325,27 @@ mod grouped_paint_order_tests {
         assert!(admit_grouped_paint_participant(false, true, false));
         assert!(admit_grouped_paint_participant(false, false, true));
         assert!(!admit_grouped_paint_participant(false, false, false));
+    }
+
+    #[test]
+    fn grouped_ellipse_requires_ordinary_carrier_and_exact_source_preset() {
+        let ellipse = Some(OFFICEART_SHAPE_TYPE_ELLIPSE);
+        assert!(admitted_grouped_ellipse(true, ellipse, false, false, true));
+        assert!(!admitted_grouped_ellipse(
+            false, ellipse, false, false, true
+        ));
+        assert!(!admitted_grouped_ellipse(
+            true, ellipse, false, false, false
+        ));
+        assert!(!admitted_grouped_ellipse(true, ellipse, true, false, true));
+        assert!(!admitted_grouped_ellipse(true, ellipse, false, true, true));
+        assert!(!admitted_grouped_ellipse(true, None, false, false, true));
+        assert!(!admitted_grouped_ellipse(
+            true,
+            Some(super::super::paint_projection::OFFICEART_SHAPE_TYPE_RECTANGLE),
+            false,
+            false,
+            true,
+        ));
     }
 }
