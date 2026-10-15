@@ -22,10 +22,8 @@ const AUTO_MAX_PAGE_WIDTH = 960;
 let scene = null;
 let pages = [];
 let preparedScene = null;
-let pageBuckets = [];
 let pageOffsets = [];
 let mountedPageIds = "";
-let suppressWindowScroll = false;
 const PAGE_GAP = 26;
 const WINDOW_OVERSCAN_PAGES = 1;
 let generation = 0;
@@ -154,7 +152,6 @@ function clearReader() {
   scene = null;
   pages = [];
   preparedScene = null;
-  pageBuckets = [];
   pageOffsets = [];
   mountedPageIds = "";
   pagesHost.replaceChildren();
@@ -246,7 +243,7 @@ function updateWindow() {
   top.style.height = Math.max(0, pageOffsets[first] - (first > 0 ? PAGE_GAP : 0)) + "px";
   const tail = document.createElement("div");
   tail.className = "page-window-spacer";
-  tail.style.height = Math.max(0, pageOffsets[pages.length] - pageOffsets[last + 1] - (last + 1 < pages.length ? PAGE_GAP : 0)) + "px";
+  tail.style.height = Math.max(0, pageOffsets[pages.length] - pageOffsets[last + 1]) + "px";
   for (let index = first; index <= last; index++) {
     const svg = staging.children[index - first];
     svg.setAttribute("aria-label", "Page " + (index + 1) + " of " + pages.length);
