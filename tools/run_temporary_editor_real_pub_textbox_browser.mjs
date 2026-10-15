@@ -127,7 +127,7 @@ try {
       const pos=point.matrixTransform(svg.getScreenCTM());
       return {x:pos.x,y:pos.y};
     }
-    const start=screen(.2,.22),finish=screen(.33,.32);
+    const start=screen(.18,.20),finish=screen(.78,.41);
     if (![start.x,start.y,finish.x,finish.y].every(Number.isFinite) ||
         Math.max(start.x,finish.x)>=innerWidth ||
         Math.max(start.y,finish.y)>=innerHeight || start.x<=0 || start.y<=0) return null;
