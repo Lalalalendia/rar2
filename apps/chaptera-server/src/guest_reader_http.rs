@@ -1075,7 +1075,7 @@ fn validate_temporary_create_textbox_request(
     if request.protocol_version != "chaptera.commit-request.v1"
         || !is_temporary_edit_session(path_session_id)
         || request.document_id != path_session_id
-        || request.command.kind != "create_textbox"
+        || request.command.kind != "create_text_box"
     {
         return Err(GuestReaderError::bad_request(
             "temporary_editor_create_textbox_request_invalid",
