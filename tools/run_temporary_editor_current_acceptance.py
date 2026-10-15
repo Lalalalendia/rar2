@@ -816,6 +816,7 @@ def main() -> int:
         edited_formats = []
         unavailable_formats = []
         export_receipts = []
+        sbdc_pdf_multiline_counts = None
         sbdc_visual_pair = None
         # The exact SBDC034 visual proof only owns the current fixed PDF.
         # Imported picture objects need not be editable ODG/IDML frames.
@@ -896,6 +897,12 @@ def main() -> int:
                     f"edited {target} did not preserve the accepted physical geometry"
                 ) from exc
             if target == "pdf" and sbdc_r1:
+                proof_counts = preflight["loss_report"]["counts"]
+                sbdc_pdf_multiline_counts = {
+                    "source_sized_multiline_stories": proof_counts.get("source_sized_multiline_stories", 0),
+                    "source_sized_multiline_lines": proof_counts.get("source_sized_multiline_lines", 0),
+                    "total_shaped_lines": proof_counts["shaped_lines"],
+                }
                 sbdc_pdf_r1_uses = require_sbdc_fixed_pdf_image_uses(
                     artifact, sbdc_r1["star_resource_id"]
                 )
@@ -1161,6 +1168,7 @@ def main() -> int:
                 "cmyk_logo_admitted": sbdc_r1["logo_admitted"],
                 "fixed_pdf_star_paint_uses_r0": sbdc_pdf_r0_uses,
                 "fixed_pdf_star_paint_uses_r1": sbdc_pdf_r1_uses,
+                "pdf_source_sized_multiline": sbdc_pdf_multiline_counts,
                 "unmodified_star_bounds_preserved_after_move": True,
                 "star_xobject_emitted_physically": True,
                 "source_bytes_or_picture_payload_reported": False,
