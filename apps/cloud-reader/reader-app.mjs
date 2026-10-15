@@ -232,9 +232,8 @@ function updateWindow() {
   const last = Math.min(pages.length - 1,
     Math.max(first, pageAtScroll(Math.max(t, bottom - 1)) + WINDOW_OVERSCAN_PAGES));
   const ids = pages.slice(first, last + 1).map(p => p.page_id);
-  const key = ids.join("\u0000");
+  const key = JSON.stringify(ids);
   if (key === mountedPageIds) return;
-  mountedPageIds = key;
   const staging = document.createElement("div");
   renderPreparedReaderPages(staging, preparedScene, ids);
   const top = document.createElement("div");
@@ -257,6 +256,7 @@ function updateWindow() {
   children.push(...staging.childNodes);
   if (last + 1 < pages.length) children.push(tail);
   pagesHost.replaceChildren(...children);
+  mountedPageIds = key;
 }
 
 function pageAtScroll(t) {
