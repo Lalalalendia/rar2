@@ -292,13 +292,18 @@ def sbdc_r1_browser_own_pdf_raster(
     if not diff["raster_size_match"]:
         raise AssertionError("R1 own PDF and browser raster consumer cannot be compared")
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
+    from sbdc_r1_text_metrics_census import census_r1_text_metrics
     disagreement_census = census_r1_disagreement(
         browser, own_pdf, edited_scene, diff["significant_pixel_count"],
         row.get("browser_preview_census"),
     )
+    text_metrics_census = census_r1_text_metrics(
+        edited_scene, pdf_bytes, browser, own_pdf, diff["significant_pixel_count"],
+    )
     return {
         "schema": "chaptera.sbdc034-r1-browser-ownpdf-raster.v1",
         "disagreement_census": disagreement_census,
+        "text_metrics_census": text_metrics_census,
         "source_r1_exact": True,
         "render_dpi": 144,
         "browser_source": "real_https_temporary_editor_scene",
