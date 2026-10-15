@@ -2337,7 +2337,7 @@ mod tests {
     }
 
     #[test]
-    fn authored_reader_textbox_requires_page_proof_and_marks_preview_partial() {
+    fn authored_reader_textbox_requires_real_viewer_projection_and_partial_fidelity() {
         use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
         fn empty_scene() -> ReaderSceneV1 {
             ReaderSceneV1 {
@@ -2380,59 +2380,91 @@ mod tests {
                 font_size_emu: 114_300,
             }
         }
-
-        let mut scene = empty_scene();
-        append_authored_text_frames_to_reader_scene(&mut scene, &[frame()]).unwrap();
-        assert_eq!(scene.nodes.len(), 1);
+        fn projected(frame: &AuthoredTextFrameReaderV1) -> ReaderSceneV1 {
+            let mut scene = empty_scene();
+            let b = &frame.bounds;
+            scene.nodes.push(ReaderNodeV1 {
+                node_id: frame.node_id.clone(),
+                origin_node_id: None,
+                page_id: frame.page_id.clone(),
+                parent_node_id: None,
+                kind: "text_frame",
+                bounds: ReaderRectV1 {
+                    x: b.x, y: b.y, width: b.width, height: b.height,
+                },
+                text_bounds: None,
+                transform: ReaderTransformV1 {
+                    a: "1".into(), b: "0".into(), c: "0".into(),
+                    d: "1".into(), tx: 0, ty: 0,
+                },
+                paint: None,
+                decorative_border: None,
+                resource_id: None,
+                image_source_window: None,
+                image_content_rotation_degrees: None,
+                image_recolor: None,
+                table: None,
+                text: (!frame.text.is_empty()).then_some(frame.text.clone()),
+                text_layout: None,
+                preview_text_style: None,
+            });
+            scene.stories.push(ReaderStoryV1 {
+                story_id: frame.story_id.clone(),
+                text: frame.text.clone(),
+                text_fidelity: "partial",
+            });
+            scene
+        }
+        let original = frame();
+        let mut scene = projected(&original);
+        admit_projected_authored_text_frames_in_reader_scene(&mut scene, &[original]).unwrap();
+        assert_eq!(scene.nodes.len(), 1, "must consume, not append a duplicate node");
         assert_eq!(scene.nodes[0].kind, "text_frame");
         assert_eq!(scene.nodes[0].node_id, "created-node");
         assert_eq!(scene.nodes[0].page_id, "page-A");
-        assert_eq!(
-            scene.nodes[0].text.as_deref(),
-            Some("ChapteraNewTextBoxProof42")
-        );
-        assert!(
-            scene.nodes[0].text_layout.is_none(),
-            "browser must not fabricate glyph advances"
-        );
+        assert_eq!(scene.nodes[0].text.as_deref(), Some("ChapteraNewTextBoxProof42"));
+        assert!(scene.nodes[0].text_layout.is_none(), "must not fabricate glyph advances");
+        assert_eq!(scene.nodes[0].preview_text_style.as_ref().unwrap().font_size_emu, Some(114_300));
         assert_eq!(scene.stories.len(), 1);
         assert_eq!(scene.stories[0].text, "ChapteraNewTextBoxProof42");
         assert_eq!(scene.stories[0].story_id, "created-story");
         assert_eq!(scene.stories[0].text_fidelity, "partial");
         assert_eq!(scene.stacking_fidelity, "unknown");
         assert_eq!(scene.fidelity.state, "partial");
-        assert!(
-            scene
-                .fidelity
-                .reasons
-                .contains(&"authored_text_frame_preview_only")
-        );
+        assert!(scene.fidelity.reasons.contains(&"authored_text_frame_preview_only"));
 
-        assert!(
-            append_authored_text_frames_to_reader_scene(&mut scene, &[frame()]).is_err(),
-            "duplicate canonical node/story ids cannot enter the scene"
-        );
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut empty_scene(), &[frame()],
+        ).is_err(), "cannot fabricate a missing Viewer node");
+        let mut duplicate = projected(&frame());
+        duplicate.nodes.push(projected(&frame()).nodes.remove(0));
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut duplicate, &[frame()],
+        ).is_err(), "duplicate scene NodeId");
         let mut outside = frame();
         outside.bounds.x = 1_900_000;
-        assert!(
-            append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[outside]).is_err()
-        );
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut projected(&outside), &[outside],
+        ).is_err(), "out-of-page bounds");
         let mut missing_parent = frame();
         missing_parent.page_id = "unbound-page".into();
-        assert!(
-            append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[missing_parent])
-                .is_err()
-        );
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut projected(&missing_parent), &[missing_parent],
+        ).is_err(), "nonexistent page");
         let mut forged_story = frame();
         forged_story.text = "private\nsource".into();
-        assert!(
-            append_authored_text_frames_to_reader_scene(&mut empty_scene(), &[forged_story])
-                .is_err()
-        );
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut projected(&forged_story), &[forged_story],
+        ).is_err(), "control characters forbidden");
+        let mut mismatched = projected(&frame());
+        mismatched.stories[0].text = "untrusted".into();
+        assert!(admit_projected_authored_text_frames_in_reader_scene(
+            &mut mismatched, &[frame()],
+        ).is_err(), "canonical Story mismatch");
         let mut blank = frame();
         blank.text.clear();
-        let mut blank_scene = empty_scene();
-        append_authored_text_frames_to_reader_scene(&mut blank_scene, &[blank]).unwrap();
+        let mut blank_scene = projected(&blank);
+        admit_projected_authored_text_frames_in_reader_scene(&mut blank_scene, &[blank]).unwrap();
         assert_eq!(blank_scene.stories[0].text, "");
     }
 
