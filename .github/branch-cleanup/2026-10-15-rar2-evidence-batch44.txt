@@ -1,0 +1,21 @@
+# RAR2 branch cleanup batch44 2026-10-15
+ # SHA-pinned evidence-only or superseded refs; execution-only, do not merge
+ # Exactly 15 refs; none are protected or used as an open PR head/base at snapshot
+ # No unreviewed WIP, active product or mixed runtime/code branches
+ # Format: branch expected_sha # completion or replacement evidence
+
+ops/branch-gc-20261014-evidence-batch43 7d486668758605780968b0236e6bb1f7824baa45 # closed execution carrier PR2781; run 38622836191 deleted 25/25 with zero skips
+WEB-TEMP-CANVAS-STORY-PICK-01 538ac5f9cf29830efb580b53a81313d274a7de6c # closed PR2776 superseded by merged PR2791; branch has ahead 0 vs main
+feat/product-49-111-source-neutral-score-gate c97dcda04fa4d16b1df110472e9c1832528e57cb # closed PR2690 superseded by merged canonical scorecard PR2692
+product/cloud-reader-open-font-replacements-01 6c256a80d9ac39ada9228355feb4264bc0c4d6f3 # closed PR2110; exact-head visual A/B falsified proposed font aliases; do not land
+measure/06-image-resource-admission-census-01 59668aa7d20d768e06d20371103a66ad5d26ce28 # closed PR2026; exact 06 75 source uses partition consumed in PR comment
+measure/group320-transform-profile-01 301444d4434e275e27f68d8c814097faca5264c0 # closed PR2004; diagnostics completed and assimilated, no transform change
+viewer/officeart-grouped-image-group320-affine-01 ce9a80828dbe78915173250751fd23a330d9d43d # closed PR1977; regressive rotation law falsified; no product semantics accepted
+measure/pub-reader-contents-access-fanout-02 9f384dc057606df95a97a50e2089e0af820a5ebf # closed PR1941 comment-only fanout control after evidence capture
+measure/grouped-image-post-child-rotation-02 f2662649e555b0814595fb36438521f2e74723ae # closed PR1896 measurement superseded by merged scoped product PR1894
+viewer/officeart-grouped-image-residual-05-02 1051b733855f9d8f88b7cbdae94c1800d3426e92 # closed PR1819 superseded by PR1833; no product semantics merged; evidence in PR
+measure/pub-pdf-page-order-ab-01 93285957a02c8402eb33dc30e92660f17ba2e256 # closed PR2412 exact same-PDF bytes A/B evidence complete, run37925617794
+measure/reader-022-cross-output-causal-01 43dc99d4924edc0ea57f299b7b01aa5624a957dc # closed PR2420 measurement complete, evidence in PR comment and issue2419
+measure/pub-pdf-crop-shape-geometry-01 79a02b9a89d0e5bd1ae9a15ad51cbb4d6016b4af # closed PR2422 falsified custom path clip hypothesis, hosted receipts retained
+measure/pub-pdf-crop-034-spatial-01 849fc33a15d299e87612a714217fa937a668e2d7 # closed PR2503 completed exact crop locality A/B and recorded result
+measure/pub-041-066-emf-record-census-20261011 3d3b71cb2a3d27167f23f1b8300196c3fa358e61 # closed PR2592 complete two hosted source-only EMF census runs; issue2596 successor
