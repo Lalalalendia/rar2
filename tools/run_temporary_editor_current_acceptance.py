@@ -193,6 +193,7 @@ def sbdc_r1_browser_own_pdf_raster(
         "READER_REAL_OUTPUT": str(browser_dir),
         "READER_REFERENCE_RASTER_DPI": "144",
         "READER_REQUIRED_PAINTED_HOST_IMAGES": "4",
+        "READER_EPHEMERAL_TEXT_GEOMETRY_JSON": str(raster_dir / "chromium-private-lines.json"),
     })
     subprocess.run(
         ["node", "apps/cloud-reader/real-browser.test.mjs"],
@@ -225,6 +226,9 @@ def sbdc_r1_browser_own_pdf_raster(
             raise AssertionError("R1 own PDF introduced unsupported page rotation")
         pix = page.get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
         own_pdf = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        # Only private, in-memory coordinates: not the PDF's source text.
+        from sbdc_r1_text_line_geometry import own_pdf_text_rects
+        pdf_text_rects = own_pdf_text_rects(page, 144)
     width_diff = browser.width - own_pdf.width
     height_diff = browser.height - own_pdf.height
     if abs(width_diff) > 1 or abs(height_diff) > 1:
@@ -291,6 +295,17 @@ def sbdc_r1_browser_own_pdf_raster(
     )
     if not diff["raster_size_match"]:
         raise AssertionError("R1 own PDF and browser raster consumer cannot be compared")
+    from sbdc_r1_text_line_geometry import compare_actual_text_line_geometry
+    private_browser_geometry = json.loads(
+        (raster_dir / "chromium-private-lines.json").read_text(encoding="utf-8")
+    )
+    if (private_browser_geometry.get("schema")
+            != "chaptera.private-r1-chromium-text-line-geometry.v1"
+            or private_browser_geometry.get("dpi") != 144):
+        raise AssertionError("browser text-line geometry is not from the same 144dpi R1")
+    text_line_geometry = compare_actual_text_line_geometry(
+        private_browser_geometry["lines"], pdf_text_rects,
+    )
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
     from sbdc_r1_text_metrics_census import census_r1_text_metrics
     disagreement_census = census_r1_disagreement(
@@ -303,6 +318,7 @@ def sbdc_r1_browser_own_pdf_raster(
     return {
         "schema": "chaptera.sbdc034-r1-browser-ownpdf-raster.v1",
         "disagreement_census": disagreement_census,
+        "text_line_geometry": text_line_geometry,
         "text_metrics_census": text_metrics_census,
         "source_r1_exact": True,
         "render_dpi": 144,
