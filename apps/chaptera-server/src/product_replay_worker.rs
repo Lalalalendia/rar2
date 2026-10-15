@@ -14,7 +14,7 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoringTextPresetV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, EditOperation,
     EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, Srgb8V1,
     StoryId, open_mature_0x2c_editor,
@@ -179,6 +179,80 @@ fn exact_create_shape_operation(
     })
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedCreateTextBoxIntentV1 {
+    pub node_id: String,
+    pub story_id: String,
+    pub page_id: String,
+    pub x_emu: i64,
+    pub y_emu: i64,
+    pub width_emu: i64,
+    pub height_emu: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedCreateTextBoxReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
+
+fn temporary_textbox_preset_v1() -> AuthoringTextPresetV1 {
+    // Server-selected canonical authoring preset, never supplied by a browser.
+    AuthoringTextPresetV1 {
+        resource_id: "chaptera.desktop.fallback-font.ubuntu-light.v1".to_owned(),
+        font_fingerprint_sha256: "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70".to_owned(),
+        face_index: 0,
+        font_size_emu: LengthEmu::new(114_300),
+        line_height_emu: LengthEmu::new(142_875),
+    }
+}
+
+fn validate_create_textbox_intent(
+    intent: &IsolatedCreateTextBoxIntentV1,
+) -> Result<(), ProductReplayWorkerError> {
+    let valid_v7 = |id: &str| id.len() == 36
+        && id.as_bytes().get(14) == Some(&b'7')
+        && serde_json::from_value::<NodeId>(Value::String(id.to_owned())).is_ok();
+    if !valid_v7(&intent.node_id) || !valid_v7(&intent.story_id)
+        || intent.node_id == intent.story_id
+        || serde_json::from_value::<PageId>(Value::String(intent.page_id.clone())).is_err()
+        || intent.x_emu < 0 || intent.y_emu < 0
+        || intent.width_emu <= 0 || intent.height_emu <= 0
+        || intent.x_emu.checked_add(intent.width_emu).is_none()
+        || intent.y_emu.checked_add(intent.height_emu).is_none()
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_create_textbox_invalid", "CreateTextBox intent has invalid IDs or bounds",
+        ));
+    }
+    Ok(())
+}
+
+fn exact_create_textbox_operation(
+    intent: &IsolatedCreateTextBoxIntentV1,
+) -> Result<EditOperation, ProductReplayWorkerError> {
+    validate_create_textbox_intent(intent)?;
+    let typed = |id: &str| Value::String(id.to_owned());
+    let node_id = serde_json::from_value::<NodeId>(typed(&intent.node_id))
+        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "NodeId invalid"))?;
+    let story_id = serde_json::from_value::<StoryId>(typed(&intent.story_id))
+        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "StoryId invalid"))?;
+    let page_id = serde_json::from_value::<PageId>(typed(&intent.page_id))
+        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "PageId invalid"))?;
+    Ok(EditOperation::CreateTextBox {
+        node_id, story_id, page_id,
+        bounds: RectEmu::new(
+            LengthEmu::new(intent.x_emu), LengthEmu::new(intent.y_emu),
+            LengthEmu::new(intent.width_emu), LengthEmu::new(intent.height_emu),
+        ),
+        text_preset: temporary_textbox_preset_v1(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IsolatedStoryRangeIntentV1 {
@@ -237,6 +311,7 @@ const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_RESIZE_INTENT_BYTES: u64 = 1024;
 const MAX_CREATE_SHAPE_INTENT_BYTES: u64 = 1024;
+const MAX_CREATE_TEXTBOX_INTENT_BYTES: u64 = 768;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EDITED_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EDITED_LOSS_REPORT_BYTES: usize = 64 * 1024;
@@ -513,6 +588,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub create_shape: Option<IsolatedCreateShapeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_textbox: Option<IsolatedCreateTextBoxReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub story_range: Option<IsolatedStoryRangeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_scene: Option<IsolatedReaderSceneReceiptV1>,
@@ -583,6 +660,7 @@ fn take_exclusive_story_range_receipt(
         || receipt.move_node.is_some()
         || receipt.resize_node.is_some()
         || receipt.create_shape.is_some()
+        || receipt.create_textbox.is_some()
         || receipt.reader_scene.is_some()
         || receipt.editable_export.is_some()
     {
@@ -622,6 +700,16 @@ pub fn validate_product_replay_receipt(
         ));
     }
 
+    let authority_count = usize::from(receipt.baseline_project.is_some())
+        + usize::from(receipt.move_node.is_some()) + usize::from(receipt.resize_node.is_some())
+        + usize::from(receipt.create_shape.is_some()) + usize::from(receipt.create_textbox.is_some())
+        + usize::from(receipt.story_range.is_some()) + usize::from(receipt.reader_scene.is_some())
+        + usize::from(receipt.editable_export.is_some());
+    if authority_count > 1 {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid", "isolated receipt has multiple mutation authorities",
+        ));
+    }
     let serialized_graph = serde_json::to_vec(&receipt.authoring_graph).map_err(|_| {
         ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
@@ -685,6 +773,17 @@ pub fn validate_product_replay_receipt(
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
             "isolated CreateShape violates exclusive source/project authority",
+        ));
+    }
+    if let Some(created) = &receipt.create_textbox
+        && (!matches!(created.operation, EditOperation::CreateTextBox { .. })
+            || created.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&created.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new("product_replay_receipt_invalid", "unhashable TextBox project")
+            })? != created.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid", "CreateTextBox source/project identity invalid",
         ));
     }
     if let Some(resize) = &receipt.resize_node
