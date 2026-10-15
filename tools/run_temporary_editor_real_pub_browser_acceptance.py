@@ -288,6 +288,12 @@ def main() -> int:
 
         if textbox_mode:
             target = args.target.removeprefix("textbox-")
+            # Physical PDF proof is independent of the IDML/ODG native consumer.
+            # A shared R2 marker must appear in the actually downloaded PDF.
+            if (receipt.get("physical_new_story_pdf_text_consumer") is not True or
+                    not isinstance(receipt.get("changed_pdf_sha256"), str) or
+                    len(receipt["changed_pdf_sha256"]) != 64):
+                raise AssertionError("authored R2 Story PDF consumer receipt missing")
             consumer = "Scribus" if target == "idml" else "LibreOffice Draw"
             required = {
                 "schema": "chaptera.tempedit-real-pub-create-textbox-chromium-https.v1",
