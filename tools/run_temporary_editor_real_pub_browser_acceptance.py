@@ -33,47 +33,84 @@ def _cgroup_memory_events(path: pathlib.Path = pathlib.Path("/sys/fs/cgroup/memo
 
 
 def _redact_caddy_log(path: pathlib.Path) -> None:
-    """Caddy errors include request headers, including private bearer tokens.
+    """Emit only allowlisted, source-neutral Caddy diagnostics.
 
-    Retain the useful upstream status/error while never uploading live
-    X-Chaptera-Reader-Session/CSRF values in public Actions artifacts.
-    Unknown/non-JSON lines are dropped, not echoed as potentially private data.
+    Recursive field-name redaction is insufficient: a proxy error may contain
+    a private URI, cookie, token or filename under an arbitrary *value* key.
+    Construct a new bounded record instead of copying the original JSON.
     """
     if not path.exists():
         return
-    secrets = {
-        "authorization", "proxy-authorization", "cookie", "set-cookie",
-        "x-chaptera-reader-session", "x-csrf-token", "x-api-key",
-        # Do not publish private session IDs, source revisions or query secrets
-        # embedded in URLs even when HTTP headers themselves are scrubbed.
-        "uri", "url", "raw_uri", "request_uri", "query", "referer", "referrer",
-    }
 
-    def strip(value):
-        if isinstance(value, dict):
-            return {
-                key: "[redacted]" if key.lower() in secrets else strip(item)
-                for key, item in value.items()
+    def sanitize(entry: object) -> dict[str, object]:
+        if not isinstance(entry, dict):
+            raise ValueError("Caddy diagnostic is not an object")
+        result: dict[str, object] = {"level": "warn", "msg": "other"}
+        if entry.get("level") in ("debug", "info", "warn", "error"):
+            result["level"] = entry["level"]
+        raw_msg = entry.get("msg")
+        if isinstance(raw_msg, str):
+            if "aborting with incomplete response" in raw_msg:
+                result["msg"] = "aborting with incomplete response"
+            elif "reverse_proxy" in raw_msg:
+                result["msg"] = "reverse_proxy"
+        raw_error = entry.get("error")
+        if isinstance(raw_error, str):
+            for needle, category in (
+                ("connection reset by peer", "connection reset by peer"),
+                ("unexpected EOF", "unexpected EOF"),
+                ("i/o timeout", "upstream timeout"),
+                ("context canceled", "context canceled"),
+            ):
+                if needle in raw_error:
+                    result["error"] = category
+                    break
+            else:
+                result["error"] = "other"
+        status = entry.get("status")
+        if type(status) is int and 100 <= status <= 599:
+            result["status"] = status
+        request = entry.get("request")
+        if isinstance(request, dict):
+            cleaned_request: dict[str, object] = {
+                "uri": "[redacted]",
+                "referer": "[redacted]",
             }
-        if isinstance(value, list):
-            return [strip(item) for item in value]
-        return value
+            method = request.get("method")
+            if method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
+                cleaned_request["method"] = method
+            headers = request.get("headers")
+            if isinstance(headers, dict):
+                safe_headers: dict[str, object] = {}
+                for key in ("X-Chaptera-Reader-Session", "X-Csrf-Token",
+                            "Authorization", "Cookie"):
+                    if any(isinstance(h, str) and h.lower() == key.lower()
+                           for h in headers):
+                        safe_headers[key] = "[redacted]"
+                for key, value in headers.items():
+                    if isinstance(key, str) and key.lower() == "content-type" \
+                            and isinstance(value, list) and len(value) == 1 \
+                            and value[0] in ("application/json", "application/octet-stream"):
+                        safe_headers["Content-Type"] = value
+                cleaned_request["headers"] = safe_headers
+            result["request"] = cleaned_request
+        return result
 
     try:
-        cleaned = []
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                entry = json.loads(line)
-                if not isinstance(entry, dict):
-                    raise ValueError("Caddy diagnostic is not an object")
-                cleaned.append(json.dumps(strip(entry), sort_keys=True))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                cleaned.append('{"level":"warn","msg":"unparseable Caddy diagnostic suppressed"}')
         safe = path.with_name(path.name + ".safe")
-        safe.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+        with path.open("r", encoding="utf-8", errors="replace") as source, \
+                safe.open("w", encoding="utf-8") as output:
+            for line in source:
+                try:
+                    cleaned = sanitize(json.loads(line))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    cleaned = {"level": "warn", "msg": "unparseable Caddy diagnostic suppressed"}
+                output.write(json.dumps(cleaned, sort_keys=True) + "\n")
         safe.replace(path)
     except OSError:
-        # A failed scrub must delete the evidence rather than publish tokens.
+        # On I/O failures, do not upload raw Caddy logs or partial output.
+        safe = path.with_name(path.name + ".safe")
+        safe.unlink(missing_ok=True)
         path.unlink(missing_ok=True)
 
 
