@@ -1,0 +1,17 @@
+# RAR2 guarded branch GC wave49 — 2026-10-15
+# Execution-only SHA-pinned manifest. DO NOT MERGE.
+# All refs lack any open PR head/base; workflow revalidates at execution time.
+# Seven October 4 intermediate restacks correspond to merged PRs #1267, #1282, #1290, #1295.
+# All seven temporary restack ref head lookups returned no PRs (open or closed).
+# Original commit refs and merged successor PRs provide durable provenance.
+# Eighth branch was sole head of already-closed unmerged PR #2744; #2739 merged
+# equivalent safe read-back with positive and negative protocol tests to main.
+# Preserve closed PR discussion and all evidence; remove branch pointers only.
+restack/pr1267-after-utf8-20261004 d2cc7dc5481b5645a4c90315345db66cfcccfa93 # merged #1267 Stage 0.2 acceptance successor
+restack/pr1267-stage02-architecture-20261004 b4f351428813a7fc34516ba48c4851f508bcd0b9 # merged #1267 Stage 0.2 acceptance successor
+restack/pr1267-stage02-main-20261004 b5cf98254f284f120d9d30c54798545433de867f # merged #1267 Stage 0.2 acceptance successor
+restack/pr1282-carlton-20261004b d9b1ec08d8bdcd3281ed3f367abbfed28bcdbaaf # merged #1282 Carlton sample continuity successor
+restack/pr1282-carlton-20261004 9fd22d3ad48f181f9dc80c1b3638f5da8091ad4d # merged #1282 Carlton sample continuity successor
+restack/pr1295-after-1282-20261004 9f309f0a669e1c48dc5c417ffb52ae3f7124dcbc # merged #1295 current Viewer packet successor
+restack/pr1295-carlton-20261004 9b623c6ff2e1983b359996482182e0100bee856b # merged #1295 Viewer packet plus merged #1290 render-plan successor
+fix/guest-open-readback-on-truncated-200-20261014 1cc4baea97ee73d2504932704af8ab6047a4f088 # closed PR #2744 already implemented by merged #2739; no active consumer
