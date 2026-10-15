@@ -14,6 +14,7 @@ pub mod db;
 pub mod derived_artifacts;
 pub mod doctor;
 pub mod edge;
+pub mod exact_emu_align_distribute_v1;
 pub mod export_executor;
 pub mod export_publication;
 pub mod filesystem_blob_provider;
