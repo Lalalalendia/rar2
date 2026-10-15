@@ -300,6 +300,8 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   for (const key of [
     "temporary-story-panel", "temporary-story-select",
     "temporary-story-text", "temporary-story-apply", "temporary-story-discard",
+    "temporary-preview-pdf", "temporary-close-pdf-preview",
+    "temporary-pdf-preview", "temporary-pdf-frame", "temporary-pdf-preview-info",
   ]) {
     dom.nodes[key] = {
       hidden: false, disabled: false, value: "", textContent: "",
@@ -437,6 +439,11 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   editor.handlers.input();
   assert.equal(dom.nodes["temporary-download-idml"].disabled, true,
     "dirty text cannot download a stale previously edited revision");
+  assert.equal(dom.nodes["temporary-preview-pdf"].disabled, true,
+    "dirty Story cannot preview old PDF as if it contained the new draft");
+  await dom.nodes["temporary-preview-pdf"].handlers.click();
+  assert.equal(dom.nodes["temporary-pdf-preview"].hidden, true,
+    "even direct click cannot bypass the dirty-Story preview fence");
   const exportsBefore = seen.filter(call => call.url.includes("/exports/")).length;
   await dom.nodes["temporary-download-idml"].handlers.click();
   assert.equal(seen.filter(call => call.url.includes("/exports/")).length, exportsBefore,
@@ -452,6 +459,130 @@ test("temporary Guest plain Story field posts exact private range and repaints a
   selector.handlers.change();
   assert.equal(selector.value, otherStoryId, "clean draft permits selecting a different Story");
   assert.equal(editor.value, "Other", "the new Story text is rendered from canonical state");
+});
+
+test("ordinary PDF preview admits exact baseline and edited bytes, then revokes on mutation and close", async () => {
+  const dom = fakeDom(), network = server(), seen = [];
+  for (const key of [
+    "temporary-preview-pdf", "temporary-close-pdf-preview",
+    "temporary-pdf-preview", "temporary-pdf-frame", "temporary-pdf-preview-info",
+  ]) {
+    dom.nodes[key] = {
+      textContent: "", hidden: true, disabled: true, src: "", handlers: {},
+      addEventListener(event, fn) { this.handlers[event] = fn; },
+    };
+  }
+  const body = new TextEncoder().encode("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", body));
+  const hash = [...digest].map(value => value.toString(16).padStart(2, "0")).join("");
+  const fetchImpl = (url, options) => {
+    if (!url.startsWith(base + "/exports/pdf?")) return network.fetchImpl(url, options);
+    seen.push({url, options});
+    assert.equal(options.method, "GET", "preview never posts a PDF mutation");
+    assert.equal(options.headers["x-chaptera-reader-session"], token);
+    assert.ok(!url.includes(token), "private bearer cannot appear in blob or API URL");
+    const query = new URL(url, "https://reader.chaptera.test").searchParams;
+    const changed = network.calls.some(item => item.url.endsWith("/move-node"));
+    assert.equal(query.get("revision_id"), changed ? afterRev : beforeRev);
+    assert.equal(query.get("canonical_authoring_revision_id"), changed ? afterCanon : beforeCanon);
+    if (query.get("report_only") === "true") {
+      assert.equal(options.headers.accept, "application/json");
+      return response({
+        protocol_version: "chaptera.temporary-edited-export-report.v1",
+        source_hash: source, revision_id: changed ? afterRev : beforeRev,
+        canonical_authoring_revision_id: changed ? afterCanon : beforeCanon,
+        target: "pdf", artifact_sha256: hash,
+        loss_report: {can_serialize: true, counts: {blocking: 0}},
+      });
+    }
+    assert.equal(options.headers.accept, "application/pdf");
+    return new Response(body, {headers: {
+      "content-type": "application/pdf",
+      "x-chaptera-edit-revision": changed ? afterRev : beforeRev,
+      "x-chaptera-export-sha256": hash,
+    }});
+  };
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+    storage: storage(), fetchImpl, renderer: async () => {},
+  });
+  await controller.start({name:"first.pub",size:1729});
+  const preview = dom.nodes["temporary-preview-pdf"];
+  const frame = dom.nodes["temporary-pdf-frame"];
+  const panel = dom.nodes["temporary-pdf-preview"];
+  assert.equal(preview.disabled, false, "pristine supported PUB must be previewable");
+  await preview.handlers.click();
+  assert.equal(panel.hidden, false);
+  assert.match(frame.src, /^blob:/);
+  assert.match(dom.nodes["temporary-pdf-preview-info"].textContent, /blocking/);
+  assert.equal(seen.length, 2);
+  const oldBlob = frame.src;
+  dom.nodes["temporary-pages"].handlers.pointerdown(dom.pointer(110,210));
+  dom.nodes["temporary-pages"].handlers.pointermove(dom.pointer(155,255));
+  await dom.nodes["temporary-pages"].handlers.pointerup(dom.pointer(160,260));
+  assert.equal(panel.hidden, true, "a committed edit invalidates the old preview");
+  assert.equal(frame.src, "", "stale object URL was detached");
+  assert.equal(dom.nodes["temporary-close-pdf-preview"].disabled, true);
+  assert.equal(network.calls.filter(x => x.url.endsWith("/move-node")).length, 1);
+  await preview.handlers.click();
+  assert.equal(panel.hidden, false);
+  assert.match(frame.src, /^blob:/);
+  assert.notEqual(frame.src, oldBlob, "edited revision must get a fresh object URL");
+  assert.equal(seen.length, 4, "two immutable PDFs each require exactly report + bytes");
+  dom.nodes["temporary-close-pdf-preview"].handlers.click();
+  assert.equal(panel.hidden, true);
+  assert.equal(frame.src, "");
+  assert.equal(dom.nodes["temporary-close-pdf-preview"].disabled, true);
+  controller.forget();
+  assert.equal(panel.hidden, true);
+  assert.equal(frame.src, "");
+});
+
+test("ordinary PDF preview fails closed on a forged download digest", async () => {
+  const dom = fakeDom(), network = server();
+  for (const key of [
+    "temporary-preview-pdf", "temporary-close-pdf-preview",
+    "temporary-pdf-preview", "temporary-pdf-frame", "temporary-pdf-preview-info",
+  ]) {
+    dom.nodes[key] = {
+      textContent: "", hidden: true, disabled: true, src: "", handlers: {},
+      addEventListener(event, fn) { this.handlers[event] = fn; },
+    };
+  }
+  const pdf = new TextEncoder().encode("%PDF-1.7\nbroken?\n%%EOF\n");
+  const responseHash = new Uint8Array(await crypto.subtle.digest("SHA-256", pdf));
+  const actualHash = [...responseHash].map(value => value.toString(16).padStart(2, "0")).join("");
+  let requests = 0;
+  const fetchImpl = (url, options) => {
+    if (!url.startsWith(base + "/exports/pdf?")) return network.fetchImpl(url, options);
+    requests++;
+    const query = new URL(url, "https://reader.chaptera.test").searchParams;
+    if (query.get("report_only") === "true") return response({
+      protocol_version: "chaptera.temporary-edited-export-report.v1",
+      source_hash: source, revision_id: beforeRev,
+      canonical_authoring_revision_id: beforeCanon, target: "pdf",
+      artifact_sha256: "0".repeat(64), loss_report: {can_serialize: true},
+    });
+    return new Response(pdf, {headers: {
+      "content-type": "application/pdf",
+      "x-chaptera-edit-revision": beforeRev,
+      "x-chaptera-export-sha256": actualHash,
+    }});
+  };
+  const controller = await bootTemporaryEditorPreview({
+    documentObject: dom.documentObject,
+    cryptoObject: {getRandomValues(bytes) {bytes.fill(7);return bytes;}},
+    storage: storage(), fetchImpl, renderer: async () => {},
+  });
+  await controller.start({name:"untrusted.pub",size:1729});
+  await dom.nodes["temporary-preview-pdf"].handlers.click();
+  assert.equal(requests, 2);
+  assert.equal(dom.nodes["temporary-pdf-preview"].hidden, true);
+  assert.equal(dom.nodes["temporary-pdf-frame"].src, "");
+  assert.equal(dom.nodes["temporary-preview-pdf"].disabled, true,
+    "a mismatched digest fences further preview on the stale session");
+  assert.match(dom.nodes["temporary-status"].textContent, /не подтверждён/);
 });
 
 test("A4 nine-card control is available only for the exact edited 85x55 mm page", async () => {
