@@ -138,7 +138,8 @@ pub fn plan(mut members: Vec<Member>, mode: Mode) -> Result<Vec<PlannedMember>, 
                 })
                 .sum();
             safe(total)?;
-            let total_gap = safe(end as i128 - start as i128 - total)?;
+            let occupied_span = safe(end as i128 - start as i128)?;
+            let total_gap = safe(occupied_span as i128 - total)?;
             let count = (order.len() - 1) as i64;
             let q = total_gap.div_euclid(count);
             let rem = total_gap.rem_euclid(count);
@@ -240,6 +241,128 @@ mod tests {
         assert_eq!(result[2].after.x, 4);
         assert_eq!(result[3].after.x, 5);
         assert!(changed_only(result).is_empty());
+    }
+
+    #[test]
+    fn distribution_moves_interior_member_and_keeps_outer_bounds() {
+        let result = plan(
+            vec![
+                m("middle2", 80, 10),
+                m("last", 120, 20),
+                m("first", 0, 10),
+                m("middle1", 30, 10),
+            ],
+            Mode::DistributeHorizontal,
+        )
+        .unwrap();
+        assert_eq!(result[0].after.x, 0);
+        assert_eq!(result[1].after.x, 120);
+        assert_eq!(result[2].after.x, 40);
+        assert_eq!(result[3].after.x, 80);
+        let changed = changed_only(result);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].node_id, "middle1");
+        assert_eq!(changed[0].after.x, 40);
+    }
+
+    #[test]
+    fn overlapping_distribution_moves_interior_with_signed_gaps() {
+        let result = plan(
+            vec![m("middle", 20, 50), m("last", 60, 50), m("first", 0, 50)],
+            Mode::DistributeHorizontal,
+        )
+        .unwrap();
+        assert_eq!(result[0].after.x, 0);
+        assert_eq!(result[1].after.x, 60);
+        assert_eq!(result[2].after.x, 30);
+        assert_eq!(result[2].after.x - result[0].after.x - 50, -20);
+        assert_eq!(result[1].after.x - result[2].after.x - 50, -20);
+        let changed = changed_only(result);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].node_id, "middle");
+    }
+
+    #[test]
+    fn reject_unsafe_occupied_span_before_subtracting_widths() {
+        // The members and total gap (8e15) fit, but the span (15e15) does not.
+        let result = plan(
+            vec![
+                m("middle", 0, 2_000_000_000_000_000),
+                m("last", 6_000_000_000_000_000, 2_000_000_000_000_000),
+                m("first", -7_000_000_000_000_000, 3_000_000_000_000_000),
+            ],
+            Mode::DistributeHorizontal,
+        );
+        assert_eq!(result, Err(PlanError::Overflow));
+    }
+
+    #[test]
+    fn object_centers_match_python_half_emu_rounding() {
+        let selected = vec![
+            Member {
+                node_id: "a".into(),
+                bounds: RectEmu { x: 0, y: 0, width: 2, height: 2 },
+            },
+            Member {
+                node_id: "b".into(),
+                bounds: RectEmu { x: 9, y: 9, width: 2, height: 2 },
+            },
+            Member {
+                node_id: "odd".into(),
+                bounds: RectEmu { x: 3, y: 4, width: 3, height: 3 },
+            },
+        ];
+        let h = plan(selected.clone(), Mode::AlignHorizontalCenter).unwrap();
+        let v = plan(selected, Mode::AlignVerticalCenter).unwrap();
+        assert_eq!(h[0].after.x, 5);
+        assert_eq!(h[2].after.x, 4);
+        assert_eq!(v[0].after.y, 5);
+        assert_eq!(v[2].after.y, 4);
+    }
+
+    #[test]
+    fn distribution_order_is_canonical_and_remainder_deterministic() {
+        let original = vec![
+            m("c", 40, 10),
+            m("d", 61, 10),
+            m("a", 0, 10),
+            m("b", 20, 10),
+        ];
+        let mut reversed = original.clone();
+        reversed.reverse();
+        let first = plan(original, Mode::DistributeHorizontal).unwrap();
+        let second = plan(reversed, Mode::DistributeHorizontal).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first[1].after.x, 21);
+        assert_eq!(first[2].after.x, 41);
+        assert_eq!(first[3].after.x, 61);
+    }
+
+    #[test]
+    fn vertical_distribution_ties_use_canonical_node_id() {
+        let selected = vec![
+            Member {
+                node_id: "b".into(),
+                bounds: RectEmu { x: 0, y: 20, width: 10, height: 10 },
+            },
+            Member {
+                node_id: "a".into(),
+                bounds: RectEmu { x: 20, y: 20, width: 10, height: 10 },
+            },
+            Member {
+                node_id: "first".into(),
+                bounds: RectEmu { x: 0, y: 0, width: 10, height: 10 },
+            },
+            Member {
+                node_id: "last".into(),
+                bounds: RectEmu { x: 0, y: 60, width: 10, height: 10 },
+            },
+        ];
+        let result = plan(selected, Mode::DistributeVertical).unwrap();
+        assert_eq!(result[0].after.y, 20);
+        assert_eq!(result[1].after.y, 40);
+        assert_eq!(result[2].after.y, 0);
+        assert_eq!(result[3].after.y, 60);
     }
 
     #[test]
