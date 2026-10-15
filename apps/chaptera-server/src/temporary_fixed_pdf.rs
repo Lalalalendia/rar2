@@ -274,6 +274,15 @@ fn render_current_fixed_pdf_with_sheet(
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
     let mut shared_multiline = BTreeMap::<StoryId, Vec<FixedTextRun>>::new();
+    // Only fixed reason labels and aggregate counts; never source text or IDs.
+    let mut shared_reject_counts = BTreeMap::<&'static str, usize>::new();
+    let mut shared_reject_lines = BTreeMap::<&'static str, usize>::new();
+    macro_rules! reject_shared {
+        ($reason:expr, $line_count:expr) => {{
+            *shared_reject_counts.entry($reason).or_default() += 1;
+            *shared_reject_lines.entry($reason).or_default() += $line_count;
+        }};
+    }
     let fallback = ExplicitRenderTextFontResourceV1 {
         resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
         expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
@@ -302,6 +311,7 @@ fn render_current_fixed_pdf_with_sheet(
                     continue;
                 }
                 let Some(layout) = fragment.layout.as_ref() else {
+                    reject_shared!("layout_absent", 0);
                     continue;
                 };
                 let RenderTextLayoutDispositionV1::SharedResolved {
@@ -311,16 +321,22 @@ fn render_current_fixed_pdf_with_sheet(
                     line_height_emu,
                 } = &layout.disposition
                 else {
+                    reject_shared!("reader_layout_fallback", layout.lines.len());
                     continue;
                 };
                 let (font_size_emu, line_height_emu) = (*font_size_emu, *line_height_emu);
                 if font_resource_id.as_str() != fallback.resource_id
                     || font_fingerprint_sha256.as_str() != fingerprint.as_str()
-                    || font_size_emu == font_size.get()
+                {
+                    reject_shared!("font_resource_mismatch", layout.lines.len());
+                    continue;
+                }
+                if font_size_emu == font_size.get()
                     || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&font_size_emu)
                     || line_height_emu <= 0
                     || !(2..=MAX_SHARED_LINES).contains(&layout.lines.len())
                 {
+                    reject_shared!("source_size_or_line_count_ineligible", layout.lines.len());
                     continue;
                 }
                 let Some(story) = projection
@@ -328,22 +344,32 @@ fn render_current_fixed_pdf_with_sheet(
                     .iter()
                     .find(|story| story.origin == fragment.story_id)
                 else {
+                    reject_shared!("projection_story_missing", layout.lines.len());
                     continue;
                 };
                 let source_scalars = story.text.chars().collect::<Vec<_>>();
                 let Ok(scalar_len) = u32::try_from(source_scalars.len()) else {
+                    reject_shared!("scalar_count_overflow", layout.lines.len());
                     continue;
                 };
-                if source_scalars.len() > MAX_SHARED_SCALARS_PER_STORY
-                    || fragment.scalar_start != 0
+                if source_scalars.len() > MAX_SHARED_SCALARS_PER_STORY {
+                    reject_shared!("story_scalar_limit", layout.lines.len());
+                    continue;
+                }
+                if fragment.scalar_start != 0
                     || fragment.scalar_end != scalar_len
                     || fragment.text != story.text
-                    || session
-                        .graph()
-                        .stories
-                        .get(&story.origin)
-                        .is_none_or(|current| current.text != story.text)
                 {
+                    reject_shared!("reader_fragment_not_whole_story", layout.lines.len());
+                    continue;
+                }
+                if session
+                    .graph()
+                    .stories
+                    .get(&story.origin)
+                    .is_none_or(|current| current.text != story.text)
+                {
+                    reject_shared!("current_story_different", layout.lines.len());
                     continue;
                 }
                 // A detached prefix or multiple linked frames cannot inherit
@@ -354,6 +380,7 @@ fn render_current_fixed_pdf_with_sheet(
                     .filter(|frame| frame.story_origin == story.origin)
                     .collect::<Vec<_>>();
                 if frames.len() != 1 || frames[0].frame_origin != node.node_id {
+                    reject_shared!("linked_or_other_frame", layout.lines.len());
                     continue;
                 }
                 let Some(source_style) = admitted_source_line_style_v1(
@@ -363,17 +390,21 @@ fn render_current_fixed_pdf_with_sheet(
                     0,
                     scalar_len,
                 ) else {
+                    reject_shared!("source_style_unavailable", layout.lines.len());
                     continue;
                 };
                 if source_style.font_size_emu != Some(font_size_emu) {
+                    reject_shared!("source_style_size_not_uniform", layout.lines.len());
                     continue;
                 }
 
                 let content_bounds = node.text_bounds.as_ref().unwrap_or(&node.bounds);
                 let Some(origin_x) = content_bounds.x.get().checked_sub(node.bounds.x.get()) else {
+                    reject_shared!("bounds_overflow", layout.lines.len());
                     continue;
                 };
                 let Some(origin_y) = content_bounds.y.get().checked_sub(node.bounds.y.get()) else {
+                    reject_shared!("bounds_overflow", layout.lines.len());
                     continue;
                 };
                 if origin_x < 0
@@ -382,6 +413,7 @@ fn render_current_fixed_pdf_with_sheet(
                     || content_bounds.height.get() <= 0
                     || layout.vertical_offset_emu < 0
                 {
+                    reject_shared!("content_bounds_invalid", layout.lines.len());
                     continue;
                 }
                 let fill_rgb = uniform_text_color_rgb_v1(&fragment)
@@ -391,6 +423,7 @@ fn render_current_fixed_pdf_with_sheet(
                 let mut consumed = 0_u32;
                 let mut cursor_y = layout.vertical_offset_emu;
                 let mut valid = true;
+                let mut line_reject_reason = "line_sequence_or_text";
                 for (index, line) in layout.lines.iter().enumerate() {
                     let Ok(index) = u32::try_from(index) else {
                         valid = false;
@@ -427,15 +460,21 @@ fn render_current_fixed_pdf_with_sheet(
                             .checked_add(cursor_y)
                             .and_then(|y| y.checked_add(font_size_emu)),
                     ) else {
+                        line_reject_reason = "line_coordinate_overflow";
                         valid = false;
                         break;
                     };
-                    if next_y > content_bounds.height.get()
-                        || line
-                            .x_offset_emu
-                            .checked_add(line.measured_width_emu)
-                            .is_none_or(|width| width > content_bounds.width.get())
+                    if next_y > content_bounds.height.get() {
+                        line_reject_reason = "line_vertical_fit";
+                        valid = false;
+                        break;
+                    }
+                    if line
+                        .x_offset_emu
+                        .checked_add(line.measured_width_emu)
+                        .is_none_or(|width| width > content_bounds.width.get())
                     {
+                        line_reject_reason = "line_horizontal_fit";
                         valid = false;
                         break;
                     }
@@ -455,6 +494,7 @@ fn render_current_fixed_pdf_with_sheet(
                                     || glyph.cluster >= line.scalar_end
                             })
                         {
+                            line_reject_reason = "glyph_shaping_invalid";
                             valid = false;
                             break;
                         }
@@ -483,6 +523,14 @@ fn render_current_fixed_pdf_with_sheet(
                     && counted + admitted.len() <= MAX_SHARED_LINES
                 {
                     shared_multiline.insert(story.origin, admitted);
+                } else if !valid {
+                    reject_shared!(line_reject_reason, layout.lines.len());
+                } else if consumed != scalar_len {
+                    reject_shared!("incomplete_line_coverage", layout.lines.len());
+                } else if admitted.len() <= 1 {
+                    reject_shared!("less_than_two_painted_lines", layout.lines.len());
+                } else {
+                    reject_shared!("total_line_budget", layout.lines.len());
                 }
             }
         }
@@ -787,6 +835,8 @@ fn render_current_fixed_pdf_with_sheet(
             "source_sized_single_lines": source_sized_single_lines,
             "source_sized_multiline_stories": source_sized_multiline_stories,
             "source_sized_multiline_lines": source_sized_multiline_lines,
+            "source_shared_rejections_by_reason": shared_reject_counts,
+            "source_shared_rejected_lines_by_reason": shared_reject_lines,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "layout_warnings": layout_warnings,
