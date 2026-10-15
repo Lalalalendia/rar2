@@ -20,6 +20,113 @@ import threading
 import run_cloud_reader_live_acceptance as live
 
 
+def _cgroup_memory_events(path: pathlib.Path = pathlib.Path("/sys/fs/cgroup/memory.events")) -> dict[str, int]:
+    """Read numeric resource counters only; never dump private process state."""
+    try:
+        return {
+            name: int(value) for name, value in
+            (line.split(maxsplit=1) for line in path.read_text().splitlines())
+            if name in {"oom", "oom_kill", "oom_group_kill"}
+        }
+    except (OSError, ValueError):
+        return {}
+
+
+def _redact_caddy_log(path: pathlib.Path) -> None:
+    """Emit only allowlisted, source-neutral Caddy diagnostics.
+
+    Recursive field-name redaction is insufficient: a proxy error may contain
+    a private URI, cookie, token or filename under an arbitrary *value* key.
+    Construct a new bounded record instead of copying the original JSON.
+    """
+    if not path.exists():
+        return
+
+    def sanitize(entry: object) -> dict[str, object]:
+        if not isinstance(entry, dict):
+            raise ValueError("Caddy diagnostic is not an object")
+        result: dict[str, object] = {"level": "warn", "msg": "other"}
+        if entry.get("level") in ("debug", "info", "warn", "error"):
+            result["level"] = entry["level"]
+        raw_msg = entry.get("msg")
+        if isinstance(raw_msg, str):
+            if "aborting with incomplete response" in raw_msg:
+                result["msg"] = "aborting with incomplete response"
+            elif "reverse_proxy" in raw_msg:
+                result["msg"] = "reverse_proxy"
+        raw_error = entry.get("error")
+        if isinstance(raw_error, str):
+            for needle, category in (
+                ("connection reset by peer", "connection reset by peer"),
+                ("unexpected EOF", "unexpected EOF"),
+                ("i/o timeout", "upstream timeout"),
+                ("context canceled", "context canceled"),
+            ):
+                if needle in raw_error:
+                    result["error"] = category
+                    break
+            else:
+                result["error"] = "other"
+        status = entry.get("status")
+        if type(status) is int and 100 <= status <= 599:
+            result["status"] = status
+        request = entry.get("request")
+        if isinstance(request, dict):
+            cleaned_request: dict[str, object] = {
+                "uri": "[redacted]",
+                "referer": "[redacted]",
+            }
+            method = request.get("method")
+            if method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
+                cleaned_request["method"] = method
+            headers = request.get("headers")
+            if isinstance(headers, dict):
+                safe_headers: dict[str, object] = {}
+                for key in ("X-Chaptera-Reader-Session", "X-Csrf-Token",
+                            "Authorization", "Cookie"):
+                    if any(isinstance(h, str) and h.lower() == key.lower()
+                           for h in headers):
+                        safe_headers[key] = "[redacted]"
+                for key, value in headers.items():
+                    if isinstance(key, str) and key.lower() == "content-type" \
+                            and isinstance(value, list) and len(value) == 1 \
+                            and value[0] in ("application/json", "application/octet-stream"):
+                        safe_headers["Content-Type"] = value
+                cleaned_request["headers"] = safe_headers
+            result["request"] = cleaned_request
+        return result
+
+    try:
+        safe = path.with_name(path.name + ".safe")
+        with path.open("r", encoding="utf-8", errors="replace") as source, \
+                safe.open("w", encoding="utf-8") as output:
+            for line in source:
+                try:
+                    cleaned = sanitize(json.loads(line))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    cleaned = {"level": "warn", "msg": "unparseable Caddy diagnostic suppressed"}
+                output.write(json.dumps(cleaned, sort_keys=True) + "\n")
+        safe.replace(path)
+    except OSError:
+        # On I/O failures, do not upload raw Caddy logs or partial output.
+        safe = path.with_name(path.name + ".safe")
+        safe.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+
+
+def _wait_tls_source_safe(port: int, process: subprocess.Popen[str], log_path: pathlib.Path) -> str:
+    """Keep raw reverse-proxy startup diagnostics out of public traceback.
+
+    The shared TLS readiness helper includes raw Caddy log tails on failure;
+    those tails could contain private headers. The guarded finally block will
+    sanitize the file before any CI artifact upload.
+    """
+    try:
+        return live.wait_tls(port, process, log_path)
+    except Exception:
+        raise RuntimeError("Caddy TLS readiness failed; inspect sanitized diagnostic artifact") from None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     for key in ("chaptera", "caddy", "fixture", "out"):
@@ -58,6 +165,7 @@ def main() -> int:
     oidc_thread.start()
     server = proxy = None
     server_stream = caddy_stream = None
+    oom_before = _cgroup_memory_events()
     try:
         live.write_isolation_wrapper(wrapper)
         live.write_config(
@@ -133,7 +241,7 @@ def main() -> int:
              "--adapter", "caddyfile"], env=caddy_env, cwd=work,
             text=True, stdout=caddy_stream, stderr=subprocess.STDOUT,
         )
-        certificate_hash = live.wait_tls(httpsport, proxy, caddy_log)
+        certificate_hash = _wait_tls_source_safe(httpsport, proxy, caddy_log)
         if not certificate_hash or len(certificate_hash) != 64:
             raise AssertionError("guest public TLS listener not established")
         origin = f"https://{live.EDGE_HOST}:{httpsport}"
@@ -162,9 +270,16 @@ def main() -> int:
             # Never echo raw source bytes, private HTTP payloads or bearer
             # material in the public CI progress output.
             raise AssertionError(
-                "physical Chromium guest acceptance failed; see chaptera/Caddy "
-                "logs and source-safe diagnostic: " +
-                (result.stderr or result.stdout)[-1800:]
+                "physical Chromium guest acceptance failed; see sanitized "
+                "chaptera/Caddy logs. Process/oom metadata: " +
+                json.dumps({
+                    "server_exit": server.poll() if server else None,
+                    "proxy_exit": proxy.poll() if proxy else None,
+                    "new_oom_kills": max(
+                        0, _cgroup_memory_events().get("oom_kill", 0)
+                        - oom_before.get("oom_kill", 0)),
+                }, sort_keys=True) +
+                "; browser exit status: " + str(result.returncode)
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
 
@@ -366,6 +481,7 @@ def main() -> int:
             caddy_stream.close()
         if server_stream is not None:
             server_stream.close()
+        _redact_caddy_log(caddy_log)
         oidc.shutdown()
         oidc.server_close()
         oidc_thread.join(timeout=2)
