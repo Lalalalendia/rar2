@@ -37,6 +37,11 @@ def enforce(source: str) -> None:
         "trusted main seed must use only exact Cargo manifest/lock/toolchain paths, not source-wide",
     )
 
+    require("RUSTUP_HOME: ${{ runner.temp }}\\chaptera-pinned-rustup" in source, "rustup isolation missing")
+    require(source.count("RUSTUP_HOME:") == 1, "rustup isolation must be job-local")
+    require("name: Verify isolated pinned Rust toolchain" in source, "toolchain check missing")
+    require("$toolchains.Count -ne 1" in source and "$toolchains[0] -ne $expected" in source, "inventory proof weakened")
+    require("active rustc is not pinned 1.94.1" in source, "active rustc proof missing")
     require("RUSTFLAGS: -C target-feature=+crt-static" in source, "crt-static contract weakened")
     require("CARGO_TARGET_DIR:" not in source, "producer/server binary paths silently changed")
     build = source.split("\n  build-portable:\n", 1)[1].split(
@@ -80,6 +85,12 @@ def main() -> int:
     source = WORKFLOW.read_text(encoding="utf-8")
     enforce(source)
     mutations = [
+        source.replace("RUSTUP_HOME: ${{ runner.temp }}\\chaptera-pinned-rustup", "RUSTUP_HOME: ${{ runner.temp }}\\untrusted", 1),
+        source.replace("name: Verify isolated pinned Rust toolchain", "name: Skip pinned Rust toolchain", 1),
+        source.replace("$toolchains.Count -ne 1", "$toolchains.Count -lt 1", 1),
+        source.replace("$toolchains[0] -ne $expected", "$toolchains[0] -eq $expected", 1),
+        source.replace("active rustc is not pinned 1.94.1", "active rustc bypassed", 1),
+
         source.replace(SAVE_IF, "save-if: true", 1),
         source.replace("vendor/producer-a -> target", "vendor/producer-a -> skipped", 1),
         source.replace("run: cargo build -p chaptera-server --release", "run: echo no-server", 1),
