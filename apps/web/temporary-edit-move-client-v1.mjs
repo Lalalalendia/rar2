@@ -42,6 +42,7 @@ const ACCEPTED_PROTOCOL = "chaptera.temporary-editor-move-node.v1";
 const REQUEST_PROTOCOL = "chaptera.commit-request.v1";
 const LOCAL_SCHEMA = "chaptera.temporary-edit.browser.v0";
 const SHAPE_ACK_PROTOCOL = "chaptera.temporary-editor-create-shape.v1";
+const TEXTBOX_ACK_PROTOCOL = "chaptera.temporary-editor-create-textbox.v1";
 const AUTHORED_UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function safeRgb(value) {
   return Array.isArray(value) && value.length === 3 &&
@@ -69,6 +70,30 @@ function canonicalCreatedRectangleMatches(operation, command) {
     sameRgb([stroke.color?.r, stroke.color?.g, stroke.color?.b], command.stroke_rgb) &&
     stroke.width_emu === command.stroke_width_emu;
 }
+function canonicalCreatedTextboxMatches(op, command) {
+  if (!object(op) || op.kind !== "create_text_box" ||
+      !AUTHORED_UUID_V7.test(op.node_id ?? "") ||
+      !AUTHORED_UUID_V7.test(op.story_id ?? "") ||
+      op.story_id === op.node_id ||
+      op.page_id !== command.page_id ||
+      !isSafeResizeRect(op.bounds)) return false;
+  const p = op.text_preset;
+  return op.bounds.x === command.x_emu &&
+    op.bounds.y === command.y_emu &&
+    op.bounds.width === command.width_emu &&
+    op.bounds.height === command.height_emu &&
+    p?.resource_id === "chaptera.desktop.fallback-font.ubuntu-light.v1" &&
+    p?.font_fingerprint_sha256 ===
+      "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70" &&
+    p.face_index === 0 && p.font_size_emu === 114300 && p.line_height_emu === 142875;
+}
+function sameAuthoredTextboxEvent(a, b) {
+  return object(a) && object(b) &&
+    ["kind","node_id","story_id","page_id"].every(key => a[key] === b[key]) &&
+    JSON.stringify(a.bounds) === JSON.stringify(b.bounds) &&
+    JSON.stringify(a.text_preset) === JSON.stringify(b.text_preset);
+}
+
 function sameAuthoredRectangleEvent(a, b) {
   // Host-generated NodeId is unknown before the POST; after ACK it must
   // exactly match the last canonical operation in the reopened project.
@@ -153,22 +178,22 @@ function newOperationId(cryptoObject) {
 // canonical textarea bridge; the browser cannot add/remove paragraph breaks.
 const HAS_CONTROL = /\p{Cc}/u;
 const UTF8 = new TextEncoder();
-function checkedTextareaProfile(canonicalText) {
+function checkedTextareaProfile(canonicalText, {allowEmpty = false} = {}) {
   if (typeof canonicalText !== "string") throw failure("temporary_story_intent_invalid");
   const profile = prepareStoryTextForTextarea(canonicalText);
-  if (!profile.value.length || UTF8.encode(canonicalText).length > 8192 ||
+  if ((!allowEmpty && !profile.value.length) || UTF8.encode(canonicalText).length > 8192 ||
       [...profile.value].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
     throw failure("temporary_story_intent_invalid");
   }
   return profile;
 }
 
-export function temporaryStoryTextForTextarea(canonicalText) {
-  return checkedTextareaProfile(canonicalText).value;
+export function temporaryStoryTextForTextarea(canonicalText, options = {}) {
+  return checkedTextareaProfile(canonicalText, options).value;
 }
 
-export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText) {
-  const profile = checkedTextareaProfile(canonicalText);
+export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText, options = {}) {
+  const profile = checkedTextareaProfile(canonicalText, options);
   if (typeof observedText !== "string" || !observedText.length ||
       observedText.includes("\r") ||
       [...observedText].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
@@ -194,8 +219,35 @@ export function temporaryStoryObservedToCanonicalStory(canonicalText, observedTe
   return {canonicalText: desired, range};
 }
 
-export function temporaryPlainStoryCandidates(graph) {
+function serverCreatedBlankStoryIds(graph, project) {
+  // Only canonical, confirmed CreateTextBox revision history authorizes an
+  // originally empty Story. A source-owned empty Story or an unbound UUIDv7
+  // is never promoted to a browser text-edit capability.
+  const admitted = new Set();
+  if (!Array.isArray(project?.operations)) return admitted;
+  for (const operation of project.operations) {
+    if (!object(operation) || operation.kind !== "create_text_box" ||
+        !AUTHORED_UUID_V7.test(operation.node_id ?? "") ||
+        !AUTHORED_UUID_V7.test(operation.story_id ?? "") ||
+        operation.node_id === operation.story_id ||
+        !object(graph.pages?.[operation.page_id])) continue;
+    const node = graph.nodes?.[operation.node_id];
+    if (!object(node) || node.header?.parent_id !== operation.page_id ||
+        node.payload?.story_frame?.story_id !== operation.story_id) continue;
+    const bounds = operation.bounds;
+    if (!canonicalCreatedTextboxMatches(operation, {
+      page_id:operation.page_id,
+      x_emu:bounds?.x, y_emu:bounds?.y,
+      width_emu:bounds?.width, height_emu:bounds?.height,
+    })) continue;
+    admitted.add(operation.story_id);
+  }
+  return admitted;
+}
+
+export function temporaryPlainStoryCandidates(graph, project = null) {
   if (!object(graph?.nodes) || !object(graph?.stories)) return [];
+  const serverCreatedBlank = serverCreatedBlankStoryIds(graph, project);
   const frames = new Map();
   const tables = new Set();
   for (const node of Object.values(graph.nodes)) {
@@ -209,11 +261,15 @@ export function temporaryPlainStoryCandidates(graph) {
     typeof id === "string" && id.length > 0 && id.length <= 128 &&
     (frames.get(id) ?? 0) === 1 && !tables.has(id) &&
     typeof story?.text === "string" && (() => {
-      try { checkedTextareaProfile(story.text); return true; } catch { return false; }
+      const allowEmpty = story.text === "" && serverCreatedBlank.has(id);
+      try { checkedTextareaProfile(story.text, {allowEmpty}); return true; }
+      catch { return false; }
     })() &&
     ["runs", "paragraphs", "fields", "hyperlinks"].every(part =>
       !Array.isArray(story[part]) || story[part].length === 0)
-  ).map(([story_id, story]) => ({story_id, text: story.text}))
+  ).map(([story_id, story]) =>
+    story.text === "" ? {story_id, text:"", authored_empty:true}
+      : {story_id, text:story.text})
     .sort((a,b) => a.story_id.localeCompare(b.story_id));
 }
 
@@ -374,7 +430,9 @@ export class TemporaryGuestMoveClientV1 {
       : request.command.kind === "resize_node"
         ? "chaptera.temporary-editor-resize-node.v1"
         : request.command.kind === "create_shape"
-          ? SHAPE_ACK_PROTOCOL : ACCEPTED_PROTOCOL;
+          ? SHAPE_ACK_PROTOCOL
+          : request.command.kind === "create_text_box"
+            ? TEXTBOX_ACK_PROTOCOL : ACCEPTED_PROTOCOL;
     if (ack.protocol_version !== protocol ||
         ack.document_id !== this.#sessionId || ack.source_hash !== this.#sourceHash ||
         ack.base_revision_id !== request.base_revision_id ||
@@ -398,6 +456,10 @@ export class TemporaryGuestMoveClientV1 {
     if (request.command.kind === "create_shape" &&
         !canonicalCreatedRectangleMatches(ack.canonical_operation, request.command)) {
       throw failure("temporary_create_shape_ack_operation_mismatch");
+    }
+    if (request.command.kind === "create_text_box" &&
+        !canonicalCreatedTextboxMatches(ack.canonical_operation, request.command)) {
+      throw failure("temporary_create_textbox_ack_operation_mismatch");
     }
     if (request.command.kind === "resize_node") {
       const after = ack.canonical_operation.after;
@@ -447,7 +509,13 @@ export class TemporaryGuestMoveClientV1 {
     const command = pending.request.command;
     const node = current.authoring_graph.nodes[command.node_id];
     const currentOperation = current.project?.operations?.at(-1);
-    const exactMutation = pending.action === "create-shape"
+    const exactMutation = pending.action === "create-textbox"
+      ? canonicalCreatedTextboxMatches(currentOperation, command) &&
+        sameAuthoredTextboxEvent(currentOperation, ack.canonical_operation) &&
+        current.authoring_graph.nodes?.[ack.canonical_operation.node_id]?.payload?.story_frame?.story_id ===
+          ack.canonical_operation.story_id &&
+        current.authoring_graph.stories?.[ack.canonical_operation.story_id]?.text === ""
+      : pending.action === "create-shape"
       ? canonicalCreatedRectangleMatches(currentOperation, command) &&
         sameAuthoredRectangleEvent(currentOperation, ack.canonical_operation)
       : pending.action === "story-range"
@@ -777,15 +845,66 @@ export class TemporaryGuestMoveClientV1 {
     } finally { this.#busy = false; }
   }
 
+  // A browser can request only a page-owned rectangle. NodeId, StoryId,
+  // authoring provenance and the immutable fallback font are minted by Rust.
+  async createTextBox({ pageId, bounds } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const page = this.#current.authoring_graph.pages?.[pageId];
+    const width = page?.size?.width, height = page?.size?.height;
+    if (!NODE.test(pageId ?? "") || !object(page) ||
+        !safeUnsigned(width) || width <= 0 || !safeUnsigned(height) || height <= 0 ||
+        !isSafeResizeRect(bounds) || bounds.x < 0 || bounds.y < 0 ||
+        bounds.x + bounds.width > width || bounds.y + bounds.height > height) {
+      throw failure("temporary_create_textbox_intent_invalid");
+    }
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "create-textbox",
+      before: this.#current,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "create_text_box", page_id: pageId,
+          x_emu: bounds.x, y_emu: bounds.y,
+          width_emu: bounds.width, height_emu: bounds.height,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
   async replaceStory({ storyId, newText } = {}) {
     if (this.#busy) throw failure("temporary_move_busy");
     if (this.#pending) throw failure("temporary_move_reconciliation_required");
     if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
-    const eligible = temporaryPlainStoryCandidates(this.#current.authoring_graph)
+    const eligible = temporaryPlainStoryCandidates(
+      this.#current.authoring_graph, this.#current.project)
       .find(story => story.story_id === storyId);
     if (!eligible) throw failure("temporary_story_intent_invalid");
     const {canonicalText, range} =
-      temporaryStoryObservedToCanonicalStory(eligible.text, newText);
+      temporaryStoryObservedToCanonicalStory(
+        eligible.text, newText, {allowEmpty:eligible.authored_empty === true});
     const clientOperationId = this.#operationIdFactory();
     if (typeof clientOperationId !== "string" ||
         !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {

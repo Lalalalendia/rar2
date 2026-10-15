@@ -17,7 +17,7 @@ use chaptera_viewer_render_plan::{
 use pub_editor::{EditOperation, EditorSession, LengthEmu, NodeId, Sha256Digest, StoryId};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
-    font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
+    ResolvedPhysicalNode, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
     shape_bounded_ltr_segment,
 };
 use pub_output::{
@@ -148,10 +148,14 @@ fn render_current_fixed_pdf_with_sheet(
         return Err("edited_pdf_source_identity_mismatch");
     }
 
-    // The Guest contract admits exactly MoveNode, ResizeNode and plain Story.
-    // Unknown operations must never be silently discarded by a fixed exporter.
+    // The PDF renderer reads a source-only Viewer scene. A newly authored
+    // TextFrame is absent until its exact canonical provenance has been proven
+    // and its bounded physical node is explicitly attached to this scene.
+    // Unknown operations remain fail-closed: never drop authored Story text.
+    const MAX_AUTHORED_TEXT_BOXES_PDF: usize = 32;
     let mut moved = BTreeSet::<NodeId>::new();
     let mut resized = BTreeSet::<NodeId>::new();
+    let mut authored_text_boxes = Vec::<(NodeId, StoryId)>::new();
     let mut edited_stories = 0usize;
     for operation in session.operations() {
         match operation {
@@ -162,6 +166,72 @@ fn render_current_fixed_pdf_with_sheet(
                 resized.insert(*node_id);
             }
             EditOperation::ReplaceStoryRange { .. } => edited_stories += 1,
+            EditOperation::CreateTextBox {
+                node_id,
+                story_id,
+                page_id,
+                bounds,
+                text_preset,
+            } => {
+                if authored_text_boxes.len() >= MAX_AUTHORED_TEXT_BOXES_PDF
+                    || authored_text_boxes
+                        .iter()
+                        .any(|(id, sid)| id == node_id || sid == story_id)
+                    || !bundle
+                        .geometry
+                        .document
+                        .pages
+                        .iter()
+                        .any(|page| page.id == *page_id)
+                    || bundle
+                        .geometry
+                        .scene
+                        .nodes
+                        .iter()
+                        .any(|node| node.origin == *node_id)
+                {
+                    return Err("edited_pdf_authored_text_frame_identity_invalid");
+                }
+                // EditorSession proves the user-created UUIDv7 identities,
+                // unique StoryFrame owner, source-free Story and default font.
+                let proof = session
+                    .prove_author_created_story_v1(*story_id)
+                    .map_err(|_| "edited_pdf_authored_story_unproven")?
+                    .ok_or("edited_pdf_authored_story_unproven")?;
+                let node = session
+                    .graph()
+                    .nodes
+                    .get(node_id)
+                    .ok_or("edited_pdf_authored_text_frame_missing")?;
+                let story = session
+                    .graph()
+                    .stories
+                    .get(story_id)
+                    .ok_or("edited_pdf_authored_story_missing")?;
+                if proof.frame_id != *node_id
+                    || proof.story_id != *story_id
+                    || proof.page_id != *page_id
+                    || proof.text_preset != *text_preset
+                    || node.header.id != *node_id
+                    || node.header.parent_id != page_id.into_canonical()
+                    || node.header.bounds != *bounds
+                    || story.text.len() > 8192
+                    || story.text.chars().any(char::is_control)
+                    || text_preset.font_size_emu.get()
+                        != chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU
+                {
+                    return Err("edited_pdf_authored_story_identity_mismatch");
+                }
+                // Preserve the canonical Page-local geometry from replay;
+                // do not mint arbitrary fake source paint order, font, or image.
+                bundle.geometry.scene.nodes.push(ResolvedPhysicalNode {
+                    origin: *node_id,
+                    parent_origin: node.header.parent_id,
+                    bounds: node.header.bounds,
+                    transform: node.header.transform.clone(),
+                });
+                authored_text_boxes.push((*node_id, *story_id));
+            }
             _ => return Err("edited_pdf_operation_unsupported"),
         }
     }
@@ -251,6 +321,40 @@ fn render_current_fixed_pdf_with_sheet(
         },
     )
     .map_err(|_| "edited_pdf_current_text_layout_unavailable")?;
+
+    // Author-created text is not a source-backed typography run. Require the
+    // exact canonical Story to survive the bounded shaping consumer, with no
+    // absent glyph or detached frame, before a PDF can be offered as current.
+    for (node_id, story_id) in &authored_text_boxes {
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
+            .ok_or("edited_pdf_authored_story_missing")?;
+        let authored_lines = flow
+            .lines
+            .iter()
+            .filter(|line| line.story_origin == *story_id)
+            .collect::<Vec<_>>();
+        if story.text.is_empty() {
+            if authored_lines.iter().any(|line| !line.text.is_empty()) {
+                return Err("edited_pdf_authored_story_mismatched");
+            }
+            continue;
+        }
+        if authored_lines.is_empty()
+            || authored_lines.iter().any(|line| {
+                line.frame_origin != *node_id || line.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
+            })
+            || authored_lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>()
+                != story.text
+        {
+            return Err("edited_pdf_authored_story_not_fully_shaped");
+        }
+    }
 
     // The Reader already shapes source-verified multi-line frames with the
     // pinned fallback font at their admitted typography size, including exact
@@ -742,6 +846,21 @@ fn render_current_fixed_pdf_with_sheet(
         }
     }
 
+    for (node_id, story_id) in &authored_text_boxes {
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
+            .ok_or("edited_pdf_authored_story_missing")?;
+        let current_text = text_runs
+            .iter()
+            .filter(|run| run.node_id == *node_id)
+            .map(|run| run.logical_text.as_str())
+            .collect::<String>();
+        if current_text != story.text {
+            return Err("edited_pdf_authored_story_not_painted");
+        }
+    }
     let (font_plan, fonts) = if text_runs.is_empty() {
         (None, Vec::new())
     } else {
@@ -865,6 +984,30 @@ fn render_current_fixed_pdf_with_sheet(
         return Err("edited_pdf_output_invalid");
     }
 
+    // Text-run preparation is not proof of actual PDF output. Require the
+    // bounded renderer to acknowledge a PAINTED authored node and an emitted
+    // Text program in its source-neutral paint trace for every nonempty new
+    // Story. The Chromium PDF consumer separately verifies readable glyphs.
+    for (node_id, story_id) in &authored_text_boxes {
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
+            .ok_or("edited_pdf_authored_story_missing")?;
+        if story.text.is_empty() {
+            continue;
+        }
+        if !rendered.report.nodes.iter().any(|node| {
+            node.origin == *node_id && node.disposition == PdfRenderDisposition::Painted
+        }) || !rendered.paint_trace.iter().any(|event| {
+            event.node_origin == *node_id
+                && event.kind == pub_pdf::PdfPaintTraceKindV1::Text
+                && event.unwrapped_program_byte_range[1] > event.unwrapped_program_byte_range[0]
+        }) {
+            return Err("edited_pdf_authored_text_not_physically_painted");
+        }
+    }
+
     let painted = rendered
         .report
         .nodes
@@ -930,10 +1073,11 @@ fn render_current_fixed_pdf_with_sheet(
             "source_sized_mixed_size_spans": mixed_size_accepted_spans,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
+            "authored_text_frames": authored_text_boxes.len(),
             "layout_warnings": layout_warnings,
             "pdf_warnings": pdf_warnings
         },
-        "fidelity": if unavailable_glyph_lines > 0 || partial > 0 || unsupported > 0 || layout_warnings > 0
+        "fidelity": if !authored_text_boxes.is_empty() || unavailable_glyph_lines > 0 || partial > 0 || unsupported > 0 || layout_warnings > 0
             || pdf_warnings > 0 || !resources.text_runs.is_empty() {
                 "partial"
             } else {
@@ -946,7 +1090,8 @@ fn render_current_fixed_pdf_with_sheet(
             "source_size_single_line_only_if_fits_exact_frame",
             "mixed_or_stale_source_typography_keeps_fallback",
             "missing_fallback_glyph_lines_disclosed_not_serialized",
-            "publisher_rich_vectors_and_effects_not_fully_supported"
+            "publisher_rich_vectors_and_effects_not_fully_supported",
+            "authored_text_frame_mixed_source_stack_is_partial"
         ]
     });
     Ok(CurrentFixedPdf {
