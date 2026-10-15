@@ -521,6 +521,11 @@ fn build_pdf_artifact(
             }
             Some(FixedNodePaint {
                 node_id: paint.node_id,
+                // The standalone CLI owns a separate pinned byte-exact PDF
+                // oracle (SampleNewsletter). It remains on its existing
+                // rectangle-only v0.1 profile until independent acceptance
+                // authorizes richer primitives for that product surface.
+                preset_shape: None,
                 fill_rgb: paint.solid_fill_rgb,
                 stroke: paint.solid_line.as_ref().map(|line| FixedStroke {
                     rgb: line.rgb,
