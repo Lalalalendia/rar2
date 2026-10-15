@@ -229,6 +229,9 @@ def sbdc_r1_browser_own_pdf_raster(
         own_pdf = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         from sbdc_r1_text_line_geometry import own_pdf_text_rects
         pdf_text_rects = own_pdf_text_rects(page, 144)
+        # Physical vector operators; no private drawing geometry leaves this scope.
+        pdf_cubic_paths = [drawing["rect"] for drawing in page.get_drawings()
+                           if sum(item[0] == "c" for item in drawing["items"]) >= 4]
     width_diff = browser.width - own_pdf.width
     height_diff = browser.height - own_pdf.height
     if abs(width_diff) > 1 or abs(height_diff) > 1:
@@ -289,6 +292,37 @@ def sbdc_r1_browser_own_pdf_raster(
             "center_offset_px": round(delta, 3),
             "center_tolerance_px": round(tolerance, 3),
         })
+    # The isolated 2.5.pub Publisher oracle proves that the SBDC center badge
+    # contains one opaque white ellipse plus two unfilled concentric ellipses.
+    # Verify this source-backed geometry directly in BOTH actual R1 consumers,
+    # rather than accepting three white/gray rectangles or a center overpainted
+    # by the foreground hero image. All coordinates and private pixels stay local.
+    ellipse_nodes = [node for node in edited_scene.get("nodes", [])
+                     if node.get("paint", {}).get("preset_shape") == "ellipse"]
+    white_ellipses = [node for node in ellipse_nodes
+                      if node.get("paint", {}).get("fill_rgb") == [255, 255, 255]]
+    if len(ellipse_nodes) != 3 or len(white_ellipses) != 1:
+        raise AssertionError("sbdc034_source_circle_three_ellipses_not_admitted")
+    for node in ellipse_nodes:
+        b = node["bounds"]
+        left = b["x"] / 12700
+        top = b["y"] / 12700
+        right = (b["x"] + b["width"]) / 12700
+        bottom = (b["y"] + b["height"]) / 12700
+        if not any(all(abs(actual - expected) <= 1.0
+                       for actual, expected in zip(
+                           (path.x0, path.y0, path.x1, path.y1),
+                           (left, top, right, bottom))) for path in pdf_cubic_paths):
+            raise AssertionError("sbdc034_pdf_circle_emitted_nonellipse_or_wrong_bounds")
+    white = white_ellipses[0]["bounds"]
+    center_x = round((white["x"] + white["width"] / 2) * width / page_width)
+    center_y = round((white["y"] + white["height"] / 2) * height / page_height)
+    if not 0 <= center_x < width or not 0 <= center_y < height:
+        raise AssertionError("sbdc034_white_circle_center_outside_page")
+    if any(min(image.getpixel((center_x, center_y))) < 245
+           for image in (browser, own_pdf)):
+        raise AssertionError("sbdc034_white_circle_obscured_in_browser_or_pdf")
+
     diff = compare_rasters(
         {"width": width, "height": height, "samples": browser.tobytes()},
         {"width": width, "height": height, "samples": own_pdf.tobytes()},
@@ -340,6 +374,9 @@ def sbdc_r1_browser_own_pdf_raster(
         "page_rounding_edge_delta_px": [width_diff, height_diff],
         "browser_all_images_decoded": True,
         "four_star_red_pixels_in_both_rasters": True,
+        "source_ellipse_count": 3,
+        "pdf_ellipse_cubic_count": 3,
+        "white_circle_center_in_both_rasters": True,
         "star_roi_metrics": star_metrics,
         "full_page_significant_fraction": round(diff["significant_fraction"], 6),
         "full_page_mean_abs_channel_delta": round(diff["mean_abs_channel_delta"], 4),

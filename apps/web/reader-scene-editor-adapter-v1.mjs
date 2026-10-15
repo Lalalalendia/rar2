@@ -51,6 +51,9 @@ function browserPaint(node) {
     paint_id: "reader-paint:" + node.node_id,
     fill,
     stroke,
+    // Only forward geometry directly admitted by the Reader source contract.
+    // An unknown/unsupported preset must not acquire invented ellipse authority.
+    preset_shape: paint.preset_shape === "ellipse" ? "ellipse" : null,
   };
 }
 
