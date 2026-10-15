@@ -7,6 +7,7 @@ BASE = Path(__file__).resolve().parents[1]
 PACKET = BASE / "experiments" / "auth-wrap-01.packet.json"
 SCRIPT = BASE / "operations" / "auth_wrap_01.ps1"
 LAUNCHER = BASE / "auth_wrap_direct_1188.ps1"
+CHILD = BASE / "auth_wrap_arm_1188.ps1"
 
 
 class PacketContract(unittest.TestCase):
@@ -37,40 +38,36 @@ class PacketContract(unittest.TestCase):
         for filename in (
             "validate_packet.py", "prepare_native_run.ps1", "finalize_native_run.ps1",
             "verify_reset_receipt.py", "validate_auth_wrap_native_receipt.py",
+            "auth_wrap_arm_1188.ps1",
             "PubRuntime.psm1", "native-receipt.schema.json",
             "pub-reader/Cargo.toml", "pub-reader/src/bin/auth_wrap_oracle_tool.rs",
         ):
             self.assertIn(filename, direct)
 
     def test_native_environment_handoff_is_same_process_and_revalidated(self):
-        # prepare_native_run.ps1 exports these variables to its *process*.
-        # Separate pwsh commands lose the fixture / Publisher executable
-        # bindings, allowing native execution to fail or depend on ambient env.
         direct = LAUNCHER.read_text(encoding="utf-8")
-        self.assertIn(
-            "& (Join-Path $repo 'tools/research-runner/prepare_native_run.ps1')",
-            direct,
-        )
-        self.assertIn("& $operationPath -PacketPath $packetPath", direct)
-        self.assertIn(
-            "& (Join-Path $repo 'tools/research-runner/finalize_native_run.ps1')",
-            direct,
-        )
-        self.assertNotIn(
-            "InvokeTool 'pwsh' @('-NoProfile','-File','tools/research-runner/prepare_native_run.ps1'",
-            direct,
-        )
+        child = CHILD.read_text(encoding="utf-8")
+        self.assertIn("PUB_RESEARCH_AUTH_WRAP_CHILD_SCRIPT", direct)
+        self.assertIn("Start-Process -FilePath (Get-Command pwsh).Source", direct)
+        for name in ("prepare_native_run.ps1", "operations/auth_wrap_01.ps1",
+                     "finalize_native_run.ps1"):
+            self.assertIn(name, child)
         for name in ("PUB_RESEARCH_FIXTURE", "PUB_RESEARCH_PUBLISHER_EXE"):
-            self.assertIn(f"Remove-Item Env:{name}", direct)
-            self.assertIn(f"$env:{name}", direct)
-        self.assertIn(
-            "Prepared fixture binding missing or changed after native preflight",
-            direct,
-        )
-        self.assertIn(
-            "Prepared Publisher executable binding missing or changed after native preflight",
-            direct,
-        )
+            self.assertIn(f"Remove-Item Env:{name}", child)
+            self.assertIn(f"$env:{name}", child)
+        self.assertIn("Prepared fixture binding missing or changed after native preflight", child)
+        self.assertIn("Prepared Publisher executable binding missing or changed after native preflight", child)
+
+    def test_native_watchdog_is_bounded_and_owner_only(self):
+        direct = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn("Global\\Chaptera_AUTH_WRAP_01", direct)
+        self.assertIn("$lease.WaitOne(0)", direct)
+        self.assertIn("$child.WaitForExit(600000)", direct)
+        self.assertIn("$child.Kill()", direct)
+        self.assertIn("timeout_requires_manual_snapshot_restore", direct)
+        self.assertIn("auth_wrap_arm_1188.ps1", direct)
+        self.assertNotIn("Stop-Process -Name MSPUB", direct)
+        self.assertNotIn("Stop-Process -Id $publisherProcess.Id", direct)
 
     def test_no_ambient_source_downloads(self):
         for path in (SCRIPT, LAUNCHER):

@@ -212,10 +212,31 @@ try {
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.goto(origin);
 
+  await check("Reader exposes a safe separate temporary Editor entry without session transfer", async () => {
+    const link = page.locator("#temporary-editor-link");
+    assert.equal(await link.isVisible(), true);
+    assert.equal(await link.getAttribute("href"),
+      "https://reader.chaptera.online/editor/temporary-preview");
+    assert.equal(await link.getAttribute("target"), "_blank");
+    assert.equal(await link.getAttribute("referrerpolicy"), "no-referrer");
+    const rel = await link.getAttribute("rel");
+    assert.match(rel ?? "", /\bnoopener\b/);
+    assert.match(rel ?? "", /\bnoreferrer\b/);
+    assert.match(await link.getAttribute("aria-label") ?? "", /choose the PUB again/);
+    assert.match(await link.textContent(), /separate upload/);
+    const before = requests.length;
+    await link.focus();
+    assert.equal(requests.length, before,
+      "Reader discovery must never initiate an edit or transfer the current file");
+  });
+
   await check("private raw upload and atomic scene publication", async () => {
     await open(page);
     await status(page, /Opened with display limitations/);
     assert.equal(await page.locator("#reader").isVisible(), true);
+    assert.equal(await page.locator("#temporary-editor-link").isVisible(), true);
+    assert.equal(await page.locator("#reopen-file").isVisible(), true,
+      "existing Reader file-open control must remain available");
     assert.equal(await page.locator("#open-file").isVisible(), false);
     assert.deepEqual(
       await page.evaluate(() => [
@@ -321,6 +342,10 @@ try {
       return Number(svg.getAttribute("width")) <= viewer.clientWidth - 24;
     });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const editorLink390 = await page.locator("#temporary-editor-link").boundingBox();
+    assert.ok(editorLink390 && editorLink390.width >= 60 &&
+      editorLink390.x >= 0 && editorLink390.x + editorLink390.width <= 391,
+      "390px Reader topbar must keep the Editor link visible without horizontal overflow");
     const dimensions = await page.locator("#pages svg").first().evaluate((svg) => [Number(svg.getAttribute("width")), Number(svg.getAttribute("height"))]);
     assert.ok(Math.abs(dimensions[1] / dimensions[0] - 760 / 600) < 0.001);
     await page.screenshot({ path: join(output, "mobile.png"), fullPage: true });
@@ -467,6 +492,13 @@ try {
     await page.keyboard.press("Enter");
     assert.equal(await page.locator("#contribution-filename").textContent(), name);
     await page.setViewportSize({ width: 320, height: 568 });
+    const editorLink320 = await page.locator("#temporary-editor-link").boundingBox();
+    assert.ok(editorLink320 && editorLink320.width >= 60 &&
+      editorLink320.x >= 0 && editorLink320.x + editorLink320.width <= 321 &&
+      editorLink320.y >= 0 && editorLink320.y + editorLink320.height <= 568,
+      "320px Reader topbar must expose the editor entry without clipping");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+      "cross-product discovery may not create horizontal scroll on narrow viewports");
     const geometry = await page.locator("#contribution-dialog").evaluate((dialog) => ({
       width: dialog.clientWidth,
       scrollWidth: dialog.scrollWidth,

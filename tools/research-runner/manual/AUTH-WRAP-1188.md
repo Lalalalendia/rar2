@@ -77,3 +77,20 @@ Publisher in the current Linux authoring environment. The branch and PR remain
 DRAFT until an independently verified Windows native run is recorded. Geometry
 joining and manual wrap-distance applicability are intentionally strict; on an
 unsupported source they fail closed rather than inventing a match.
+
+## 2026-10-15 bounded native child and advisory lease
+
+Each AUTH-WRAP A/B arm now runs in one independent PowerShell child with a
+600-second limit. Preparation, COM operation and finalization preserve the
+same process-local fixture and Publisher SHA bindings. Private logs stay
+under OutputRoot/private. The watchdog terminates only its own child process
+handle on timeout, marks local quarantine, and stops rather than killing a
+Publisher process by creation time. Restore a dedicated lab snapshot after
+any child timeout or orphaned MSPUB process.
+
+The named global mutex only coordinates Chaptera launchers. It does NOT
+prove that the out-of-process Publisher COM server belongs to the test, or
+exclude concurrent human Publisher use. The approved isolated VM, owned-PID
+review, and independently verified reset-provider negative tests remain
+required. Hosted -CheckOnly is not a native semantic or safety PASS.
+

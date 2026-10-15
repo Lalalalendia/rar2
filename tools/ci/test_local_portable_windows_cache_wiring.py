@@ -13,13 +13,28 @@ def require(condition: bool, message: str) -> None:
 
 def enforce(source: str) -> None:
     header = source.split("\npermissions:", 1)[0]
-    require("  workflow_call:\n" in header, "workflow_call removed")
-    require("  workflow_dispatch:\n" in header, "manual main seed removed")
+    require(header.count("  workflow_call:\n") == 1, "workflow_call removed or duplicated")
+    require(header.count("  workflow_dispatch:\n") == 1, "manual main seed removed or duplicated")
     require(header.count("  push:\n") == 1, "unexpected push trigger count")
+    require("  pull_request:\n" not in header and "  pull_request_target:\n" not in header,
+            "untrusted PR must not become a cache seed trigger")
+    require("  schedule:\n" not in header, "unexpected recurring expensive Windows seed")
     push_body = header.split("  push:\n", 1)[1].strip()
+    allowed_main_paths = (
+        ".github/workflows/chaptera-local-portable-windows.yml",
+        "Cargo.toml",
+        "Cargo.lock",
+        "**/Cargo.toml",
+        "**/Cargo.lock",
+        ".cargo/**",
+        "rust-toolchain*",
+    )
+    expected_push = "branches: [main]\n    paths:\n" + "\n".join(
+        f'      - "{path}"' for path in allowed_main_paths
+    )
     require(
-        push_body == 'branches: [main]\n    paths:\n      - ".github/workflows/chaptera-local-portable-windows.yml"',
-        "trusted push must trigger only on own workflow, not source-wide",
+        push_body == expected_push,
+        "trusted main seed must use only exact Cargo manifest/lock/toolchain paths, not source-wide",
     )
 
     require("RUSTFLAGS: -C target-feature=+crt-static" in source, "crt-static contract weakened")
@@ -73,6 +88,16 @@ def main() -> int:
         source.replace('cache-workspace-crates: "false"', 'cache-workspace-crates: "true"', 1),
         source.replace('      - ".github/workflows/chaptera-local-portable-windows.yml"', '      - "apps/**"', 1),
         source.replace("Prove no-checkout zero-install startup", "skip clean smoke", 1),
+        source.replace('      - "**/Cargo.toml"', '      - "**/*.rs"', 1),
+        source.replace('      - "**/Cargo.lock"', '      - "crates/**"', 1),
+        source.replace('      - "Cargo.toml"', '      - "apps/**"', 1),
+        source.replace('      - "Cargo.lock"', '      - "vendor/**"', 1),
+        source.replace('      - ".cargo/**"', '      - "**/*.py"', 1),
+        source.replace('      - "rust-toolchain*"', '      - "**/*.rs"', 1),
+        source.replace("  push:\n", "  pull_request:\n  push:\n", 1),
+        source.replace("  push:\n", '  schedule:\n    - cron: "0 * * * *"\n  push:\n', 1),
+        source.replace('      - "**/Cargo.toml"', '      - "**/Cargo.toml"\n      - "apps/**"', 1),
+        source.replace("branches: [main]", "branches: ['**']", 1),
     ]
     for i, mutation in enumerate(mutations, 1):
         require(mutation != source, f"negative control {i} was not applied")

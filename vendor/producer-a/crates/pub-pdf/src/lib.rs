@@ -16,7 +16,7 @@ pub use text::{FixedFontResource, FixedTextRun, PdfTextPreparationError};
 
 use image::{AnimationDecoder, ImageFormat};
 use pub_layout::{BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface};
-use pub_model::{Affine2D, CanonicalId, NodeId, PageId, ResourceId};
+use pub_model::{Affine2D, CanonicalId, EMU_PER_MILLIMETER, NodeId, PageId, ResourceId};
 use pub_output::{FontIdentity, OutputFontPlan};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,6 +148,36 @@ pub struct PdfRenderCapabilities {
     pub richer_vectors_effects: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfPaintTraceKindV1 {
+    Rectangle,
+    Image,
+    Text,
+}
+
+/// One emitted paint operation in page-local, back-to-front order.
+///
+/// The byte range indexes the unwrapped page paint program before the final
+/// page-height transform. Nine-up repeats this program nine times, so the
+/// range does not pretend to identify one physical sheet copy. Node bounds
+/// are geometry envelopes, not exact glyph ink, clipping or visible pixels.
+/// The trace never includes source media bytes, Story text or font binaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdfPaintTraceEventV1 {
+    pub page_origin: PageId,
+    pub node_origin: NodeId,
+    pub page_paint_index: usize,
+    pub kind: PdfPaintTraceKindV1,
+    pub node_bounds_emu: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_origin: Option<ResourceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_run_ordinal: Option<usize>,
+    pub unwrapped_program_byte_range: [usize; 2],
+    pub output_sheet_copies: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PdfRenderReport {
     pub schema_version: String,
@@ -163,6 +193,8 @@ pub struct PdfRenderReport {
 pub struct PdfRenderOutput {
     pub bytes: Vec<u8>,
     pub report: PdfRenderReport,
+    /// Source-neutral diagnostic sidecar kept out of public release receipts.
+    pub paint_trace: Vec<PdfPaintTraceEventV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +242,7 @@ pub enum PdfRenderError {
         message: String,
     },
     Text(PdfTextPreparationError),
+    NineUpCardGeometryUnsupported,
 }
 
 impl fmt::Display for PdfRenderError {
@@ -279,6 +312,9 @@ impl fmt::Display for PdfRenderError {
                 "could not decode fixed image resource {resource_id:?}: {message}"
             ),
             Self::Text(error) => write!(f, "resolved text preparation failed: {error}"),
+            Self::NineUpCardGeometryUnsupported => {
+                f.write_str("9-up A4 needs exactly one 85 x 55 mm page")
+            }
         }
     }
 }
@@ -289,6 +325,42 @@ impl From<PdfTextPreparationError> for PdfRenderError {
     fn from(value: PdfTextPreparationError) -> Self {
         Self::Text(value)
     }
+}
+
+fn record_paint_trace(
+    trace: &mut Vec<PdfPaintTraceEventV1>,
+    page_indices: &mut BTreeMap<PageId, usize>,
+    page: PageId,
+    node: &ResolvedPhysicalNode,
+    kind: PdfPaintTraceKindV1,
+    resource_origin: Option<ResourceId>,
+    text_run_ordinal: Option<usize>,
+    from: usize,
+    to: usize,
+    nine_up: bool,
+) {
+    debug_assert!(
+        to > from,
+        "an emitted paint operation writes actual commands"
+    );
+    let next_index = page_indices.entry(page).or_insert(0);
+    trace.push(PdfPaintTraceEventV1 {
+        page_origin: page,
+        node_origin: node.origin,
+        page_paint_index: *next_index,
+        kind,
+        node_bounds_emu: [
+            node.bounds.x.get(),
+            node.bounds.y.get(),
+            node.bounds.width.get(),
+            node.bounds.height.get(),
+        ],
+        resource_origin,
+        text_run_ordinal,
+        unwrapped_program_byte_range: [from, to],
+        output_sheet_copies: if nine_up { 9 } else { 1 },
+    });
+    *next_index += 1;
 }
 
 /// Render the current bounded fixed-PDF subset.
@@ -302,6 +374,34 @@ pub fn render_bounded_pdf(
     scene: &BoundedResolvedScene,
     resources: &FixedPdfResources,
     target: &PdfTargetProfile,
+) -> Result<PdfRenderOutput, PdfRenderError> {
+    render_bounded_pdf_with_sheet(scene, resources, target, false)
+}
+
+/// One physical 297 x 210 mm A4 sheet, nine full-size copies of one logical
+/// 85 x 55 mm card. This is the existing vector renderer, not PUB re-parsing.
+///
+/// Layout: 3 x 3 row-major, 5 mm gutters, centered margins 16 x 17.5 mm.
+/// Unsupported geometry is rejected rather than silently scaled or cropped.
+pub fn render_bounded_pdf_a4_card_9up(
+    scene: &BoundedResolvedScene,
+    resources: &FixedPdfResources,
+    target: &PdfTargetProfile,
+) -> Result<PdfRenderOutput, PdfRenderError> {
+    if scene.surfaces.len() != 1
+        || scene.surfaces[0].size.width.get() != 85 * EMU_PER_MILLIMETER
+        || scene.surfaces[0].size.height.get() != 55 * EMU_PER_MILLIMETER
+    {
+        return Err(PdfRenderError::NineUpCardGeometryUnsupported);
+    }
+    render_bounded_pdf_with_sheet(scene, resources, target, true)
+}
+
+fn render_bounded_pdf_with_sheet(
+    scene: &BoundedResolvedScene,
+    resources: &FixedPdfResources,
+    target: &PdfTargetProfile,
+    nine_up: bool,
 ) -> Result<PdfRenderOutput, PdfRenderError> {
     let mut surfaces = if resources.page_order.is_empty() {
         let mut surfaces = scene.surfaces.clone();
@@ -344,8 +444,13 @@ pub fn render_bounded_pdf(
         }
     }
 
-    let mut nodes = scene.nodes.clone();
-    nodes.sort_by_key(|node| node.origin);
+    // The resolved scene is a back-to-front paint sequence. In particular,
+    // pub-viewer applies admitted source-page stacking order to these slots.
+    // Sorting by canonical NodeId here can draw a background image *after*
+    // its foreground image even when Viewer displays them correctly.
+    // Keep the caller's deterministic scene order; unknown source-order
+    // participants retain their existing bounded projection slots.
+    let nodes = scene.nodes.clone();
 
     let node_ids = nodes
         .iter()
@@ -428,6 +533,8 @@ pub fn render_bounded_pdf(
         .map(|surface| (surface.origin, String::new()))
         .collect::<BTreeMap<_, _>>();
     let mut reports = Vec::with_capacity(nodes.len());
+    let mut paint_trace = Vec::new();
+    let mut paint_indices_by_page = BTreeMap::<PageId, usize>::new();
     let mut diagnostics = Vec::new();
     let mut image_resources_by_page = surfaces
         .iter()
@@ -489,11 +596,25 @@ pub fn render_bounded_pdf(
             .expect("page content buffer must exist");
 
         if let Some(paint) = valid_paint {
+            let from = content.len();
             append_rectangle(content, node, paint);
+            record_paint_trace(
+                &mut paint_trace,
+                &mut paint_indices_by_page,
+                surface.origin,
+                node,
+                PdfPaintTraceKindV1::Rectangle,
+                None,
+                None,
+                from,
+                content.len(),
+                nine_up,
+            );
         }
 
         let mut image_painted = false;
         let mut image_partial = false;
+        let image_program_start = content.len();
         if let Some(resource_id) = image_resource_id {
             let prepared = prepared_images
                 .get(&resource_id)
@@ -539,6 +660,18 @@ pub fn render_bounded_pdf(
                         }
                     }
                     if image_painted {
+                        record_paint_trace(
+                            &mut paint_trace,
+                            &mut paint_indices_by_page,
+                            surface.origin,
+                            node,
+                            PdfPaintTraceKindV1::Image,
+                            Some(resource_id),
+                            None,
+                            image_program_start,
+                            content.len(),
+                            nine_up,
+                        );
                         image_resources_by_page
                             .get_mut(&surface.origin)
                             .expect("page image resource set must exist")
@@ -560,15 +693,28 @@ pub fn render_bounded_pdf(
         let mut text_painted = false;
         let mut text_partial = false;
         if let Some(runs) = prepared_text.runs_by_node.get(&node.origin) {
-            for run in runs {
+            for (ordinal, run) in runs.iter().enumerate() {
                 match run {
                     text::PreparedTextRun::Painted { .. } => {
+                        let from = content.len();
                         if let Some(identity) = text::append_text(
                             content,
                             node.bounds.x.get(),
                             node.bounds.y.get(),
                             run,
                         ) {
+                            record_paint_trace(
+                                &mut paint_trace,
+                                &mut paint_indices_by_page,
+                                surface.origin,
+                                node,
+                                PdfPaintTraceKindV1::Text,
+                                None,
+                                Some(ordinal),
+                                from,
+                                content.len(),
+                                nine_up,
+                            );
                             font_resources_by_page
                                 .get_mut(&surface.origin)
                                 .expect("page font resource set must exist")
@@ -635,6 +781,36 @@ pub fn render_bounded_pdf(
     reports.sort_by_key(|node| node.origin);
     diagnostics.sort_by(|left, right| (left.origin, &left.code).cmp(&(right.origin, &right.code)));
 
+    if nine_up {
+        // Stamp the already painted, source-neutral physical content. The
+        // ordinary write_pdf applies the page-height Y flip exactly once.
+        // Existing font/image XObjects are reused by all nine placements.
+        let page_id = surfaces[0].origin;
+        let source = content_by_page
+            .get(&page_id)
+            .ok_or(PdfRenderError::NineUpCardGeometryUnsupported)?
+            .clone();
+        let mut sheet = String::with_capacity(source.len().saturating_mul(9).saturating_add(600));
+        for row in 0_i64..3 {
+            for column in 0_i64..3 {
+                let x = (16 + column * 90) * EMU_PER_MILLIMETER;
+                let y = (35 * EMU_PER_MILLIMETER / 2) + row * 60 * EMU_PER_MILLIMETER;
+                sheet.push_str("q\n1 0 0 1 ");
+                sheet.push_str(&format_points(x));
+                sheet.push(' ');
+                sheet.push_str(&format_points(y));
+                sheet.push_str(" cm\n");
+                sheet.push_str(&source);
+                sheet.push_str("Q\n");
+            }
+        }
+        content_by_page.insert(page_id, sheet);
+        surfaces[0].size = pub_model::Size2D::new(
+            pub_model::LengthEmu::new(297 * EMU_PER_MILLIMETER),
+            pub_model::LengthEmu::new(210 * EMU_PER_MILLIMETER),
+        );
+    }
+
     let page_reports = surfaces.iter().map(page_report).collect::<Vec<_>>();
 
     let bytes = write_pdf(
@@ -648,6 +824,7 @@ pub fn render_bounded_pdf(
 
     Ok(PdfRenderOutput {
         bytes,
+        paint_trace,
         report: PdfRenderReport {
             schema_version: PDF_RENDER_SCHEMA_V0_1.into(),
             target: target.clone(),
@@ -1303,6 +1480,56 @@ mod tests {
     }
 
     #[test]
+    fn a4_nine_up_stamps_vector_card_nine_times_and_replays_exactly() {
+        let mut card = scene();
+        card.surfaces.retain(|surface| surface.origin == page_id(1));
+        card.surfaces[0].size = Size2D::new(
+            LengthEmu::new(85 * EMU_PER_MILLIMETER),
+            LengthEmu::new(55 * EMU_PER_MILLIMETER),
+        );
+        card.nodes
+            .retain(|node| node.parent_origin == page_id(1).into_canonical());
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        let normal = render_bounded_pdf(&card, &resources(), &target).unwrap();
+        let first = render_bounded_pdf_a4_card_9up(&card, &resources(), &target).unwrap();
+        let replay = render_bounded_pdf_a4_card_9up(&card, &resources(), &target).unwrap();
+        assert_eq!(first, replay);
+        assert_ne!(first.bytes, normal.bytes);
+        assert_eq!(first.report.pages.len(), 1);
+        assert_eq!(first.report.pages[0].width_emu, 297 * EMU_PER_MILLIMETER);
+        assert_eq!(first.report.pages[0].height_emu, 210 * EMU_PER_MILLIMETER);
+        let bytes = String::from_utf8_lossy(&first.bytes);
+        assert_eq!(bytes.matches("q\n1 0 0 1 ").count(), 9);
+        assert!(bytes.contains(&format!(
+            "q\n1 0 0 1 {} {} cm\n",
+            format_points(16 * EMU_PER_MILLIMETER),
+            format_points(35 * EMU_PER_MILLIMETER / 2),
+        )));
+        assert_eq!(card.surfaces[0].size.width.get(), 85 * EMU_PER_MILLIMETER);
+    }
+
+    #[test]
+    fn a4_nine_up_rejects_multipage_or_non_card_geometry() {
+        let target = PdfTargetProfile::basic_geometry_v0_1();
+        assert!(matches!(
+            render_bounded_pdf_a4_card_9up(&scene(), &resources(), &target),
+            Err(PdfRenderError::NineUpCardGeometryUnsupported)
+        ));
+        let mut wrong = scene();
+        wrong
+            .surfaces
+            .retain(|surface| surface.origin == page_id(1));
+        wrong.surfaces[0].size = Size2D::new(
+            LengthEmu::new(90 * EMU_PER_MILLIMETER),
+            LengthEmu::new(55 * EMU_PER_MILLIMETER),
+        );
+        assert!(matches!(
+            render_bounded_pdf_a4_card_9up(&wrong, &resources(), &target),
+            Err(PdfRenderError::NineUpCardGeometryUnsupported)
+        ));
+    }
+
+    #[test]
     fn explicit_page_order_overrides_canonical_surface_sort() {
         let target = PdfTargetProfile::basic_geometry_v0_1();
         let mut resources = resources();
@@ -1378,6 +1605,46 @@ mod tests {
     }
 
     #[test]
+    fn paint_trace_is_page_local_and_maps_to_written_rectangle_operators() {
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources(),
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .expect("valid fixed PDF");
+        let trace = &output.paint_trace;
+        assert_eq!(trace.len(), 2, "unsupported nodes emit no paint trace");
+        assert_eq!(trace[0].page_origin, page_id(1));
+        assert_eq!(trace[0].node_origin, node_id(11));
+        assert_eq!(trace[0].page_paint_index, 0);
+        assert_eq!(trace[0].kind, PdfPaintTraceKindV1::Rectangle);
+        assert_eq!(
+            trace[0].node_bounds_emu,
+            [381_000, 508_000, 889_000, 762_000]
+        );
+        assert_eq!(trace[1].node_origin, node_id(10));
+        assert_eq!(trace[1].page_paint_index, 1);
+        assert_eq!(trace[0].output_sheet_copies, 1);
+        let header = b"q\n1 0 0 -1 0 780 cm\n";
+        let prefix = output
+            .bytes
+            .windows(header.len())
+            .position(|window| window == header)
+            .expect("page one transform");
+        let program_base = prefix + header.len();
+        for event in trace {
+            let [from, to] = event.unwrapped_program_byte_range;
+            assert!(to > from);
+            let operation = &output.bytes[program_base + from..program_base + to];
+            assert!(operation.starts_with(b"q\n"));
+            assert!(operation.ends_with(b"Q\n"));
+        }
+        let trace_json = serde_json::to_string(trace).expect("serializable trace");
+        assert!(!trace_json.contains("ActualText"));
+        assert!(!trace_json.contains("font_binary"));
+    }
+
+    #[test]
     fn emitted_rectangle_coordinates_and_paint_are_stable() {
         let output = render_bounded_pdf(
             &scene(),
@@ -1390,6 +1657,112 @@ mod tests {
         assert!(text.contains("1 0 0 -1 0 780 cm"));
         assert!(text.contains("1 0 0 rg\n10 20 100 50 re\nf"));
         assert!(text.contains("0 0 1 RG\n1 w\n30 40 70 60 re\nS"));
+    }
+
+    #[test]
+    fn overlapping_exact_images_keep_resolved_scene_back_to_front_order() {
+        use std::io::Cursor;
+
+        // The front image deliberately has a numerically LOWER canonical
+        // NodeId than the back image. Sorting by NodeId is not paint-order
+        // authority and would conceal the foreground resource.
+        let mut visual = scene();
+        let page = page_id(1);
+        visual.surfaces.retain(|surface| surface.origin == page);
+        visual
+            .nodes
+            .retain(|node| node.parent_origin == page.into_canonical());
+        assert_eq!(
+            visual
+                .nodes
+                .iter()
+                .map(|node| node.origin)
+                .collect::<Vec<_>>(),
+            vec![node_id(11), node_id(10)]
+        );
+        visual.nodes[0].bounds = visual.nodes[1].bounds;
+
+        let png = |rgb: [u8; 3]| {
+            let image = image::RgbImage::from_pixel(2, 2, image::Rgb(rgb));
+            let mut bytes = Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image)
+                .write_to(&mut bytes, ImageFormat::Png)
+                .expect("synthetic 2x2 test PNG");
+            bytes.into_inner()
+        };
+        let back_image = resource_id(61);
+        let front_image = resource_id(62);
+        let images = FixedPdfResources {
+            images: vec![
+                FixedImageResource {
+                    resource_id: back_image,
+                    mime: "image/png".into(),
+                    source_exact: true,
+                    node_ids: vec![node_id(11)],
+                    placements: Vec::new(),
+                    bytes: png([0, 0, 255]),
+                },
+                FixedImageResource {
+                    resource_id: front_image,
+                    mime: "image/png".into(),
+                    source_exact: true,
+                    node_ids: vec![node_id(10)],
+                    placements: Vec::new(),
+                    bytes: png([255, 0, 0]),
+                },
+            ],
+            ..FixedPdfResources::default()
+        };
+        let render = |scene: &BoundedResolvedScene| {
+            render_bounded_pdf(scene, &images, &PdfTargetProfile::basic_geometry_v0_1())
+                .expect("valid bounded source-free image render")
+        };
+
+        let first = render(&visual);
+        assert_eq!(
+            first,
+            render(&visual),
+            "identical order remains byte deterministic"
+        );
+        let observed = first
+            .paint_trace
+            .iter()
+            .filter(|event| event.kind == PdfPaintTraceKindV1::Image)
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].node_origin, node_id(11));
+        assert_eq!(observed[0].resource_origin, Some(back_image));
+        assert_eq!(observed[0].page_paint_index, 0);
+        assert_eq!(observed[1].node_origin, node_id(10));
+        assert_eq!(observed[1].resource_origin, Some(front_image));
+        assert_eq!(observed[1].page_paint_index, 1);
+        assert_eq!(observed[0].node_bounds_emu, observed[1].node_bounds_emu);
+
+        let pdf = String::from_utf8_lossy(&first.bytes);
+        let back_op = format!("/{} Do\n", image_name(back_image));
+        let front_op = format!("/{} Do\n", image_name(front_image));
+        assert!(
+            pdf.find(&back_op).expect("back image operator")
+                < pdf.find(&front_op).expect("front image operator"),
+            "the team image must paint after the covered background"
+        );
+
+        // Reversing explicit scene order reverses actual paint order. This
+        // guards against a future canonical-NodeId sort in the PDF backend.
+        let mut reversed = visual.clone();
+        reversed.nodes.reverse();
+        let second = render(&reversed);
+        assert_ne!(first.bytes, second.bytes);
+        assert_eq!(second.paint_trace[0].node_origin, node_id(10));
+        assert_eq!(second.paint_trace[0].resource_origin, Some(front_image));
+        assert_eq!(second.paint_trace[1].node_origin, node_id(11));
+        assert_eq!(second.paint_trace[1].resource_origin, Some(back_image));
+        let inverse_pdf = String::from_utf8_lossy(&second.bytes);
+        assert!(
+            inverse_pdf.find(&front_op).expect("front operator")
+                < inverse_pdf.find(&back_op).expect("back operator"),
+            "scene ordering, not NodeId, controls overlapping image stacking"
+        );
     }
 
     #[test]

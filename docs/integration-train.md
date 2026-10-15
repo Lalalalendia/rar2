@@ -58,7 +58,7 @@ Every candidate must:
 - own unique commits not shared with another candidate;
 - own changed paths that do not overlap any other candidate;
 - change at most 25 files;
-- stay inside bounded Rust feature/test surfaces.
+- stay inside bounded Rust feature/test surfaces or the exact four-file safe Web Editor helper allowlist described below.
 
 The whole train is capped at 80 changed files.
 
@@ -157,3 +157,15 @@ This split prevents two opposite errors:
 2. over-counting embedded evidence as if smoke/typography allocated extra runners beside the visual oracle.
 
 Promotion verification recomputes and compares both sets on the exact composed head.
+
+
+## Bounded Web Editor helper train (15 October 2026)
+
+The active CI-INTEGRATION-TRAIN-01 owner can now admit **two independent non-authority Web UI modules**, with their matching test files:
+
+- `apps/web/editor-comfort-v1.mjs` and `.test.mjs`: existing `web-editor-comfort-01.yml` owner;
+- `apps/web/reader-scene-editor-interaction-v1.mjs` and `.test.mjs`: existing `web-editor-http-seam.yml` owner.
+
+The allowlist and per-path workflow provenance share one mapping in `tools/integration_train.py`. The planner fails closed if the matching existing workflow no longer lists its exact PR path. The receipt includes the real `web_workflow:...` hosted families, and composed-head verification recomputes their union. Every candidate still needs green exact-head `dev_fast_loop --mode feature --run` proof and non-overlapping ownership. The shared train PR runs the existing triggered workflows once on the composed SHA; no workflow or semantic test is skipped.
+
+**Not admitted:** `temporary-editor-preview.{html,css,mjs}`, Guest session/token or mutation clients, backend Rust routes, security/retention/release/deploy files, and shared observability transport. Those continue as single-owner normal PRs. The two currently overlapping Guest canvas PRs (#2776 and #2780) cannot board this train. This change is a narrow tooling enablement, **not** a release, production deploy, complete Guest trace, or claim that 3–4 current Guest features can yet be batch-promoted. Expanding the allowlist requires explicit task ownership, one exact workflow coverage mapping, negative tests and measurements on a real-source cohort.

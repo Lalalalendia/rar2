@@ -98,6 +98,25 @@ jobs:
           fi
           python tools/dev_fast_loop.py             --base "$base"             --head "$head"             --mode edit             --run             --rust-cache off             --budget-seconds 120             --receipt target/pub-editor-fast-pr/receipt.json             --no-history
 
+      - name: Authored Rectangle IDML and ODG semantic regressions
+        if: contains(github.event.pull_request.title, 'EDITOR-CREATED-SHAPE-EDITABLE-EXPORT-01')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-export -p pub-editor -p pub-idml -p pub-odg -- --check
+          # Count actual tests before running: a filtered cargo test with zero cases is a false pass.
+          for package in pub-idml pub-odg; do
+            listing="$(cargo test --manifest-path vendor/producer-a/Cargo.toml -p "$package" --lib authored_rectangle_overlay_v1 -- --list)"
+            printf '%s\n' "$listing"
+            count="$(printf '%s\n' "$listing" | grep -Ec 'semantic::authored_rectangle_overlay_v1::tests::.*: test' || true)"
+            if [[ "$count" -lt 2 ]]; then
+              echo "::error::Expected at least 2 authored rectangle tests in $package; found $count"
+              exit 1
+            fi
+            cargo test --manifest-path vendor/producer-a/Cargo.toml -p "$package" --lib authored_rectangle_overlay_v1
+          done
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin editable_route_probe
+
       - name: Print timing receipt
         if: always()
         shell: bash
@@ -120,5 +139,96 @@ jobs:
         with:
           name: pub-editor-fast-pr-${{ github.event.pull_request.head.sha || github.sha }}
           path: target/pub-editor-fast-pr/receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  authored-consumers:
+    name: Authored Rectangle real IDML/ODG consumers
+    if: contains(github.event.pull_request.title, 'EDITOR-CREATED-SHAPE-EDITABLE-EXPORT-01')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Fetch exact pinned real Publisher source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/authored-rectangle" target/authored-consumers
+          curl --fail --location --retry 4 --retry-delay 2 "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" --output "$RUNNER_TEMP/authored-rectangle/source.pub"
+          printf "%s  %s\n" "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" "$RUNNER_TEMP/authored-rectangle/source.pub" | sha256sum -c -
+          test "$(stat -c "%s" "$RUNNER_TEMP/authored-rectangle/source.pub")" = "291840"
+          python -m py_compile tools/ci/verify_authored_rectangle_export.py
+
+      - name: Create actual authored Rectangle, replay EditorProject and serialize IDML/ODG
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin editable_route_probe -- --authored-rectangle-export "$RUNNER_TEMP/authored-rectangle/source.pub" "$GITHUB_WORKSPACE/target/authored-consumers" > target/authored-consumers/probe.json
+          python tools/ci/verify_authored_rectangle_export.py \
+            --source "$RUNNER_TEMP/authored-rectangle/source.pub" \
+            --directory "$GITHUB_WORKSPACE/target/authored-consumers" \
+            --probe-receipt target/authored-consumers/probe.json \
+            --xml-only > target/authored-consumers/xml-receipt.json
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          # Never time out apt while dpkg is installing: download the verified
+          # Ubuntu package closure first, then install it without networking.
+          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          consumers=(scribus libreoffice-draw xvfb)
+          if ! sudo timeout --kill-after=10s 120s apt-get "${apt_opts[@]}" update ||
+             ! sudo timeout --kill-after=10s 180s apt-get "${apt_opts[@]}" install -y --download-only --no-install-recommends "${consumers[@]}"; then
+            # The default GitHub Ubuntu image advertises a signed Ubuntu mirror
+            # list: switch away from intermittent azure.archive download stalls.
+            mirror_file=/etc/apt/apt-mirrors.txt
+            if [[ ! -f "$mirror_file" ]] || ! grep -Fq "http://azure.archive.ubuntu.com/ubuntu" "$mirror_file"; then
+              echo "::error::Expected Ubuntu Azure mirrorlist unavailable; no untrusted package source fallback" >&2
+              exit 1
+            fi
+            echo "::warning::Primary Ubuntu mirror exceeded bounded budget; retrying official archive.ubuntu.com"
+            sudo sed -i 's@http://azure.archive.ubuntu.com/ubuntu@http://archive.ubuntu.com/ubuntu@g' "$mirror_file"
+            sudo timeout --kill-after=10s 120s apt-get "${apt_opts[@]}" update
+            sudo timeout --kill-after=10s 300s apt-get "${apt_opts[@]}" install -y --download-only --no-install-recommends "${consumers[@]}"
+          fi
+          # Ubuntu's apt signatures/package checks remain authoritative. No
+          # consumer or independent product assertion may be skipped on errors.
+          sudo apt-get "${apt_opts[@]}" install -y --no-download --no-install-recommends "${consumers[@]}"
+          command -v scribus
+          command -v libreoffice
+          command -v xvfb-run
+      - name: Import exact authored ZIPs into Scribus and LibreOffice Draw
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/ci/verify_authored_rectangle_export.py \
+            --source "$RUNNER_TEMP/authored-rectangle/source.pub" \
+            --directory "$GITHUB_WORKSPACE/target/authored-consumers" \
+            --probe-receipt target/authored-consumers/probe.json \
+            > target/authored-consumers/consumer-receipt.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('target/authored-consumers/consumer-receipt.json').read_text())
+          assert result['status'] == 'PASS'
+          assert all(result[t]['consumer']['reopened'] is True for t in ('idml', 'odg'))
+          print('Independent authored IDML and ODG consumers: PASS')
+          PY
+
+      - name: Retain bounded authored consumer receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authored-rectangle-consumers-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/authored-consumers/probe.json
+            target/authored-consumers/xml-receipt.json
+            target/authored-consumers/consumer-receipt.json
           if-no-files-found: warn
           retention-days: 30

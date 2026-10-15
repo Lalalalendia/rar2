@@ -62,7 +62,7 @@ jobs:
           scene=json.loads(Path("target/web-font-env-real/SampleNewsletter.scene.json").read_text())
           # Exact snapshot for the physically refreshed canonical Viewer receipt.
           print({"scene_snapshot_sha256": scene["snapshot_id"], "story_frames": len(scene["story_frames"])})
-          assert scene["snapshot_id"] == "sha256:86f086fddf20881d21df113c4e448621daecac4c474ad5d01b63ae71e18f55e8", scene["snapshot_id"]
+          assert scene["snapshot_id"] == "sha256:79dda537ed558bd00b726c2256fb218e0b1c12a709db5f151ca1b6f5efc03856", scene["snapshot_id"]
           assert len(scene["stories"]) == 44
           assert len(scene["story_frames"]) == 63
           text=next((c for c in scene["capabilities"] if c["key"]=="render.text"), None)

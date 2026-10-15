@@ -1,8 +1,9 @@
 //! Plain Story text-session orchestration.
 //!
 //! This owner handles Story session capability and text replacement only.
-//! Formatting, paragraph alignment, frame topology, CreateTextBox, export,
-//! and generic history replay remain outside this module.
+//! Formatting, paragraph alignment, frame topology, export,
+//! and generic history replay remain outside this module. CreateTextBox is
+//! owned here as a bounded text-session authoring entrypoint.
 
 use super::*;
 use chaptera_text_format_overlay::{
@@ -606,6 +607,40 @@ pub(super) fn apply_text_format_history_operation_v1(
         });
     }
     Ok(receipt.after_state)
+}
+
+impl EditorSession {
+    pub fn create_text_box(
+        &mut self,
+        node_id: NodeId,
+        story_id: StoryId,
+        page_id: PageId,
+        bounds: RectEmu,
+        text_preset: AuthoringTextPresetV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        validate_create_text_box_candidate(
+            &self.graph,
+            node_id,
+            story_id,
+            page_id,
+            bounds,
+            &text_preset,
+        )?;
+
+        let operation = EditOperation::CreateTextBox {
+            node_id,
+            story_id,
+            page_id,
+            bounds,
+            text_preset,
+        };
+        apply_forward(&mut self.graph, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
 }
 
 #[cfg(test)]

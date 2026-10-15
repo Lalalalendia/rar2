@@ -8,6 +8,16 @@ on:
       - "tools/dev_fast_loop_components.json"
       - "docs/dev-fast-loop.md"
       - ".github/workflows/dev-fast-loop-selftest.yml"
+      - ".github/workflows/ci-local-dev-transport-01.yml"
+      - "tools/ci/local_dev_transport.py"
+      - "tools/ci/test_local_dev_transport.py"
+      - "docs/ci-local-dev-transport-01.md"
+      - "tools/ci/local_dev_handoff.py"
+      - "tools/ci/test_local_dev_handoff.py"
+      - "docs/ci-local-dev-handoff-01.md"
+      - "tools/ci/bootstrap_local_dev_runner.py"
+      - "tools/ci/test_bootstrap_local_dev_runner.py"
+      - "docs/ci-local-dev-bootstrap-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -28,6 +38,18 @@ jobs:
           python-version: "3.12"
       - name: Unit-test fast-loop routing
         run: python tools/test_dev_fast_loop.py
+      - name: Unit-test isolated Windows dev transport without a self-hosted runner
+        run: |
+          python -m py_compile tools/ci/local_dev_transport.py
+          python -m unittest discover -s tools/ci -p test_local_dev_transport.py
+      - name: Unit-test opt-in local task handoff with disposable Git remotes
+        run: |
+          python -m py_compile tools/ci/local_dev_handoff.py
+          python -m unittest discover -s tools/ci -p test_local_dev_handoff.py
+      - name: Offline Windows dev runner bootstrap contract
+        run: |
+          python -m py_compile tools/ci/bootstrap_local_dev_runner.py
+          python -m unittest discover -s tools/ci -p test_bootstrap_local_dev_runner.py
       - name: Prove a bounded self-plan
         run: |
           python tools/dev_fast_loop.py \

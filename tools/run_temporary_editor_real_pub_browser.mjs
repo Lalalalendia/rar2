@@ -16,14 +16,21 @@ function arg(name) {
 const origin = arg("origin");
 // Explicit, allowlisted public-host mode; default remains the local Caddy test.
 const publicOrigin = process.argv.includes("--public-origin");
+const resizeMode = process.argv.includes("--resize");
+const keyboardNudgeMode = process.argv.includes("--keyboard-nudge");
 const fixture = resolve(arg("fixture"));
 const fixtureHash = arg("fixture-sha256");
 const receiptPath = resolve(arg("out"));
 // Preserve the existing bounded IDML proof. PDF is a separate physical
 // geometry consumer of the same browser workflow, selected explicitly by CI.
 const exportTarget = process.argv.includes("--target") ? arg("target") : "idml";
-if (exportTarget !== "idml" && exportTarget !== "pdf") {
-  throw Error("guest browser acceptance target must be idml or pdf");
+if (keyboardNudgeMode && (resizeMode || exportTarget !== "idml")) {
+  throw Error("keyboard nudge physical proof requires non-resize IDML");
+}
+if (!(resizeMode
+  ? ["idml", "odg"].includes(exportTarget)
+  : ["idml", "pdf"].includes(exportTarget))) {
+  throw Error("guest browser acceptance target invalid for selected mutation");
 }
 if (!(publicOrigin ? origin === "https://reader.chaptera.online" :
       /^https:\/\/reader\.chaptera\.test:\d+$/.test(origin))
@@ -68,7 +75,7 @@ page.on("response", response => {
     dest = observed.current;
   } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/scene$/.test(path)) {
     dest = observed.scenes;
-  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/move-node$/.test(path)) {
+  } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/(?:move-node|resize-node)$/.test(path)) {
     dest = observed.accepted;
   } else if (/\/v1\/editor\/temporary-sessions\/[^/]+\/exports\/(?:idml|odg|pdf)$/.test(path)
       && new URL(response.url()).searchParams.get("report_only") === "true") {
@@ -99,7 +106,17 @@ function contains(node, x, y) {
 }
 function candidatePoints(scene, current, target) {
   const shapes = scene.nodes.filter(n =>
-    direct(n) && current.authoring_graph?.nodes?.[n.node_id]);
+    direct(n) && current.authoring_graph?.nodes?.[n.node_id] &&
+    (!(resizeMode || keyboardNudgeMode) || (() => {
+      const graph = current.authoring_graph;
+      const header = graph.nodes[n.node_id]?.header;
+      const transform = header?.transform;
+      return header && graph.pages && Object.hasOwn(graph.pages, header.parent_id) &&
+        header.bounds?.width > 0 && header.bounds?.height > 0 &&
+        (!transform || (String(transform.a) === "1" &&
+          String(transform.b) === "0" && String(transform.c) === "0" &&
+          String(transform.d) === "1" && transform.tx === 0 && transform.ty === 0));
+    })()));
   // The actual IDML exporter uses pub-editor::frame_from_payload:
   // payload.story_frame.story_id, NOT node.kind (imported publisher text
   // frames may retain NodeKind::Shape). Do not infer IDML admission from the
@@ -165,8 +182,8 @@ try {
   await page.locator("#temporary-start").click();
   try {
     await page.waitForFunction(() =>
-      document.querySelector("#temporary-status")?.textContent.includes(
-        "Открыта редактируемая ревизия"), null, { timeout: 170000 });
+      /(?:PUB открыт|Открыта редактируемая ревизия)/.test(
+        document.querySelector("#temporary-status")?.textContent ?? ""), null, { timeout: 170000 });
   } catch {
     const ui = await page.locator("#temporary-status").textContent();
     throw Error("real PUB editor did not open; visible_status=" +
@@ -185,6 +202,77 @@ try {
   assert.equal(sourceScene?.revision_id, oldHead.revision_id);
   assert.ok(Array.isArray(sourceScene?.nodes) && sourceScene.nodes.length > 0,
     "real isolated Publisher scene did not render");
+
+  // Download an actual pristine PDF before any pointer or authoring event.
+  // Compare the browser's downloaded bytes against the canonical private
+  // report and independently reopen the physical PDF xref and page tree.
+  let pristinePdfProof = null;
+  if (exportTarget === "pdf") {
+    const untouched = page.locator("#temporary-download-pdf");
+    await untouched.waitFor({ state: "visible" });
+    // The controller sets its ready text at the end of show(), while
+    // guarded() clears the busy flag and enables export in finally.
+    // Status readiness does not imply that the button has been enabled yet.
+    // Poll only this local UI state; never retry/replay an export request.
+    try {
+      await page.waitForFunction(() => {
+        const control = document.getElementById("temporary-download-pdf");
+        return control && !control.disabled &&
+          control.textContent?.trim() === "Скачать PDF";
+      }, null, { timeout: 15000 });
+    } catch {
+      const ui = await page.locator("#temporary-status").textContent();
+      throw Error("unedited supported PUB baseline PDF control stayed unavailable: " +
+        String(ui).slice(0, 220));
+    }
+    assert.equal(await untouched.isEnabled(), true,
+      "unedited supported PUB must allow baseline PDF");
+    assert.equal((await untouched.textContent())?.trim(), "Скачать PDF");
+    const baselinePromise = page.waitForEvent("download", { timeout: 90000 });
+    await untouched.click();
+    const baselineDownload = await baselinePromise;
+    await settleResponses();
+    assert.equal(baselineDownload.suggestedFilename(), "chaptera-original.pdf");
+    const downloaded = await readFile(await baselineDownload.path());
+    assert.ok(downloaded.length > 40 && downloaded.length <= 16 * 1024 * 1024,
+      "baseline PDF byte length must be bounded");
+    assert.ok(downloaded.subarray(0, 5).equals(Buffer.from("%PDF-")),
+      "baseline download has no PDF signature");
+    const pdfText = downloaded.toString("latin1");
+    const xrefMatch = pdfText.match(/startxref\s+(\d+)\s+%%EOF\s*$/);
+    assert.ok(xrefMatch, "baseline PDF must end with startxref and EOF");
+    const xrefOffset = Number(xrefMatch[1]);
+    assert.ok(Number.isSafeInteger(xrefOffset) && xrefOffset > 0 &&
+      xrefOffset < downloaded.length &&
+      pdfText.slice(xrefOffset).startsWith("xref\n"),
+      "baseline physical PDF cross-reference cannot be reopened");
+    const pageCount = [...pdfText.matchAll(/\/Type\s*\/Page\s*\/Parent/g)].length;
+    assert.ok(pageCount > 0 && pageCount <= 1000,
+      "baseline PDF contains no physical pages");
+    const baselineReport = observed.reports.at(-1);
+    const baselineSha = sha256(downloaded);
+    assert.equal(baselineReport?.protocol_version,
+      "chaptera.temporary-edited-export-report.v1");
+    assert.equal(baselineReport?.target, "pdf");
+    assert.equal(baselineReport?.is_baseline, true);
+    assert.equal(baselineReport?.source_hash, fixtureHash);
+    assert.equal(baselineReport?.revision_id, oldHead.revision_id);
+    assert.equal(baselineReport?.canonical_authoring_revision_id,
+      oldHead.canonical_authoring_revision_id);
+    assert.equal(baselineReport?.artifact_sha256, baselineSha);
+    assert.equal(baselineReport?.loss_report?.counts?.blocking, 0);
+    assert.equal(baselineReport?.loss_report?.counts?.moved_nodes, 0);
+    assert.ok(observed.responses.some(r => r.path.endsWith("/exports/pdf") &&
+      r.status === 200 && r.mime === "application/pdf"),
+      "baseline PDF lacked an actual HTTPS application/pdf response");
+    assert.equal(observed.requests.filter(r => r.method === "POST" &&
+      r.path.endsWith("/move-node")).length, 0,
+      "PDF without an edit must not create an artificial MoveNode");
+    assert.equal(observed.current.at(-1)?.revision_cursor, 0);
+    assert.equal(sha256(await readFile(fixture)), fixtureHash,
+      "pristine export altered original PUB");
+    pristinePdfProof = { sha256: baselineSha, pageCount };
+  }
 
   const candidates = candidatePoints(sourceScene, oldHead, exportTarget);
   assert.ok(candidates.length,
@@ -215,20 +303,55 @@ try {
   }
   const originalBounds = oldHead.authoring_graph.nodes[selected.nodeId].header.bounds;
 
-  // This is a real pointer-driven Chromium event. The test does not call POST
-  // /move-node directly and cannot create an edit outside the browser UI.
-  await page.mouse.move(selected.screen.x, selected.screen.y);
-  await page.mouse.down();
-  await page.mouse.move(selected.screen.x + 20, selected.screen.y + 15,
-    { steps: 5 });
-  await page.mouse.up();
+  // Real pointer selection focuses the canvas. Keyboard mode sends real
+  // Chromium key events, never a synthetic fetch or harness-owned mutation.
+  if (keyboardNudgeMode) {
+    await page.mouse.click(selected.screen.x, selected.screen.y);
+    const focused = await page.evaluate(() => document.activeElement?.id);
+    assert.equal(focused, "temporary-pages",
+      "real pointer selection did not focus the keyboard-authoring canvas");
+    const handles = page.locator('[data-temporary-resize-handle]' +
+      '[data-node-id="' + selected.nodeId + '"]');
+    assert.equal(await handles.count(), 8,
+      "real page-local candidate was not selected for keyboard authoring");
+    await page.keyboard.press("Control+ArrowRight");
+    await page.waitForTimeout(250);
+    assert.equal(observed.requests.filter(r => r.method === "POST" &&
+      r.path.endsWith("/move-node")).length, 0,
+      "modified Arrow key unexpectedly committed a document operation");
+    assert.equal(await page.evaluate(() => document.activeElement?.id),
+      "temporary-pages", "modified Arrow key transferred canvas focus");
+    await page.keyboard.press("ArrowRight");
+  } else if (resizeMode) {
+    await page.mouse.click(selected.screen.x, selected.screen.y);
+    const selector = '[data-temporary-resize-handle="bottom-right"]' +
+      '[data-node-id="' + selected.nodeId + '"]';
+    const handle = page.locator(selector).last();
+    await handle.waitFor({state:"visible",timeout:12000});
+    await handle.scrollIntoViewIfNeeded();
+    const bounds = await handle.boundingBox();
+    assert.ok(bounds && bounds.width > 0 && bounds.height > 0,
+      "canonical resize handle was not projected to the actual browser");
+    const px=bounds.x+bounds.width/2,py=bounds.y+bounds.height/2;
+    await page.mouse.move(px,py);
+    await page.mouse.down();
+    await page.mouse.move(px+20,py+15,{steps:5});
+    await page.mouse.up();
+  } else {
+    await page.mouse.move(selected.screen.x, selected.screen.y);
+    await page.mouse.down();
+    await page.mouse.move(selected.screen.x+20, selected.screen.y+15,{steps:5});
+    await page.mouse.up();
+  }
   try {
-    await page.waitForFunction(() =>
-      document.querySelector("#temporary-status")?.textContent.includes(
-        "Правка сохранена в ревизии"), null, { timeout: 60000 });
+    await page.waitForFunction(expected =>
+      document.querySelector("#temporary-status")?.textContent.includes(expected),
+      keyboardNudgeMode ? "Объект перемещён и сохранён" : "Правка сохранена в ревизии",
+      { timeout: 60000 });
   } catch {
     const state = await page.locator("#temporary-status").textContent();
-    throw Error("physical browser MoveNode failed with UI status: " +
+    throw Error("physical browser " + (keyboardNudgeMode ? "Keyboard MoveNode" : resizeMode ? "ResizeNode" : "MoveNode") +
+      " failed with UI status: " +
       String(state).slice(0,180) + " http=" +
       JSON.stringify(observed.responses.slice(-18)) +
       " page_errors=" + JSON.stringify(browserErrors));
@@ -237,8 +360,9 @@ try {
   const nextHead = observed.current.at(-1);
   const accepted = observed.accepted.at(-1);
   const revised = observed.scenes.at(-1);
-  assert.equal(accepted?.protocol_version,
-    "chaptera.temporary-editor-move-node.v1");
+  assert.equal(accepted?.protocol_version,resizeMode
+    ? "chaptera.temporary-editor-resize-node.v1"
+    : "chaptera.temporary-editor-move-node.v1");
   assert.equal(accepted.document_id, oldHead.document_id);
   assert.equal(accepted.source_hash, fixtureHash);
   assert.equal(accepted.base_revision_id, oldHead.revision_id);
@@ -255,10 +379,57 @@ try {
   assert.ok(geometry && authoring, "edited node vanished from the revised scene");
   assert.equal(geometry.x, authoring.x);
   assert.equal(geometry.y, authoring.y);
-  assert.ok(geometry.x !== originalBounds.x || geometry.y !== originalBounds.y,
+  assert.ok(resizeMode
+    ? (geometry.width !== originalBounds.width || geometry.height !== originalBounds.height)
+    : (geometry.x !== originalBounds.x || geometry.y !== originalBounds.y),
     "real browser gesture left canonical geometry unchanged");
+  if (keyboardNudgeMode) {
+    assert.equal(geometry.x, originalBounds.x + 12_700,
+      "real ArrowRight must move by exactly one point in canonical EMUs");
+    assert.equal(geometry.y, originalBounds.y);
+    assert.equal(geometry.width, originalBounds.width);
+    assert.equal(geometry.height, originalBounds.height);
+  }
+  if (resizeMode) {
+    assert.equal(geometry.x,originalBounds.x);
+    assert.equal(geometry.y,originalBounds.y);
+    assert.equal(accepted.canonical_operation?.kind,"resize_node");
+    assert.equal(accepted.canonical_operation?.after?.width,geometry.width);
+    assert.equal(accepted.canonical_operation?.after?.height,geometry.height);
+  }
 
   const target = exportTarget;
+  // The read-only verified PDF preview is part of the real user journey.
+  // Use the SAME accepted canonical revision and independently check the
+  // browser download's physical SHA later. No extra authoring operation.
+  let currentPdfPreviewDigest = null;
+  if (target === "pdf") {
+    const postsBefore = observed.requests.filter(request =>
+      request.method === "POST" && /\/(move-node|resize-node|story-range|create-shape)$/.test(request.path)).length;
+    const preview = page.locator("#temporary-preview-pdf");
+    await preview.waitFor({state:"visible"});
+    assert.equal(await preview.isEnabled(), true);
+    await preview.click();
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-pdf-preview")?.hidden === false,
+      null, {timeout: 120000});
+    const frameUrl = await page.locator("#temporary-pdf-frame").getAttribute("src");
+    assert.match(frameUrl ?? "", /^blob:/, "real preview is not a private verified blob");
+    const previewReport = observed.reports.at(-1);
+    assert.equal(previewReport?.revision_id, accepted.revision_id);
+    assert.equal(previewReport?.canonical_authoring_revision_id,
+      accepted.canonical_authoring_revision_id);
+    assert.equal(previewReport?.source_hash, fixtureHash);
+    assert.equal(previewReport?.target, "pdf");
+    currentPdfPreviewDigest = previewReport.artifact_sha256;
+    assert.match(await page.locator("#temporary-pdf-preview-info").textContent(),
+      /PDF сохранённой ревизии/);
+    assert.equal(observed.requests.filter(request =>
+      request.method === "POST" && /\/(move-node|resize-node|story-range|create-shape)$/.test(request.path)).length,
+      postsBefore, "opening the PDF preview must not mutate the revision or TTL");
+    // Bounded anonymous GET admission bucket refills without a TTL renewal.
+    await page.waitForTimeout(5200);
+  }
   await page.locator("#temporary-download-" + target).waitFor({state:"visible"});
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await page.locator("#temporary-download-" + target).click();
@@ -277,6 +448,10 @@ try {
   assert.equal(report?.source_hash, fixtureHash);
   assert.equal(report?.target, target);
   assert.equal(sha256(artifact), report.artifact_sha256);
+  if (target === "pdf") {
+    assert.equal(sha256(artifact), currentPdfPreviewDigest,
+      "inline exact-revision PDF and downloaded edited PDF bytes differ");
+  }
   assert.ok(report.loss_report?.can_serialize === true);
   assert.equal(report.loss_report?.counts?.blocking,0);
   if (target === "pdf") {
@@ -320,7 +495,8 @@ try {
     "--before-x-emu", String(originalBounds.x),
     "--before-y-emu", String(originalBounds.y),
   ] : [
-    "tools/verify_editable_export_geometry.py",
+    (resizeMode || keyboardNudgeMode) ? "tools/verify_temporary_guest_resize_export.py"
+      : "tools/verify_editable_export_geometry.py",
     "--target", target,
     "--artifact", artifactPath,
     "--node-id", selected.nodeId,
@@ -356,12 +532,14 @@ try {
     ? "chaptera.tempedit-guest-pdf-physical-geometry.v1"
     : "chaptera.local-editable-export-geometry-proof.v1");
   assert.equal(consumer.target, target);
-  if (target === "idml") {
-    assert.equal(consumer.node_id, selected.nodeId);
-  } else {
+  if (target === "pdf") {
     assert.ok(consumer.pages >= 1,"downloaded PDF has no reopened pages");
     assert.equal(consumer.artifact_byte_len,artifact.length);
     assert.equal(consumer.source_position_changed,true);
+  } else {
+    // Both IDML and ODG bind the exact resized source node; the standalone
+    // PDF consumer owns page-count/byte-length proof instead.
+    assert.equal(consumer.node_id, selected.nodeId);
   }
   assert.equal(consumer.artifact_sha256, sha256(artifact));
   assert.deepEqual(consumer.expected_rect_emu, {
@@ -369,8 +547,16 @@ try {
     height: geometry.height,
   });
   assert.equal(consumer.geometry_form,
-    target === "pdf" ? "pdf_rectangle_stream" : "idml_path_geometry");
+    target === "pdf" ? "pdf_rectangle_stream"
+      : target === "odg" ? "odg_frame_attributes" : "idml_path_geometry");
   assert.equal(consumer.geometry_matches_edit,true);
+  if (resizeMode || keyboardNudgeMode) {
+    assert.equal(consumer.exact_xml_geometry_verified,true);
+    assert.equal(consumer.target_application_consumer?.reopened,true,
+      "real IDML/ODG application did not reimport the resized artifact");
+    assert.equal(consumer.target_application_consumer.application,
+      target === "idml" ? "Scribus" : "LibreOffice Draw");
+  }
 
   // Reload is through the same guest page, original baseline response
   // followed by the exact changed canonical revision. No GET extends TTL.
@@ -378,8 +564,8 @@ try {
   await page.locator("#temporary-resume").click();
   try {
     await page.waitForFunction(() =>
-      document.querySelector("#temporary-status")?.textContent.includes(
-        "Открыта редактируемая ревизия"), null,{timeout:170000});
+      /(?:PUB открыт|Открыта редактируемая ревизия)/.test(
+        document.querySelector("#temporary-status")?.textContent ?? ""), null,{timeout:170000});
   } catch {
     const state = await page.locator("#temporary-status").textContent();
     throw Error("physical browser resume failed with UI status: " +
@@ -394,6 +580,10 @@ try {
   const reopenedNode = reopened.scene.nodes.find(n => n.node_id === selected.nodeId);
   assert.equal(reopenedNode?.bounds?.x,geometry.x);
   assert.equal(reopenedNode?.bounds?.y,geometry.y);
+  if (resizeMode) {
+    assert.equal(reopenedNode?.bounds?.width,geometry.width);
+    assert.equal(reopenedNode?.bounds?.height,geometry.height);
+  }
   assert.equal(sha256(await readFile(fixture)),fixtureHash,
     "guest editing modified original PUB on disk");
 
@@ -413,10 +603,12 @@ try {
     assert.equal(denied,404,
       "public edge exposed authenticated route " + restricted);
   }
-  const privateMoves = observed.requests.filter(x =>
-    x.path === privatePath("move-node", oldHead.document_id) && x.method === "POST");
-  assert.equal(privateMoves.length,1,
-    "pointer must cause exactly one canonical MoveNode POST");
+  const privateMutations = observed.requests.filter(x =>
+    x.path === privatePath(resizeMode ? "resize-node" : "move-node", oldHead.document_id)
+      && x.method === "POST");
+  assert.equal(privateMutations.length,1,
+    (keyboardNudgeMode ? "Arrow key" : "pointer") +
+      " must cause exactly one canonical ResizeNode/MoveNode POST");
   // No bearer may appear in any navigation or request URL. Read capability
   // privately inside browser process and never put it in the receipt or logs.
   const cap = await page.evaluate(() => {
@@ -476,7 +668,10 @@ try {
     "browser offered to resume a deleted guest session");
 
   const receipt = {
-    schema:"chaptera.tempedit-real-pub-chromium-https.v1",
+    schema:keyboardNudgeMode
+      ? "chaptera.tempedit-real-pub-keyboard-nudge-chromium-https.v1"
+      : resizeMode ? "chaptera.tempedit-real-pub-resize-chromium-https.v1"
+      : "chaptera.tempedit-real-pub-chromium-https.v1",
     status:"PASS",
     source_sha256:fixtureHash,
     source_byte_len:original.length,
@@ -487,12 +682,29 @@ try {
     public_trusted_tls:publicOrigin,
     rust_server:!publicOrigin,
     isolated_worker:!publicOrigin,
-    browser_pointer_commits:privateMoves.length,
+    browser_pointer_commits:keyboardNudgeMode ? 0 : privateMutations.length,
+    browser_keyboard_commits:keyboardNudgeMode ? privateMutations.length : 0,
+    keyboard_nudge_step_emu:keyboardNudgeMode ? 12_700 : null,
+    keyboard_canvas_focus_verified:keyboardNudgeMode,
+    keyboard_modified_arrow_denied:keyboardNudgeMode,
+    keyboard_exact_one_point_reopened:keyboardNudgeMode,
+    keyboard_idml_target_application_reopened:keyboardNudgeMode &&
+      consumer.target_application_consumer?.reopened === true,
+    resize_handle_pointer_commit:resizeMode,
+    resized_bounds_reopened:resizeMode,
+    resized_target_application_reopened:resizeMode,
     exact_source_bound_revision:true,
     browser_scene_repaint:true,
     revised_scene_on_reload:true,
     read_does_not_renew_ttl:true,
     export_target:target,
+    ...(pristinePdfProof ? {
+      pristine_pdf_without_edit_proven:true,
+      pristine_pdf_sha256:pristinePdfProof.sha256,
+      pristine_pdf_pages:pristinePdfProof.pageCount,
+      pristine_pdf_unchanged_revision_proven:true,
+      pristine_pdf_private_report_proven:true,
+    } : {}),
     ["changed_" + target + "_download_sha256"]:sha256(artifact),
     ["changed_" + target + "_byte_len"]:artifact.length,
     ["changed_" + target + "_geometry_proven"]:true,

@@ -8,11 +8,13 @@ const id = "tempedit:" + "a".repeat(32);
 const token = "b".repeat(64);
 const source = "c".repeat(64);
 const pageId = "20000000-0000-4000-8000-000000000001";
+const secondPageId = "20000000-0000-4000-8000-000000000002";
 const nodeId = "30000000-0000-4000-8000-000000000001";
 const before = "sha256:" + "d".repeat(64);
 const after = "sha256:" + "e".repeat(64);
-const canon0 = "f".repeat(64), canon1 = "1".repeat(64);
-const ttl0 = Date.now() + 3_600_000, ttl1 = ttl0 + 120_000;
+const afterShape = "sha256:" + "2".repeat(64);
+const canon0 = "f".repeat(64), canon1 = "1".repeat(64), canon2 = "2".repeat(64);
+const ttl0 = Date.now() + 3_600_000, ttl1 = ttl0 + 120_000, ttl2 = ttl1 + 120_000;
 const editedBytes = Buffer.from("PK\u0003\u0004Chaptera temporary browser synthetic edited IDML proof");
 const outputSha = createHash("sha256").update(editedBytes).digest("hex");
 // Synthetic Chrome transport acceptance: this is deliberately NOT a real-PUB
@@ -20,7 +22,8 @@ const outputSha = createHash("sha256").update(editedBytes).digest("hex");
 const pdfBytes = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n");
 const pdfSha = createHash("sha256").update(pdfBytes).digest("hex");
 const route = "/v1/editor/temporary-sessions/" + id;
-let accepted = null, requests = [], editedReportRequests = 0, deleted = false;
+let accepted = null, created = null, requests = [], editedReportRequests = 0, deleted = false;
+const authoredNodeId = "019a2d80-1112-7001-8001-aabbccddee01";
 const assets = new Map([
   ["/editor/temporary-preview", "apps/web/temporary-editor-preview.html"],
   ["/editor/temporary-editor-preview.mjs", "apps/web/temporary-editor-preview.mjs"],
@@ -29,6 +32,7 @@ const assets = new Map([
   ["/editor/temporary-edit-move-client-v1.mjs", "apps/web/temporary-edit-move-client-v1.mjs"],
   ["/editor/text-protocol-v1.mjs", "apps/web/text-protocol-v1.mjs"],
   ["/editor/story-line-endings-v1.mjs", "apps/web/story-line-endings-v1.mjs"],
+  ["/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs", "packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"],
   ["/editor/interaction-v1.mjs", "apps/web/interaction-v1.mjs"],
   ["/editor/reader-scene-editor-interaction-v1.mjs", "apps/web/reader-scene-editor-interaction-v1.mjs"],
   ["/cloud-reader/render-v1.mjs", "apps/cloud-reader/render-v1.mjs"],
@@ -41,24 +45,38 @@ const bounds = () => ({ x: accepted?.x_emu ?? 95250, y: accepted?.y_emu ?? 95250
   width: 190500, height: 190500 });
 const scene = () => ({
   protocol_version: "chaptera.reader-scene.v1",
-  document_id: id, source_hash: source, revision_id: accepted ? after : before,
+  document_id: id, source_hash: source,
+  revision_id: created ? afterShape : accepted ? after : before,
   scene_authority: "isolated_reader_scene_synthetic",
   stacking_fidelity: "partial", fidelity: { state: "partial", reasons: ["browser_harness"] },
-  pages: [{ page_id: pageId, order: 0, width_emu: 952500, height_emu: 952500 }],
-  nodes: [{ node_id: nodeId, page_id: pageId, kind: "shape", bounds: bounds(),
-    transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
-    paint: { preset_shape: null, fill_rgb: [10,120,200], line: null } }],
+  pages: [{ page_id: pageId, order: 0, width_emu: 952500, height_emu: 952500 },
+    { page_id: secondPageId, order: 1, width_emu: 952500, height_emu: 952500 }],
+  nodes: [
+    { node_id: nodeId, page_id: pageId, kind: "shape", bounds: bounds(),
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+      paint: { preset_shape: null, fill_rgb: [10,120,200], line: null } },
+    ...(created ? [{
+      node_id: authoredNodeId, page_id: pageId, kind: "shape",
+      bounds: created.operation.bounds,
+      transform: { a: "1", b: "0", c: "0", d: "1", tx: 0, ty: 0 },
+      paint: { fill_rgb: created.command.fill_rgb,
+        line: { rgb: created.command.stroke_rgb, width_emu: created.command.stroke_width_emu } },
+    }] : []),
+  ],
   stories: [], resources: [], fonts: [], diagnostics: [],
 });
 const current = () => ({
   protocol_version: "chaptera.temporary-editor-current.v1",
   document_id: id, source_hash: source,
-  revision_id: accepted ? after : before,
-  canonical_authoring_revision_id: accepted ? canon1 : canon0,
-  revision_cursor: accepted ? 1 : 0,
-  expires_at_ms: accepted ? ttl1 : ttl0,
-  project: { schema_version: "editor" },
-  authoring_graph: { nodes: { [nodeId]: { header: { bounds: bounds() } } } },
+  revision_id: created ? afterShape : accepted ? after : before,
+  canonical_authoring_revision_id: created ? canon2 : accepted ? canon1 : canon0,
+  revision_cursor: created ? 2 : accepted ? 1 : 0,
+  expires_at_ms: created ? ttl2 : accepted ? ttl1 : ttl0,
+  project: { schema_version: "editor", operations: created ? [created.operation] : [] },
+  authoring_graph: {
+    nodes: { [nodeId]: { header: { bounds: bounds() } } },
+    pages: { [pageId]: { size: { width: 952500, height: 952500 } } },
+  },
 });
 const server = createServer(async (req,res) => {
   const url = new URL(req.url, "http://127.0.0.1");
@@ -115,8 +133,10 @@ const server = createServer(async (req,res) => {
   }
   if (path === route+"/scene" && req.method === "GET") {
     json(res,200,{protocol_version:"chaptera.temporary-editor-scene.v1",
-      document_id:id,source_hash:source,revision_id:accepted?after:before,
-      expires_at_ms:accepted?ttl1:ttl0,scene:scene()});return;
+      document_id:id,source_hash:source,
+      revision_id:created?afterShape:accepted?after:before,
+      expires_at_ms:created?ttl2:accepted?ttl1:ttl0,
+      scene:scene()});return;
   }
   if (path === route+"/move-node" && req.method === "POST") {
     const command = JSON.parse(body.toString("utf8"));
@@ -132,6 +152,41 @@ const server = createServer(async (req,res) => {
       revision_id:after,canonical_authoring_revision_id:canon1,
       client_operation_id:command.client_operation_id,expires_at_ms:ttl1,
       replayed:false,scene_refresh:"current",canonical_operation:{kind:"move_node"},
+    });return;
+  }
+
+  if (path === route+"/create-shape" && req.method === "POST") {
+    const request = JSON.parse(body.toString("utf8"));
+    const command = request.command;
+    if (!accepted || created || request.source_hash !== source ||
+        request.document_id !== id || request.base_revision_id !== after ||
+        command.kind !== "create_shape" || command.page_id !== pageId ||
+        Object.hasOwn(command,"node_id") || command.width_emu <= 0 ||
+        command.height_emu <= 0 || command.x_emu < 0 || command.y_emu < 0 ||
+        command.x_emu + command.width_emu > 952500 ||
+        command.y_emu + command.height_emu > 952500) {
+      json(res,409,{error:"temporary_editor_create_shape_rejected"});return;
+    }
+    const operation = {
+      kind:"create_shape",node_id:authoredNodeId,page_id:pageId,parent_id:pageId,
+      shape_kind:"rectangle",
+      bounds:{x:command.x_emu,y:command.y_emu,width:command.width_emu,height:command.height_emu},
+      transform:{kind:"identity"},
+      paint:{
+        fill:{visible:true,color:{r:command.fill_rgb[0],g:command.fill_rgb[1],b:command.fill_rgb[2]}},
+        stroke:{visible:true,color:{r:command.stroke_rgb[0],g:command.stroke_rgb[1],
+          b:command.stroke_rgb[2]},width_emu:command.stroke_width_emu},
+        provenance:{kind:"author_created"},
+      },
+      provenance:{kind:"author_created"},
+    };
+    created = {command,operation};
+    json(res,200,{
+      protocol_version:"chaptera.temporary-editor-create-shape.v1",
+      document_id:id,source_hash:source,base_revision_id:after,
+      revision_id:afterShape,canonical_authoring_revision_id:canon2,
+      client_operation_id:request.client_operation_id,expires_at_ms:ttl2,
+      replayed:false,scene_refresh:"current",canonical_operation:operation,
     });return;
   }
   if ((path === route+"/exports/idml" || path === route+"/exports/pdf") && req.method === "GET") {
@@ -183,6 +238,56 @@ try {
       " body=" + JSON.stringify(bodyText.slice(0,900)) +
       " requests=" + JSON.stringify(requests.map(x=>x.method+" "+x.path)));
   }
+  // Camera controls must work in a real Chromium DOM before we send a
+  // canonical MoveNode. The synthetic page is exactly 100 CSS px at 100%.
+  const cameraPage=page.locator("svg.page[data-page-id='"+pageId+"']").first();
+  const canonicalViewBox=await cameraPage.getAttribute("viewBox");
+  if (canonicalViewBox!=="0 0 952500 952500") {
+    throw new Error("synthetic Reader page viewBox changed or unavailable");
+  }
+  if (await page.locator("#temporary-zoom-actual").isDisabled()) {
+    throw new Error("Guest zoom toolbar stayed disabled after scene open");
+  }
+  if (await page.locator("#temporary-page-position").textContent()!=="1 / 2" ||
+      await page.locator("#temporary-page-next").isDisabled()) {
+    throw new Error("Guest multipage control did not receive canonical ReaderScene page order");
+  }
+  await page.locator("#temporary-page-next").click();
+  if (await page.locator("#temporary-page-position").textContent()!=="2 / 2" ||
+      await page.locator("#temporary-page-next").isEnabled()) {
+    throw new Error("Next page navigation exceeded second page");
+  }
+  await page.locator("#temporary-page-prev").click();
+  if (await page.locator("#temporary-page-position").textContent()!=="1 / 2" ||
+      await page.locator("#temporary-page-prev").isEnabled()) {
+    throw new Error("Previous page navigation did not return to first page");
+  }
+  await page.locator("#temporary-zoom-actual").click();
+  if (Number(await cameraPage.getAttribute("width"))!==100) {
+    throw new Error("100% Guest zoom is not source-unit 100 CSS px");
+  }
+  await page.locator("#temporary-zoom-out").click();
+  await page.locator("#temporary-zoom-out").click();
+  if (Number(await cameraPage.getAttribute("width"))!==50 ||
+      !(await page.locator("#temporary-zoom-out").isDisabled())) {
+    throw new Error("50% Guest zoom/limit did not apply in Chromium");
+  }
+  await page.locator("#temporary-zoom-actual").click();
+  for (let step=0;step<4;step++) await page.locator("#temporary-zoom-in").click();
+  if (Number(await cameraPage.getAttribute("width"))!==200 ||
+      await page.locator("#temporary-zoom-percent").textContent()!=="200%" ||
+      !(await page.locator("#temporary-zoom-in").isDisabled())) {
+    throw new Error("200% Guest zoom/limit did not apply in Chromium");
+  }
+  await page.locator("#temporary-zoom-out").click();
+  if (Number(await cameraPage.getAttribute("width"))!==175) {
+    throw new Error("Guest zoom-out did not resize page viewport");
+  }
+  await page.locator("#temporary-zoom-in").click();
+  if (await cameraPage.getAttribute("viewBox")!==canonicalViewBox ||
+      await cameraPage.getAttribute("data-page-id")!==pageId) {
+    throw new Error("camera zoom modified authoritative page coordinates");
+  }
   await direct.scrollIntoViewIfNeeded();
   const rect=await direct.boundingBox();
   if(!rect)throw Error("source-neutral initial shape did not render");
@@ -218,6 +323,11 @@ try {
       + " browserErrors=" + JSON.stringify(pageErrors)
       + " requests=" + JSON.stringify(requests.map(x => x.method + " " + x.path)));
   }
+  // The server-confirmed Scene is repainted, yet user camera scale is local.
+  const paintedWidth=Number(await page.locator("svg.page[data-page-id='"+pageId+"']").first().getAttribute("width"));
+  if (paintedWidth!==200 || await page.locator("#temporary-zoom-percent").textContent()!=="200%") {
+    throw new Error("confirmed Guest revision discarded current viewport zoom");
+  }
   if(!accepted)throw Error("Chromium did not send canonical guest MoveNode");
   const newNode=page.locator('[data-node-id="'+nodeId+'"] rect');
   const newX=await newNode.getAttribute("x");
@@ -237,6 +347,28 @@ try {
   if(requests.some(req => req.path.includes(token)||req.query.includes(token))) {
     throw Error("guest PDF download leaked private bearer in URI");
   }
+
+  // Separate real Chromium pointer proof for the user-visible Rectangle tool.
+  // The private backend in this harness is synthetic; physical PUB semantic
+  // acceptance stays a separate required gate.
+  await page.locator("#temporary-draw-rectangle").click();
+  const svgPage = page.locator("svg.page[data-page-id='"+pageId+"']").first();
+  const pageRect = await svgPage.boundingBox();
+  if (!pageRect) throw Error("Reader page unavailable for authored rectangle pointer test");
+  const startX = pageRect.x + pageRect.width*0.18;
+  const startY = pageRect.y + pageRect.height*0.2;
+  await page.mouse.move(startX,startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + Math.min(36,pageRect.width*0.12),
+    startY + Math.min(29,pageRect.height*0.12),{steps:5});
+  await page.mouse.up();
+  await page.waitForFunction(() =>
+    document.querySelector("#temporary-status")?.textContent.includes("Прямоугольник сохранён"),
+    null,{timeout:10000});
+  if (!created) throw Error("Chromium Rectangle pointer tool did not emit canonical CreateShape");
+  const authoredRectangle=page.locator('[data-node-id="'+authoredNodeId+'"]');
+  await authoredRectangle.waitFor({state:"visible",timeout:8000});
+  if (pageErrors.length) throw Error("Chromium encountered page errors: "+JSON.stringify(pageErrors));
   await page.reload();
   await page.locator("#temporary-resume").click();
   await page.waitForFunction((expected) => Number(document.querySelector('[data-node-id] rect')?.getAttribute("x")) === expected,
@@ -254,12 +386,17 @@ try {
     throw Error("guest browser retained locally deleted session token");
   }
   const movePosts=requests.filter(x=>x.path===route+"/move-node");
-  if(movePosts.length!==1)throw Error("browser replay silently committed twice");
+  const shapePosts=requests.filter(x=>x.path===route+"/create-shape");
+  if(movePosts.length!==1)throw Error("browser replay silently committed MoveNode twice");
+  if(shapePosts.length!==1)throw Error("browser created more than one rectangle");
   if(requests.some(x=>x.path.includes(token)||x.query.includes(token)))throw Error("capability leaked into URI");
   const receipt={schema:"chaptera.temporary-guest-browser-chromium-synthetic.v1",
     status:"PASS",real_chromium_pointer:true,synthetic_backend:true,
-    private_guest_capability:true,commit_count:movePosts.length,
+    private_guest_capability:true,commit_count:movePosts.length+shapePosts.length,
     exact_scene_after_move:true,exact_scene_after_reload:true,
+    chromium_page_navigation_two_pages:true,
+    chromium_zoom_50_200_pointer_safe:true,zoom_retained_after_move:true,
+    chromium_rectangle_pointer:true,synthetic_created_rectangle_scene:true,
     changed_download_preflighted:true,edited_download_offered:true,
     synthetic_pdf_download_preflighted:true,synthetic_pdf_download_offered:true,
     explicit_server_delete_confirmed:true,deleted_capability_denied:true,

@@ -506,6 +506,11 @@ def main() -> int:
                                 "export_forged_artifact_negative_confirmed"
                             )
                             or not story_receipt.get("export_anonymous_denied")
+                            or not story_receipt.get("story_undo_redo_claim")
+                            or not story_receipt.get("selection_reconciliation_claim")
+                            or story_receipt.get("authorized_history_call_count")
+                            != 3
+                            or not story_receipt.get("redo_unavailable_confirmed")
                             or (
                                 story_engine == "chromium"
                                 and (
@@ -581,7 +586,14 @@ def main() -> int:
                         ),
                         "browser_layout_is_canonical": False,
                         "authoritative_relayout_overset_verified": False,
-                        "story_undo_redo_claim": False,
+                        "story_undo_redo_claim": all(
+                            receipt.get("story_undo_redo_claim")
+                            for receipt in story_receipts
+                        ),
+                        "selection_reconciliation_claim": all(
+                            receipt.get("selection_reconciliation_claim")
+                            for receipt in story_receipts
+                        ),
                         "physical_clipboard_paste_claim": any(
                             receipt.get("physical_clipboard_paste_confirmed")
                             for receipt in story_receipts

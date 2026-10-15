@@ -5,13 +5,20 @@ on:
     paths:
       - "tools/pdf_reference_diff_v1.py"
       - "tools/test_pdf_reference_diff_v1.py"
+      - "tools/pdf_paint_trace_roi_join_v1.py"
+      - "tools/test_pdf_paint_trace_roi_join_v1.py"
       - "tools/run_pdf_reference_diff_contract.py"
       - "docs/pdf-reference-diff-v1.md"
+      - "docs/pdf-paint-trace-roi-v1.md"
       - ".github/workflows/pdf-reference-diff-v1.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pdf-reference-oracle:
@@ -25,6 +32,8 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-cache-dir PyMuPDF==1.24.14
       - name: Test reference PDF comparator
         run: python tools/test_pdf_reference_diff_v1.py
+      - name: Test source-neutral PDF paint trace to raster ROI join
+        run: python tools/test_pdf_paint_trace_roi_join_v1.py
       - name: Produce comparison receipt
         run: python tools/run_pdf_reference_diff_contract.py
       - uses: actions/upload-artifact@v4

@@ -151,6 +151,12 @@ jobs:
                   assert receipt[flag] is True, flag
               assert receipt[f"changed_{target}_geometry_proven"] is True
               assert receipt["v0_go"] is False
+              if target == "pdf":
+                  assert receipt["pristine_pdf_without_edit_proven"] is True
+                  assert receipt["pristine_pdf_unchanged_revision_proven"] is True
+                  assert receipt["pristine_pdf_private_report_proven"] is True
+                  assert receipt["pristine_pdf_pages"] >= 1
+                  assert len(receipt["pristine_pdf_sha256"]) == 64
               print(json.dumps({"target": target, "public_https": True,
                                 "geometry_verified": True, "deleted": True,
                                 "sha256": receipt[f"changed_{target}_download_sha256"],

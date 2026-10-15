@@ -166,23 +166,26 @@ pub use chaptera_text_format_overlay::{
     EffectivePropertySegmentV1, EffectivePropertySourceV1, FormatPropertyV1, FormatValueV1,
 };
 use pub_export::{
-    CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, ParagraphAlignmentV1, ParagraphScopedAlignmentV1,
-    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
-    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
-    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
+    AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
+    ExportReport, ExportReportSource, ExportSolidPaintV1, ExportSolidStrokeV1, ExportSrgb8V1,
+    FormatCompatibilityManifest, FormatRepresentability, FullStoryParagraphAlignmentV1,
+    FullStoryTypographyV1, LossItem, LossKind, LossSeverity, ParagraphAlignmentV1,
+    ParagraphScopedAlignmentV1, PersistenceCompatibilityAssessment, PersistenceCompatibilityError,
+    PersistenceRequirement, PersistenceRequirements, PersistenceTargetProfile,
+    STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
+    STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError, ScopedCapabilityOverride,
+    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
     render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlParagraphScopedAlignmentPlacement, IdmlWireProfile, add_embedded_images_to_idml,
-    add_full_story_paragraph_alignment_to_idml, add_full_story_typography_to_idml,
-    add_paragraph_scoped_alignment_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlParagraphScopedAlignmentPlacement, IdmlWireProfile, add_authored_rectangles_to_idml,
+    add_embedded_images_to_idml, add_full_story_paragraph_alignment_to_idml,
+    add_full_story_typography_to_idml, add_paragraph_scoped_alignment_to_idml,
+    project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -196,9 +199,10 @@ pub use pub_model::{
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
     OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
-    OdgParagraphScopedAlignmentPlacement, add_embedded_images_to_odg,
-    add_full_story_paragraph_alignment_to_odg, add_full_story_typography_to_odg,
-    add_paragraph_scoped_alignment_to_odg, project_resolved_graph_to_odg, write_odg,
+    OdgParagraphScopedAlignmentPlacement, add_authored_rectangles_to_odg,
+    add_embedded_images_to_odg, add_full_story_paragraph_alignment_to_odg,
+    add_full_story_typography_to_odg, add_paragraph_scoped_alignment_to_odg,
+    project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubParagraphFlowRun, PubResolvedGraph,
@@ -4273,6 +4277,13 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
+                    let rectangles = self.authored_rectangle_exports_v1(target)?;
+                    add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -4317,6 +4328,13 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
+                    let rectangles = self.authored_rectangle_exports_v1(target)?;
+                    add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
                 }
             }
         }
@@ -4390,6 +4408,13 @@ impl EditorSession {
                     target,
                     message: error.to_string(),
                 })?;
+                let rectangles = self.authored_rectangle_exports_v1(target)?;
+                add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
+                    |error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    },
+                )?;
                 write_idml_ucf(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -4439,6 +4464,13 @@ impl EditorSession {
                     target,
                     message: error.to_string(),
                 })?;
+                let rectangles = self.authored_rectangle_exports_v1(target)?;
+                add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
+                    |error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    },
+                )?;
                 write_odg(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -4965,6 +4997,59 @@ impl EditorSession {
             .collect()
     }
 
+    fn authored_rectangle_exports_v1(
+        &self,
+        target: EditorEditableTarget,
+    ) -> Result<Vec<AuthoredRectangleExportV1>, EditorExportError> {
+        let mut result = Vec::with_capacity(self.authored_shapes.len());
+        for shape in self.authored_shapes.values() {
+            validate_authored_shape_runtime_v1(shape).map_err(|error| {
+                EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "authored shape {} failed runtime validation: {error:?}",
+                        shape.node_id.as_canonical()
+                    ),
+                }
+            })?;
+            let page = self.graph.pages.get(&shape.page_id).ok_or_else(|| {
+                EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "authored shape {} parent page {} is missing",
+                        shape.node_id.as_canonical(),
+                        shape.page_id.as_canonical()
+                    ),
+                }
+            })?;
+            result.push(AuthoredRectangleExportV1 {
+                node_id: shape.node_id,
+                page_id: shape.page_id,
+                page_size: page.size,
+                bounds: shape.bounds,
+                fill: ExportSolidPaintV1 {
+                    visible: shape.paint.fill.visible,
+                    color: ExportSrgb8V1 {
+                        r: shape.paint.fill.color.r,
+                        g: shape.paint.fill.color.g,
+                        b: shape.paint.fill.color.b,
+                    },
+                },
+                stroke: ExportSolidStrokeV1 {
+                    visible: shape.paint.stroke.visible,
+                    color: ExportSrgb8V1 {
+                        r: shape.paint.stroke.color.r,
+                        g: shape.paint.stroke.color.g,
+                        b: shape.paint.stroke.color.b,
+                    },
+                    width_emu: LengthEmu::new(shape.paint.stroke.width_emu),
+                },
+            });
+        }
+        result.sort_by_key(|item| (item.page_id, item.node_id));
+        Ok(result)
+    }
+
     fn build_editable_export_plan(
         &self,
         target: EditorEditableTarget,
@@ -4992,6 +5077,7 @@ impl EditorSession {
                 full_story_typography: &typography,
                 effective_full_story_paragraph_alignments: &paragraph_alignments,
             },
+            &self.authored_shapes,
         )
         .map_err(|error| EditorExportError::Report(error.to_string()))?;
         let report = build_export_report(
@@ -5297,136 +5383,6 @@ impl EditorSession {
         }
 
         Ok(placements)
-    }
-
-    pub fn create_text_box(
-        &mut self,
-        node_id: NodeId,
-        story_id: StoryId,
-        page_id: PageId,
-        bounds: RectEmu,
-        text_preset: AuthoringTextPresetV1,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        validate_create_text_box_candidate(
-            &self.graph,
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            &text_preset,
-        )?;
-
-        let operation = EditOperation::CreateTextBox {
-            node_id,
-            story_id,
-            page_id,
-            bounds,
-            text_preset,
-        };
-        apply_forward(&mut self.graph, &operation)?;
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    pub fn create_shape(
-        &mut self,
-        node_id: NodeId,
-        page_id: PageId,
-        bounds: RectEmu,
-        paint: AuthoredShapePaintV1,
-    ) -> Result<EditOperation, EditorError> {
-        let operation = EditOperation::CreateShape {
-            node_id,
-            page_id,
-            parent_id: page_id,
-            shape_kind: AuthoredShapeKindV1::Rectangle,
-            bounds,
-            transform: AuthoredShapeTransformV1::Identity,
-            paint,
-            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
-        };
-        self.consume_canonical_create_shape(operation)
-    }
-
-    fn consume_canonical_create_shape(
-        &mut self,
-        operation: EditOperation,
-    ) -> Result<EditOperation, EditorError> {
-        self.validate_source_identity()?;
-        let shape = authored_shape_from_operation(&operation)
-            .expect("consume_canonical_create_shape receives CreateShape");
-        self.validate_create_shape_candidate(&shape)?;
-
-        let before_stack = self.current_authored_stack_v1(shape.page_id);
-        let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
-            EditorError::StaleAuthoredStack {
-                page_id: shape.page_id,
-            }
-        })?;
-        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
-            .map_err(|_| EditorError::StaleAuthoredStack {
-                page_id: shape.page_id,
-            })?;
-
-        self.authored_shapes.insert(shape.node_id, shape);
-        self.install_authored_stack_v1(after_stack);
-        self.undo.push(operation.clone());
-        self.redo.clear();
-        self.validate_source_identity()?;
-        Ok(operation)
-    }
-
-    fn validate_create_shape_candidate(
-        &self,
-        shape: &AuthoredShapeRuntimeV1,
-    ) -> Result<(), EditorError> {
-        if !self.graph.pages.contains_key(&shape.page_id) {
-            return Err(EditorError::CreateShapePageMissing {
-                page_id: shape.page_id,
-            });
-        }
-        if self.graph.nodes.contains_key(&shape.node_id)
-            || self.authored_shapes.contains_key(&shape.node_id)
-            || self.authored_lines.contains_key(&shape.node_id)
-        {
-            return Err(EditorError::CreateShapeIdCollision {
-                node_id: shape.node_id,
-            });
-        }
-        match validate_authored_shape_runtime_v1(shape) {
-            Ok(()) => Ok(()),
-            Err(CreateShapeRuntimeValidationError::NodeIdNotUuidV7) => {
-                Err(EditorError::CreateShapeInvalidNodeId {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(CreateShapeRuntimeValidationError::InvalidBounds) => {
-                Err(EditorError::CreateShapeInvalidBounds {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(CreateShapeRuntimeValidationError::InvalidPaint) => {
-                Err(EditorError::CreateShapeInvalidPaint {
-                    node_id: shape.node_id,
-                })
-            }
-            Err(
-                CreateShapeRuntimeValidationError::NonAuthorCreatedProvenance
-                | CreateShapeRuntimeValidationError::NonAuthorCreatedPaintProvenance,
-            ) => Err(EditorError::CreateShapeInvalidProvenance {
-                node_id: shape.node_id,
-            }),
-            Err(
-                CreateShapeRuntimeValidationError::ParentPageMismatch
-                | CreateShapeRuntimeValidationError::UnsupportedShapeKind
-                | CreateShapeRuntimeValidationError::UnsupportedTransform,
-            ) => Err(EditorError::CreateShapeMalformed {
-                node_id: shape.node_id,
-            }),
-        }
     }
 
     pub fn create_table(
@@ -6792,6 +6748,7 @@ fn editable_export_plan(
     graph: &PubResolvedGraph,
     image_state: EditableExportImageState<'_>,
     typography: EditableExportTypographyInputs<'_>,
+    authored_shapes: &BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
 ) -> Result<ExportPlan, ScopedCapabilityError> {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
@@ -6809,6 +6766,18 @@ fn editable_export_plan(
         features.insert(
             IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
             CapabilityLevel::Approximated,
+        );
+        features.insert(
+            AUTHORED_SHAPE_GEOMETRY_FEATURE.into(),
+            CapabilityLevel::Preserved,
+        );
+        features.insert(
+            AUTHORED_SHAPE_FILL_FEATURE.into(),
+            CapabilityLevel::Preserved,
+        );
+        features.insert(
+            AUTHORED_SHAPE_STROKE_FEATURE.into(),
+            CapabilityLevel::Preserved,
         );
     }
 
@@ -7018,6 +6987,34 @@ fn editable_export_plan(
                 require_preserved: false,
             });
         }
+    }
+
+    for shape in authored_shapes.values() {
+        let origin = shape.node_id.into_canonical();
+        requests.push(SemanticFeatureRequest {
+            feature: AUTHORED_SHAPE_GEOMETRY_FEATURE.into(),
+            origin: Some(origin),
+            property_path: Some("authored_shape.bounds".into()),
+            require_preserved: true,
+        });
+        requests.push(SemanticFeatureRequest {
+            feature: AUTHORED_SHAPE_FILL_FEATURE.into(),
+            origin: Some(origin),
+            property_path: Some("authored_shape.paint.fill".into()),
+            require_preserved: true,
+        });
+        requests.push(SemanticFeatureRequest {
+            feature: AUTHORED_SHAPE_STROKE_FEATURE.into(),
+            origin: Some(origin),
+            property_path: Some("authored_shape.paint.stroke".into()),
+            require_preserved: true,
+        });
+        requests.push(SemanticFeatureRequest {
+            feature: AUTHORED_SHAPE_Z_ORDER_FEATURE.into(),
+            origin: Some(origin),
+            property_path: Some("authored_shape.z_order".into()),
+            require_preserved: false,
+        });
     }
 
     for (story_id, roots) in roots_per_story {

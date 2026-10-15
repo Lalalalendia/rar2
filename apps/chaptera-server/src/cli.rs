@@ -20,6 +20,12 @@ pub struct Cli {
     pub command: Command,
 }
 
+// This startup-only Clap command preserves strongly typed, exclusive worker
+// options rather than exposing a free-form public command envelope.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one-time private worker CLI parsing keeps isolated command flags explicit"
+)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Install this exact executable as an immutable Linux release.
@@ -80,7 +86,7 @@ pub enum Command {
         project_json: Option<PathBuf>,
         #[arg(long, requires = "project_json")]
         expected_project_sha256: Option<String>,
-        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"])]
+        #[arg(long, requires_all = ["move_x_emu", "move_y_emu", "project_json"], conflicts_with = "resize_intent_json")]
         move_node_id: Option<String>,
         #[arg(long, requires = "move_node_id", allow_hyphen_values = true)]
         move_x_emu: Option<i64>,
@@ -90,14 +96,28 @@ pub enum Command {
         #[arg(
             long,
             requires = "project_json",
-            conflicts_with_all = ["move_node_id", "scene_revision_id"]
+            conflicts_with_all = ["move_node_id", "scene_revision_id", "resize_intent_json"]
         )]
         story_intent_json: Option<PathBuf>,
+        /// Exact private bounds; never trust the browser as source authority.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "story_intent_json", "scene_revision_id", "editable_export_target"]
+        )]
+        resize_intent_json: Option<PathBuf>,
+        /// Server-authorized, private Rectangle intent; never trust browser node authority.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "scene_revision_id", "editable_export_target"]
+        )]
+        create_shape_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,
             requires_all = ["scene_baseline_revision_id", "project_json"],
-            conflicts_with = "move_node_id"
+            conflicts_with_all = ["move_node_id", "resize_intent_json"]
         )]
         scene_revision_id: Option<String>,
         #[arg(long, requires = "scene_revision_id")]
@@ -106,7 +126,7 @@ pub enum Command {
         #[arg(
             long,
             requires = "project_json",
-            conflicts_with_all = ["move_node_id", "scene_revision_id", "story_intent_json"]
+            conflicts_with_all = ["move_node_id", "scene_revision_id", "story_intent_json", "resize_intent_json"]
         )]
         editable_export_target: Option<String>,
     },
@@ -176,6 +196,77 @@ mod tests {
             "rev",
         ]);
         assert!(Cli::try_parse_from(admitted).is_err());
+    }
+
+    #[test]
+    fn create_shape_mode_requires_project_and_exclusive_private_file() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "document-test",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut missing_project = base.to_vec();
+        missing_project.extend(["--create-shape-intent-json", "/tmp/create.json"]);
+        assert!(Cli::try_parse_from(missing_project).is_err());
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/project.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--create-shape-intent-json",
+            "/tmp/create.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                create_shape_intent_json: Some(_),
+                ..
+            }
+        ));
+        valid.extend(["--resize-intent-json", "/tmp/resize.json"]);
+        assert!(Cli::try_parse_from(valid).is_err());
+    }
+
+    #[test]
+    fn resize_mode_requires_exact_project_and_forbids_ambiguous_commands() {
+        let base = [
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "tempedit:0123456789abcdef0123456789abcdef",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len",
+            "42",
+        ];
+        let mut invalid = base.to_vec();
+        invalid.extend(["--resize-intent-json", "/tmp/resize.json"]);
+        assert!(Cli::try_parse_from(invalid).is_err());
+
+        let mut valid = base.to_vec();
+        valid.extend([
+            "--project-json",
+            "/tmp/current.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--resize-intent-json",
+            "/tmp/resize.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(valid.clone()).unwrap().command,
+            Command::ProductIsolatedReplay {
+                resize_intent_json: Some(_),
+                ..
+            }
+        ));
+        valid.extend(["--story-intent-json", "/tmp/story.json"]);
+        assert!(Cli::try_parse_from(valid).is_err());
     }
 
     #[test]

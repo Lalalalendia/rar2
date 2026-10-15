@@ -14,6 +14,7 @@ $operationPath = Join-Path $repo $operationRelative
 $paths = @(
     $packetRelative, $operationRelative,
     'tools/research-runner/auth_wrap_direct_1188.ps1',
+    'tools/research-runner/auth_wrap_arm_1188.ps1',
     'tools/research-runner/analysis/auth_wrap_diff_1188.py',
     'tools/research-runner/validate_packet.py',
     'tools/research-runner/verify_reset_receipt.py',
@@ -74,7 +75,13 @@ try {
     if (-not $env:PUB_RESEARCH_FIXTURE_ROOT) { throw 'Registered fixture root is required' }
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'Rust cargo required for source-pinned oracle tool' }
     if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) { throw 'PowerShell 7 required' }
-    RequireProcessFree
+    # Advisory lease only: independent exclusive Publisher host/PID proof needed.
+    $lease = [Threading.Mutex]::new($false, 'Global\Chaptera_AUTH_WRAP_01')
+    $leaseHeld = $false
+    try {
+        $leaseHeld = $lease.WaitOne(0)
+        if (-not $leaseHeld) { throw 'AUTH-WRAP exclusive native lease already held' }
+        RequireProcessFree
     $root = [IO.Path]::GetFullPath($OutputRoot)
     $repoPrefix = [IO.Path]::GetFullPath($repo).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
     if ($root.StartsWith($repoPrefix,[StringComparison]::OrdinalIgnoreCase)) {
@@ -91,32 +98,48 @@ try {
     if (-not (Test-Path -LiteralPath $oracle -PathType Leaf)) { throw 'Built AUTH-WRAP oracle binary missing' }
     $env:PUB_RESEARCH_AUTH_WRAP_ORACLE_EXE = $oracle
     $env:PUB_RESEARCH_PACKET_SHA256 = $packetHash
+    $armScript = Join-Path $repo 'tools/research-runner/auth_wrap_arm_1188.ps1'
+    $env:PUB_RESEARCH_AUTH_WRAP_CHILD_SCRIPT = $armScript
+    $env:PUB_RESEARCH_AUTH_WRAP_CHILD_PACKET = $packetPath
+    $env:PUB_RESEARCH_AUTH_WRAP_CHILD_SHA = $TrustedCommitSha
     foreach ($family in @('A','B')) {
         RequireProcessFree
         $armRoot = Join-Path $root "family-$family"
-        $env:PUB_RESEARCH_AUTH_WRAP_FAMILY = $family
-        # prepare_native_run.ps1 validates and binds the exact fixture and
-        # Publisher executable via process-scoped environment variables.
-        # Running it in a separate pwsh would discard both bindings before the
-        # operation. Clear previous-arm values and keep all three phases in this
-        # already provenance-checked PowerShell process.
-        Remove-Item Env:PUB_RESEARCH_FIXTURE -ErrorAction SilentlyContinue
-        Remove-Item Env:PUB_RESEARCH_PUBLISHER_EXE -ErrorAction SilentlyContinue
-        & (Join-Path $repo 'tools/research-runner/prepare_native_run.ps1') -PacketPath $packetPath -OutputRoot $armRoot
-        $boundFixture = [string]$env:PUB_RESEARCH_FIXTURE
-        $boundPublisher = [string]$env:PUB_RESEARCH_PUBLISHER_EXE
-        if (-not $boundFixture -or -not (Test-Path -LiteralPath $boundFixture -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $boundFixture -Algorithm SHA256).Hash.ToLowerInvariant() -cne
-                [string]$packet.fixture.sha256) {
-            throw 'Prepared fixture binding missing or changed after native preflight'
+        $private = Join-Path $armRoot 'private'
+        New-Item -ItemType Directory -Force -Path $private | Out-Null
+        $stdout = Join-Path $private 'bounded-child.stdout.txt'
+        $stderr = Join-Path $private 'bounded-child.stderr.txt'
+        $env:PUB_RESEARCH_AUTH_WRAP_CHILD_OUTPUT = $armRoot
+        $env:PUB_RESEARCH_AUTH_WRAP_CHILD_FAMILY = $family
+        $childCommand = @'
+$ErrorActionPreference = 'Stop'
+& $env:PUB_RESEARCH_AUTH_WRAP_CHILD_SCRIPT -TrustedCommitSha $env:PUB_RESEARCH_AUTH_WRAP_CHILD_SHA -PacketPath $env:PUB_RESEARCH_AUTH_WRAP_CHILD_PACKET -OutputRoot $env:PUB_RESEARCH_AUTH_WRAP_CHILD_OUTPUT -Family $env:PUB_RESEARCH_AUTH_WRAP_CHILD_FAMILY
+if (-not $?) { exit 1 }
+'@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+        $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @(
+            '-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encoded
+        ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        if ($null -eq $child) { throw 'AUTH-WRAP bounded child PID unavailable' }
+        try {
+            $completed = $child.WaitForExit(600000)
+            if (-not $completed) {
+                # Only the exact owned child HANDLE may be killed, not MSPUB.
+                try { if (-not $child.HasExited) { $child.Kill() } } catch {}
+                try { [void]$child.WaitForExit(10000) } catch {}
+                'timeout_requires_manual_snapshot_restore' |
+                    Set-Content -LiteralPath (Join-Path $private 'native-timeout-quarantine.txt') -Encoding ASCII
+                throw 'AUTH-WRAP arm timeout; child terminated only; restore dedicated VM before retry'
+            }
+            $child.Refresh()
+            if (-not $child.HasExited) { throw 'AUTH-WRAP child exit state unavailable' }
+            if ([int]$child.ExitCode -ne 0) {
+                throw "AUTH-WRAP bounded native arm failed; inspect private logs for family $family"
+            }
+        } finally {
+            $child.Dispose()
         }
-        if (-not $boundPublisher -or -not (Test-Path -LiteralPath $boundPublisher -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $boundPublisher -Algorithm SHA256).Hash.ToLowerInvariant() -cne
-                [string]$packet.publisher.exe_sha256) {
-            throw 'Prepared Publisher executable binding missing or changed after native preflight'
-        }
-        & $operationPath -PacketPath $packetPath -OutputRoot $armRoot
-        & (Join-Path $repo 'tools/research-runner/finalize_native_run.ps1') -PacketPath $packetPath -OutputRoot $armRoot
+        # A remaining Publisher invalidates the lease; never kill unowned PIDs.
         RequireProcessFree
     }
     $receiptA = Join-Path $root 'family-A/analysis/reset-receipt.json'
@@ -202,6 +225,10 @@ try {
     $native | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $out -Encoding utf8
     InvokeTool 'python' @('tools/validate_auth_wrap_native_receipt.py',$out)
     Write-Host 'Native A/B saved and verified; authority still INCONCLUSIVE pending PUB-T-150 layout discriminator.'
+    } finally {
+        if ($leaseHeld) { [void]$lease.ReleaseMutex() }
+        $lease.Dispose()
+    }
 } finally {
     Pop-Location
 }

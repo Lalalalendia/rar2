@@ -75,6 +75,45 @@ a{color:inherit}
   cursor:pointer;
 }
 .topbar-open:hover{filter:brightness(1.06)}
+/* Low-salience cross-product discovery: this is a new independent upload,
+   never a transfer of Reader source bytes or Guest capability. */
+.topbar-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:9px;
+  min-width:0;
+}
+.topbar-editor-link{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  min-height:36px;
+  min-width:92px;
+  padding:5px 11px;
+  border:1px solid #3a4658;
+  border-radius:8px;
+  background:#1c2532;
+  color:#d0ddec;
+  font-size:12px;
+  font-weight:650;
+  line-height:1.2;
+  text-decoration:none;
+  white-space:nowrap;
+}
+.topbar-editor-link small{
+  margin-top:2px;
+  font-size:9px;
+  font-weight:400;
+  color:#a9b7c8;
+}
+.topbar-editor-link:hover,
+.topbar-editor-link:focus-visible{
+  background:#273448;
+  border-color:#6283b3;
+  color:#fff;
+}
 
 main{
   flex:1;
@@ -372,6 +411,8 @@ summary{padding:4px 0;color:#dfe6ef;font-size:12px;font-weight:700;cursor:pointe
   .topbar{height:54px;padding:7px 10px}
   .brand-copy span{display:none}
   .topbar-open{min-height:34px;padding:0 10px}
+  .topbar-editor-link{min-height:34px;padding:6px 9px;font-size:11px}
+  .topbar-editor-link small{display:none}
   main{padding:12px}
   .open-card{padding:16px}
   .drop{min-height:210px;padding:18px}
@@ -383,6 +424,10 @@ summary{padding:4px 0;color:#dfe6ef;font-size:12px;font-weight:700;cursor:pointe
   .reader-footer{font-size:9px}
 }
 @media(max-width:470px){
+  .topbar{height:auto;min-height:54px;flex-wrap:wrap;align-content:center;gap:8px}
+  .topbar-actions{flex:1 1 145px;flex-wrap:wrap;gap:6px}
+  .topbar-open{min-height:32px;padding:4px 8px;font-size:11px}
+  .topbar-editor-link{min-height:32px;padding:4px 8px}
   .controls{align-items:stretch}
   .control-group:first-child{flex:1 1 100%}
   .control-group:first-child select{flex:1}
