@@ -22,7 +22,8 @@ class TestBrowserLogSafety(unittest.TestCase):
                 "error": "reading: connection reset by peer",
                 "request": {
                     "method": "POST",
-                    "uri": "/v1/reader/guest-sessions/{session}/open",
+                    "uri": "/v1/reader/guest-sessions/{session}/open?secret=" + token,
+                    "referer": "https://example.invalid/editor?csrf=" + csrf,
                     "headers": {
                         "X-Chaptera-Reader-Session": [token],
                         "X-Csrf-Token": [csrf],
@@ -33,6 +34,7 @@ class TestBrowserLogSafety(unittest.TestCase):
                 },
             }
             path.write_text(json.dumps(record) + "\n" +
+                            json.dumps(token) + "\n" +
                             "unexpected broken token line " + token + "\n")
             _redact_caddy_log(path)
             result = path.read_text()
@@ -44,6 +46,9 @@ class TestBrowserLogSafety(unittest.TestCase):
             self.assertIn("aborting with incomplete response", result)
             self.assertIn("application/json", result)
             self.assertIn("unparseable Caddy diagnostic suppressed", result)
+            clean_request = json.loads(result.splitlines()[0])["request"]
+            self.assertEqual(clean_request["uri"], "[redacted]")
+            self.assertEqual(clean_request["referer"], "[redacted]")
             self.assertEqual(json.loads(result.splitlines()[0])
                              ["request"]["headers"]["X-Chaptera-Reader-Session"], "[redacted]")
 
