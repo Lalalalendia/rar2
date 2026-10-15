@@ -283,9 +283,7 @@ fn patch_ref(
         bail!("replacement target equals original target");
     }
     if !frame.replacement_candidates.contains(&replacement_seq) {
-        bail!(
-            "replacement seq {replacement_seq} is not an admitted same-page non-text candidate"
-        );
+        bail!("replacement seq {replacement_seq} is not an admitted same-page non-text candidate");
     }
 
     let mut contents = pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM_PATH)
@@ -349,17 +347,20 @@ fn main() -> Result<()> {
         [command, input, output] if command == "inspect" => {
             write_inspect(Path::new(input), Path::new(output))
         }
-        [command, input, output, frame_seq, ref_index, replacement_seq]
-            if command == "patch-ref" =>
-        {
-            patch_ref(
-                Path::new(input),
-                Path::new(output),
-                frame_seq.parse().context("parse frame seq")?,
-                ref_index.parse().context("parse ref index")?,
-                replacement_seq.parse().context("parse replacement seq")?,
-            )
-        }
+        [
+            command,
+            input,
+            output,
+            frame_seq,
+            ref_index,
+            replacement_seq,
+        ] if command == "patch-ref" => patch_ref(
+            Path::new(input),
+            Path::new(output),
+            frame_seq.parse().context("parse frame seq")?,
+            ref_index.parse().context("parse ref index")?,
+            replacement_seq.parse().context("parse replacement seq")?,
+        ),
         _ => usage(),
     }
 }
