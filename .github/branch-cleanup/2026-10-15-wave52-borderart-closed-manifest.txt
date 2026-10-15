@@ -1,0 +1,16 @@
+# RAR2 guarded GC wave 52 — 2026-10-15
+# Execution-only SHA-pinned refs. DO NOT MERGE.
+# Five original Oct 3 intermediate BorderArt restacks change files covered
+# by accepted production chain #1022 -> #1041 -> #1049 -> #1080.
+# Their GitHub PR-head queries return zero results (open or closed).
+# Product BorderArt Reader/View/Render code is already in main.
+# Last ref is completed closed-unmerged wave51 execution manifest PR #2810;
+# its run log and branch-GC receipt are preserved.
+# Existing branch-gc action requires same-repo admin approval, exact head SHA,
+# protects open PR heads/bases, and compare-and-deletes exact expected ref SHAs.
+tmp/restack-borderart-assets-v1 7bd61b2607c8f59dd76b5cee75f188c98b3d3c51 # merged BorderArt Reader assets PRs #1022 #1041
+tmp/restack-borderart-render-after-1022 944d3ae29211f0608f0ff0920e0fc2ee00daa453 # merged Render/Viewer BorderArt #1049 #1080
+tmp/restack-viewer-borderart-dto-v1 9e988489330c126f4650c59803648181884eeb6c # merged Viewer BorderArt DTO #1049
+tmp/restack-viewer-borderart-render-plan-v1 830f3b2b4a9ba43aa87f5483f31b6b434afe7460 # merged render-plan BorderArt #1080
+tmp/restack-viewer-borderart-render-plan-v2 3c7342504208740709b9853568916b9cac521cb4 # merged render-plan BorderArt #1080
+ops/branch-gc-20261015-wave51-staging-observability a57daccd3ec634f9b6ffbd0ccf462cd449b63ce3 # closed execution-only wave51 PR #2810
