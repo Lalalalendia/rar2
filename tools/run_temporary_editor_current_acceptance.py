@@ -321,6 +321,12 @@ def sbdc_r1_browser_own_pdf_raster(
     outlier_census = classify_private_advance_outliers(
         private_browser_geometry["private_advance_outlier_checks"]
     )
+    from sbdc_r1_text_css_whitespace_census import census_private_css_whitespace_probe
+    css_whitespace_census = census_private_css_whitespace_probe(
+        private_browser_geometry["private_css_whitespace_checks"]
+    )
+    if css_whitespace_census["sample_count"] != text_advance_census["total_samples"]:
+        raise AssertionError("CSS whitespace trial mismatch in private R1 width cohort")
     if outlier_census["sample_count"] != text_advance_census["total_samples"]:
         raise AssertionError("private outlier sample does not match source advances")
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
@@ -339,6 +345,7 @@ def sbdc_r1_browser_own_pdf_raster(
         "text_metrics_census": text_metrics_census,
         "chromium_reader_text_advance_census": text_advance_census,
         "chromium_reader_advance_outlier_census": outlier_census,
+        "chromium_reader_css_whitespace_probe": css_whitespace_census,
         "source_r1_exact": True,
         "render_dpi": 144,
         "browser_source": "real_https_temporary_editor_scene",

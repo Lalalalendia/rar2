@@ -19,6 +19,8 @@ on:
       - "tools/test_sbdc_r1_text_advance_census.py"
       - "tools/sbdc_r1_text_advance_outlier_census.py"
       - "tools/test_sbdc_r1_text_advance_outlier_census.py"
+      - "tools/sbdc_r1_text_css_whitespace_census.py"
+      - "tools/test_sbdc_r1_text_css_whitespace_census.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -799,12 +801,13 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.4"
           node --check tools/run_temporary_editor_sbdc034_r1_browser.mjs
-          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py tools/sbdc_r1_text_advance_census.py tools/test_sbdc_r1_text_advance_census.py tools/sbdc_r1_text_advance_outlier_census.py tools/test_sbdc_r1_text_advance_outlier_census.py
+          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py tools/sbdc_r1_text_advance_census.py tools/test_sbdc_r1_text_advance_census.py tools/sbdc_r1_text_advance_outlier_census.py tools/test_sbdc_r1_text_advance_outlier_census.py tools/sbdc_r1_text_css_whitespace_census.py tools/test_sbdc_r1_text_css_whitespace_census.py
           python tools/test_sbdc_r1_raster_disagreement_census.py
           python tools/test_sbdc_r1_text_metrics_census.py
           python tools/test_sbdc_r1_text_line_geometry.py
           python tools/test_sbdc_r1_text_advance_census.py
           python tools/test_sbdc_r1_text_advance_outlier_census.py
+          python tools/test_sbdc_r1_text_css_whitespace_census.py
           python tools/run_temporary_editor_current_acceptance.py \
             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
             --caddy "/tmp/chaptera-safe-preview-022/caddy" \
@@ -863,6 +866,10 @@ jobs:
           assert outliers["schema"] == "chaptera.sbdc034-private-advance-outlier-classes.v1"
           assert outliers["source_text_ids_font_names_hashes_widths_coordinates_exported"] is False
           assert outliers["sample_count"] == advances["total_samples"]
+          css = pair["chromium_reader_css_whitespace_probe"]
+          assert css["schema"] == "chaptera.sbdc034-r1-private-svg-css-whitespace-counterfactual.v1"
+          assert css["per_line_text_ids_font_names_widths_coordinates_exported"] is False
+          assert css["sample_count"] == advances["total_samples"]
           assert all(
               outliers["cohorts"][cohort]["over_25px_count"]
               <= outliers["cohorts"][cohort]["sample_count"]

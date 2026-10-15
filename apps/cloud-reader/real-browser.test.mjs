@@ -673,13 +673,45 @@ try {
                 const faceCheck = document.fonts?.check(
                   style.fontSize + " " + style.fontFamily
                 ) === true;
+                const originalAdvanceEmu = element.getComputedTextLength() * 9525;
+                const originalInlineStyle = element.getAttribute("style");
+                let cssPreAdvanceEmu;
+                try {
+                  element.style.setProperty("white-space", "pre", "important");
+                  if (window.getComputedStyle(element).whiteSpace !== "pre") {
+                    throw new Error("temporary CSS white-space probe was not applied");
+                  }
+                  cssPreAdvanceEmu = element.getComputedTextLength() * 9525;
+                } finally {
+                  if (originalInlineStyle === null) {
+                    element.removeAttribute("style");
+                  } else {
+                    element.setAttribute("style", originalInlineStyle);
+                  }
+                }
+                const restoredAdvanceEmu = element.getComputedTextLength() * 9525;
+                if (!Number.isFinite(originalAdvanceEmu) ||
+                    !Number.isFinite(cssPreAdvanceEmu) ||
+                    Math.abs(restoredAdvanceEmu - originalAdvanceEmu) > 0.01) {
+                  throw new Error("source-private CSS trial did not restore original SVG");
+                }
                 // These fixed booleans stay in the ephemeral private CI file.
                 // The source text, font family and per-line widths are never
                 // exposed through the acceptance receipt.
                 return {
                   cohort: spans.length ? "mixed_span" : "uniform_line",
                   reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
-                  chromium_width_emu: element.getComputedTextLength() * 9525,
+                  chromium_width_emu: originalAdvanceEmu,
+                  private_space_probe: {
+                    cohort: spans.length ? "mixed_span" : "uniform_line",
+                    reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
+                    chromium_normal_width_emu: originalAdvanceEmu,
+                    chromium_pre_width_emu: cssPreAdvanceEmu,
+                    has_repeated_whitespace: /\s{2}/u.test(text),
+                    has_trailing_whitespace: /\s$/u.test(text),
+                    computed_normal_preserves_whitespace:
+                      ["pre", "pre-wrap", "break-spaces"].includes(style.whiteSpace)
+                  },
                   private_flags: {
                     has_any_whitespace: /\s/u.test(text),
                     has_leading_whitespace: /^\s/u.test(text),
@@ -720,7 +752,9 @@ try {
       }).filter(Boolean);
       assert.ok(hashed.length > 0, "R1 source shared text has no measurable browser lines");
       const privateAdvanceChecks = measured.flatMap((line) =>
-        line.advance_checks.map(({ private_flags, ...width }) => width));
+        line.advance_checks.map(({ private_flags, private_space_probe, ...width }) => width));
+      const privateCSSWhitespaceChecks = measured.flatMap((line) =>
+        line.advance_checks.map((entry) => entry.private_space_probe));
       const privateOutlierChecks = measured.flatMap((line) =>
         line.advance_checks.map((entry) => ({
           cohort: entry.cohort,
@@ -730,6 +764,8 @@ try {
         })));
       assert.equal(privateOutlierChecks.length, privateAdvanceChecks.length,
         "outlier sample must match measured source widths");
+      assert.equal(privateCSSWhitespaceChecks.length, privateAdvanceChecks.length,
+        "CSS preservation sample must match measured source widths");
       assert.ok(privateAdvanceChecks.length > 0,
         "no physical Chromium text advances in accepted R1");
       for (const record of privateAdvanceChecks) {
@@ -742,7 +778,8 @@ try {
         schema: "chaptera.private-r1-chromium-text-line-geometry.v1",
         dpi: referenceRasterDpi, lines: hashed,
         private_advance_checks: privateAdvanceChecks,
-        private_advance_outlier_checks: privateOutlierChecks
+        private_advance_outlier_checks: privateOutlierChecks,
+        private_css_whitespace_checks: privateCSSWhitespaceChecks
       }));
     }
     const nonempty = painted.filter((line) => line.text.trim());
