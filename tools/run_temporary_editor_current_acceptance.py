@@ -118,7 +118,8 @@ def sbdc_picture_scene_witness(scene: dict) -> dict:
     if not logos:
         raise AssertionError("SBDC wide CMYK logo is not admitted")
     return {"star_resource_id": star, "star_node_bounds": positions,
-            "host_image_resources": len(safe_images), "logo_admitted": True}
+            "host_image_resources": len(safe_images),
+            "logo_resource_id": logos[0], "logo_admitted": True}
 
 
 def require_sbdc_fixed_pdf_image_uses(data: bytes, star_resource_id: str) -> int:
@@ -362,10 +363,21 @@ def main() -> int:
     original_config = config.read_text(encoding="utf-8")
     if original_config.count('provider = "s3-compatible"') != 1:
         raise AssertionError("expected exactly one fixture provider declaration")
-    config.write_text(
-        original_config.replace('provider = "s3-compatible"', 'provider = "filesystem"'),
-        encoding="utf-8",
+    test_config = original_config.replace(
+        'provider = "s3-compatible"', 'provider = "filesystem"'
     )
+    if args.sbdc_cmyk_picture_proof:
+        # The same exact public Origin/Host authority must be used by curl
+        # and the real Chromium UI. Keep the canonical unported behavior for
+        # all pre-existing non-browser Guest acceptance controls.
+        original_origin = f'public_origin = "https://{live.EDGE_HOST}"'
+        if test_config.count(original_origin) != 1:
+            raise AssertionError("pinned Caddy browser authority not configured")
+        test_config = test_config.replace(
+            original_origin,
+            f'public_origin = "https://{live.EDGE_HOST}:{httpsport}"',
+        )
+    config.write_text(test_config, encoding="utf-8")
     live.write_caddy(caddyfile, app_port=appport, http_port=httpport, https_port=httpsport)
     site = caddyfile.read_text(encoding="utf-8")
     # Validate the production guest allowlist instead of patching the
@@ -413,6 +425,7 @@ def main() -> int:
                 path=path,
                 output=response,
                 headers=headers,
+                include_origin_port=args.sbdc_cmyk_picture_proof,
                 **other,
             )
             if status != 429 or attempt == 7:
@@ -923,6 +936,121 @@ def main() -> int:
         if "pdf" not in edited_formats:
             raise AssertionError("temporary guest output never proved physical changed PDF")
 
+        # The existing source-exact SBDC R1 flow has now proved real Rust
+        # authoring/replay and FOUR physical star XObject paints in the own PDF.
+        # Prove the very same accepted R1 in the actual Chromium Editor DOM
+        # and page pixels, not a synthetic Reader scene or source-only preview.
+        sbdc_browser_r1 = None
+        if sbdc_r1:
+            star_ids = set(sbdc_r1["star_node_bounds"])
+            star_frames = [
+                {"node_id": node["node_id"], "page_id": node["page_id"],
+                 "bounds": node["bounds"]}
+                for node in edited_rich_scene["nodes"]
+                if node.get("node_id") in star_ids
+            ]
+            if len(star_frames) != 4:
+                raise AssertionError("R1 browser witness cannot bind four source nodes")
+            # The bearer is only written to a 0600 file inside this runner's
+            # private temporary directory and is immediately unlinked again.
+            # It is never passed on a command line or exported as a receipt.
+            browser_private = work / "sbdc-r1-browser-private.json"
+            browser_input = {
+                "schema": "chaptera.sbdc034-private-r1-browser-input.v1",
+                "source_sha256": expected_hash,
+                "browser_record": {
+                    "schema": "chaptera.temporary-edit.browser.v0",
+                    "session_id": session_id,
+                    "access_token": token,
+                    "expires_at_ms": move_expiry,
+                    "source_sha256": expected_hash,
+                },
+                "expected": {
+                    "revision_id": accepted["revision_id"],
+                    "star_resource_id": sbdc_r1["star_resource_id"],
+                    "logo_resource_id": sbdc_r1["logo_resource_id"],
+                    "star_frames": star_frames,
+                },
+            }
+            fd = os.open(browser_private, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(browser_input, handle, separators=(",", ":"))
+                executed = subprocess.run(
+                    [
+                        "node", "tools/run_temporary_editor_sbdc034_r1_browser.mjs",
+                        "--origin", f"https://{live.EDGE_HOST}:{httpsport}",
+                        "--private-input", str(browser_private),
+                    ],
+                    cwd=live.ROOT, env=env, text=True, capture_output=True,
+                    timeout=180, check=False,
+                )
+            finally:
+                browser_private.unlink(missing_ok=True)
+            if executed.returncode != 0:
+                # One bounded source-safe failure code, never a raw Playwright
+                # stack: an exception may otherwise reveal a private URL or
+                # temporary bearer/session identity in an Actions log.
+                lines = [
+                    line.split(" ", 1)[1]
+                    for line in executed.stderr.splitlines()
+                    if line.startswith("SBDC034_R1_BROWSER_FAILURE ")
+                ]
+                evidence = json.loads(lines[-1]) if lines else {}
+                stage = evidence.get("stage")
+                code = evidence.get("code")
+                allowed_stages = {
+                    "browser_launch", "browser_load", "resume_ui",
+                    "revision_readback", "render_dom", "r1_screenshot",
+                    "r1_pixel_scan", "source_safe_receipt",
+                }
+                allowed_codes = {
+                    "browser_origin_http", "missing_picture_dom", "image_transport",
+                    "logo_dom_or_decode", "pixel_roi", "revision_identity",
+                    "browser_timeout", "network_or_origin",
+                    "assertion_unclassified", "browser_unclassified",
+                }
+                if stage not in allowed_stages:
+                    stage = "unclassified_stage"
+                if code not in allowed_codes:
+                    code = "unclassified_code"
+                numeric_status = evidence.get("http_status")
+                status_note = (
+                    f"/http{numeric_status}"
+                    if code == "browser_origin_http"
+                    and type(numeric_status) is int
+                    and 100 <= numeric_status <= 599
+                    else ""
+                )
+                raise AssertionError(
+                    "SBDC R1 Chromium Editor four-ROI paint proof failed: "
+                    + stage + "/" + code + status_note
+                )
+            physical_lines = [
+                line.split(" ", 1)[1] for line in executed.stdout.splitlines()
+                if line.startswith("SBDC034_EDITOR_R1_BROWSER_PROOF ")
+            ]
+            if len(physical_lines) != 1:
+                raise AssertionError("SBDC R1 Chromium produced no bounded numeric proof")
+            sbdc_browser_r1 = json.loads(physical_lines[0])
+            counts = sbdc_browser_r1.get("r1_star_additional_red_pixels")
+            if (sbdc_browser_r1.get("source_sha256") != expected_hash
+                or sbdc_browser_r1.get("accepted_revision_matches_browser") is not True
+                or sbdc_browser_r1.get("actual_editor_svg_star_nodes") != 4
+                or sbdc_browser_r1.get("actual_editor_logo_images", 0) < 1
+                or not isinstance(counts, list) or len(counts) != 4
+                or any(not isinstance(x, int) or x < 8 for x in counts)
+                or sbdc_browser_r1.get("browser_page_errors") != 0
+                or sbdc_browser_r1.get("outbound_network_requests") != 0):
+                raise AssertionError("SBDC R1 browser receipt did not prove all four ROIs")
+            print("SBDC034_EDITOR_R1_BROWSER_PROOF " + json.dumps({
+                "star_additional_red_pixel_counts": counts,
+                "logo_browser_painted": True,
+                "revision_bound": True,
+                "browser_errors": 0,
+                "private_payload_uploaded": False,
+            }, sort_keys=True))
+
         replay_status, replay_raw = call(
             "POST", move_path, headers=private, body_json=chosen
         )
@@ -1164,6 +1292,10 @@ def main() -> int:
                 "unmodified_star_bounds_preserved_after_move": True,
                 "star_xobject_emitted_physically": True,
                 "source_bytes_or_picture_payload_reported": False,
+                "r1_editor_chromium_star_pixel_counts": sbdc_browser_r1["r1_star_additional_red_pixels"],
+                "r1_editor_chromium_logo_painted": True,
+                "r1_editor_chromium_revision_bound": True,
+                "r1_editor_chromium_private_images_uploaded": False,
             }} if sbdc_r0 else {}),
         }
         (out / "receipt.json").write_text(
