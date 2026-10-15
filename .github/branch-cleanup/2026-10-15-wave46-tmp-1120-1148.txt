@@ -1,0 +1,14 @@
+# RAR2 guarded GC wave 46, 2026-10-15
+# Execution only. Do not merge this file/PR into main.
+# Preliminary evidence: feature PR #1120 and fix PR #1148 have merged.
+# These eight temporary restack refs have no PR heads (open or closed) at review time.
+# Exact SHA lease required; workflow additionally protects open PR heads and bases.
+# Removing branch refs does not remove underlying commit history or merged changes.
+tmp-restack-1120-20261004 57bed28adc01b587d3eee819302ce9d691f050c6 # Temporary intermediate restack associated with merged #1120; no PR head found
+tmp-restack-1120-final2-20261004 d51e37932ebfa97e41974f20d366cc8b5478970d # Temporary intermediate restack associated with merged #1120; no PR head found
+tmp-restack-1120-final-20261004 0d6b0f38fec07bb4bb074c101cce514855fec50b # Temporary intermediate restack associated with merged #1120; no PR head found
+tmp-restack-1120-history-20261004 3e735049a8665f998e6576f60cbb37aa75f46828 # Temporary intermediate restack associated with merged #1120; no PR head found
+tmp-restack-1120-main-20261004-final ce8fb17f5e1cf143407414180f0ecc54fd56a366 # Temporary intermediate restack associated with merged #1120; no PR head found
+tmp-restack-1148-20261004 7cbeee0ee0839827bbd7af32ea9aa97d934183ec # Temporary intermediate restack associated with merged #1148; no PR head found
+tmp-restack-1148-current-main-20261004 24735b3a49a27c109debb494c3534cb905156e82 # Temporary intermediate restack associated with merged #1148; no PR head found
+tmp-restack-1148-final-20261004 64b517ee1058e0df906e09029c8c6e4c6458a464 # Temporary intermediate restack associated with merged #1148; no PR head found
