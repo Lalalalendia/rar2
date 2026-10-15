@@ -121,7 +121,12 @@ pub fn derive_move_nodes_operation(
             || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
             || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
             || validate_authored_shape_runtime_v1(shape).is_err()
-            || page.children.iter().filter(|child| **child == node_id).count() != 1
+            || page
+                .children
+                .iter()
+                .filter(|child| **child == node_id)
+                .count()
+                != 1
         {
             return Err(MoveNodesIntentErrorV1::NotAuthorCreated);
         }
@@ -185,7 +190,10 @@ mod tests {
     fn accepts_canonical_page_and_authored_v7_selection() {
         let (page, ids, mode) =
             validate_move_nodes_intent(&intent(vec![C, A, B], "distribute_horizontal")).unwrap();
-        assert_eq!(page.as_canonical().to_string(), "20000000-0000-4000-8000-000000000001");
+        assert_eq!(
+            page.as_canonical().to_string(),
+            "20000000-0000-4000-8000-000000000001"
+        );
         assert_eq!(
             ids.iter()
                 .map(|id| id.as_canonical().to_string())

@@ -211,28 +211,42 @@ mod tests {
     #[test]
     fn move_nodes_requires_exact_project_and_disallows_mixed_worker_modes() {
         let base = [
-            "chaptera", "product-isolated-replay",
-            "--document-id", "tempedit:0123456789abcdef0123456789abcdef",
+            "chaptera",
+            "product-isolated-replay",
+            "--document-id",
+            "tempedit:0123456789abcdef0123456789abcdef",
             "--expected-sha256",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--expected-byte-len", "42",
+            "--expected-byte-len",
+            "42",
         ];
         let mut invalid = base.to_vec();
         invalid.extend(["--move-nodes-intent-json", "/tmp/batch.json"]);
         assert!(Cli::try_parse_from(invalid).is_err());
         let mut good = base.to_vec();
         good.extend([
-            "--project-json", "/tmp/current.json",
+            "--project-json",
+            "/tmp/current.json",
             "--expected-project-sha256",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "--move-nodes-intent-json", "/tmp/batch.json",
+            "--move-nodes-intent-json",
+            "/tmp/batch.json",
         ]);
         assert!(matches!(
             Cli::try_parse_from(good.clone()).unwrap().command,
-            Command::ProductIsolatedReplay { move_nodes_intent_json: Some(_), .. }
+            Command::ProductIsolatedReplay {
+                move_nodes_intent_json: Some(_),
+                ..
+            }
         ));
-        good.extend(["--move-node-id", "30000000-0000-7000-8000-000000000001",
-            "--move-x-emu", "10", "--move-y-emu", "10"]);
+        good.extend([
+            "--move-node-id",
+            "30000000-0000-7000-8000-000000000001",
+            "--move-x-emu",
+            "10",
+            "--move-y-emu",
+            "10",
+        ]);
         assert!(Cli::try_parse_from(good).is_err());
     }
 

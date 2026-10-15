@@ -1549,12 +1549,13 @@ pub fn run_product_replay_worker(
             })?;
         // EditorSession::apply_project replays a complete project against a
         // fresh source baseline; do not replay the old history twice.
-        let mut next_session = open_mature_0x2c_editor(&source_bytes, source_hash).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_move_nodes_rejected",
-                "isolated EditorSession could not reopen the unchanged source",
-            )
-        })?;
+        let mut next_session =
+            open_mature_0x2c_editor(&source_bytes, source_hash).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_nodes_rejected",
+                    "isolated EditorSession could not reopen the unchanged source",
+                )
+            })?;
         let mut local_expected = expected_project.clone();
         if local_expected.identity.is_none()
             && cloud_replay_requires_local_identity(&local_expected.schema_version)
@@ -2403,7 +2404,7 @@ impl IsolatedProductReplayProducer {
         expected_base_sha256: &str,
         intent: &IsolatedMoveNodesIntentV1,
     ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
-        let (expected_page, selected, _) = validate_move_nodes_intent(intent).map_err(|_| {
+        let (expected_page, selected, mode) = validate_move_nodes_intent(intent).map_err(|_| {
             ProductReplayWorkerError::new(
                 "product_move_nodes_invalid",
                 "MoveNodes intent is not an admitted canonical selection",
@@ -2462,16 +2463,15 @@ impl IsolatedProductReplayProducer {
                 "isolated MoveNodes response contains an unexpected operation",
             ));
         };
-        if *page_id != expected_page
-            || entries.is_empty()
-            || entries.len() > selected.len()
-        {
+        if *page_id != expected_page || entries.is_empty() || entries.len() > selected.len() {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "isolated MoveNodes changed the page or exceeded admitted selection",
             ));
         }
-        let admitted = selected.into_iter().collect::<std::collections::BTreeSet<_>>();
+        let admitted = selected
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
         let mut previous = None;
         for entry in entries {
             if !admitted.contains(&entry.node_id)
@@ -2503,6 +2503,72 @@ impl IsolatedProductReplayProducer {
             ));
         }
         let graph = require_typed_graph(receipt.authoring_graph)?;
+        // The host does not parse source PUB. Reconstruct the source-neutral
+        // BEFORE geometry from the checked batch entries and the unchanged
+        // selected nodes in the exact AFTER graph; then recompute the same
+        // pure EMU law. A compromised worker must not choose arbitrary moves.
+        let mut source_members = Vec::with_capacity(admitted.len());
+        for node_id in &admitted {
+            let node = graph.nodes.get(node_id).ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt omits one of the selected nodes",
+                )
+            })?;
+            if node.header.parent_id != page_id.into_canonical() {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt contains a cross-page selected node",
+                ));
+            }
+            let before = entries
+                .iter()
+                .find(|entry| entry.node_id == *node_id)
+                .map(|entry| entry.before)
+                .unwrap_or(node.header.bounds);
+            source_members.push(crate::exact_emu_align_distribute_v1::Member {
+                node_id: node_id.as_canonical().to_string(),
+                bounds: crate::exact_emu_align_distribute_v1::RectEmu {
+                    x: before.x.get(),
+                    y: before.y.get(),
+                    width: before.width.get(),
+                    height: before.height.get(),
+                },
+            });
+        }
+        let planned_result = crate::exact_emu_align_distribute_v1::plan(source_members, mode);
+        let planned = planned_result.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes receipt violates the exact source-neutral geometry law",
+            )
+        })?;
+        let required = crate::exact_emu_align_distribute_v1::changed_only(planned);
+        if required.len() != entries.len() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes receipt changes an incomplete or extra object set",
+            ));
+        }
+        for (planned, entry) in required.iter().zip(entries) {
+            let before = &entry.before;
+            let after = &entry.after;
+            if planned.node_id != entry.node_id.as_canonical().to_string()
+                || planned.before.x != before.x.get()
+                || planned.before.y != before.y.get()
+                || planned.before.width != before.width.get()
+                || planned.before.height != before.height.get()
+                || planned.after.x != after.x.get()
+                || planned.after.y != after.y.get()
+                || planned.after.width != after.width.get()
+                || planned.after.height != after.height.get()
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt has noncanonical exact-EMU before/after positions",
+                ));
+            }
+        }
         for entry in entries {
             let after_node = graph.nodes.get(&entry.node_id).ok_or_else(|| {
                 ProductReplayWorkerError::new(
@@ -3501,14 +3567,8 @@ mod tests {
             resulting_project_sha256: project_sha256(&project).unwrap(),
             resulting_project: project.clone(),
         });
-        validate_product_replay_receipt(
-            &valid,
-            "document-a",
-            &source_sha256,
-            512,
-            &"b".repeat(64),
-        )
-        .unwrap();
+        validate_product_replay_receipt(&valid, "document-a", &source_sha256, 512, &"b".repeat(64))
+            .unwrap();
         let mut mixed = valid.clone();
         mixed.baseline_project = Some(project);
         assert_eq!(
