@@ -13,6 +13,8 @@ on:
       - "tools/test_sbdc_r1_raster_disagreement_census.py"
       - "tools/sbdc_r1_text_metrics_census.py"
       - "tools/test_sbdc_r1_text_metrics_census.py"
+      - "tools/sbdc_r1_text_line_geometry.py"
+      - "tools/test_sbdc_r1_text_line_geometry.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -793,9 +795,10 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.4"
           node --check tools/run_temporary_editor_sbdc034_r1_browser.mjs
-          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py
+          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py
           python tools/test_sbdc_r1_raster_disagreement_census.py
           python tools/test_sbdc_r1_text_metrics_census.py
+          python tools/test_sbdc_r1_text_line_geometry.py
           python tools/run_temporary_editor_current_acceptance.py \
             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
             --caddy "/tmp/chaptera-safe-preview-022/caddy" \
@@ -839,6 +842,11 @@ jobs:
           assert text_metrics["source_shared_resolved_frame_count"] >= 1
           assert text_metrics["pdf_extracted_text_span_count"] >= text_metrics["pdf_assigned_spans_to_source_frames"] > 0
           assert text_metrics["private_story_text_glyph_bytes_font_names_node_ids_positions_exported"] is False
+          actual_lines = pair["text_line_geometry"]
+          assert actual_lines["schema"] == "chaptera.sbdc034-r1-chromium-ownpdf-text-line-geometry.v1"
+          assert actual_lines["chromium_shared_painted_line_count"] > 0
+          assert actual_lines["own_pdf_painted_text_line_count"] > 0
+          assert actual_lines["source_text_hashes_and_coordinates_exported"] is False
           comparison = Path("target/safe-preview-022-visual/sbdc034-r1-browser-ownpdf-raster.json")
           comparison.write_text(json.dumps(pair, indent=2, sort_keys=True) + "\n")
           print('SBDC034_R1_BROWSER_OWNPDF_RASTER ' + json.dumps(pair, sort_keys=True))
