@@ -515,7 +515,7 @@
           "$ref": "#/$defs/uuid"
         },
         "preset_shape": {
-          "enum": ["round_rect", "ellipse", "line", "line_dash_gel"]
+          "enum": ["round_rect", "ellipse", "line", "line_dash_gel", "horizontal_line"]
         },
         "solid_fill_rgb": {
           "$ref": "#/$defs/rgb"
