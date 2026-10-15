@@ -490,6 +490,85 @@ def test_total_file_limit_rejected() -> None:
         temp.cleanup()
 
 
+
+def test_web_editor_train_composes_independent_modules() -> None:
+    temp, root, base = init_repo()
+    try:
+        comfort = branch_commit(
+            root, base, "comfort", "apps/web/editor-comfort-v1.mjs",
+            "export const comfort = true;\n",
+        )
+        interaction = branch_commit(
+            root, base, "interaction",
+            "apps/web/reader-scene-editor-interaction-v1.mjs",
+            "export const interaction = true;\n",
+        )
+        plan = mod.plan_train(
+            root, base_ref=base,
+            candidates=[
+                mod.CandidateSpec("COMFORT", comfort),
+                mod.CandidateSpec("INTERACTION", interaction),
+            ],
+        )
+        expected = [
+            "web_workflow:web-editor-comfort-01",
+            "web_workflow:web-editor-http-seam",
+        ]
+        assert plan["heavy_families"] == expected
+        assert plan["effective_heavy_jobs"] == expected
+        assert plan["heavy_family_members"] == {
+            expected[0]: ["COMFORT"],
+            expected[1]: ["INTERACTION"],
+        }
+        git(root, "switch", "-C", "train", base)
+        git(root, "cherry-pick", *plan["composition_commits"])
+        verified = mod.verify_composed_head(root, plan, "train")
+        assert verified["verified"] is True
+        assert verified["heavy_families"] == expected
+    finally:
+        temp.cleanup()
+
+
+def test_web_editor_shared_and_authority_files_are_forbidden() -> None:
+    accepted = (
+        "apps/web/editor-comfort-v1.mjs",
+        "apps/web/editor-comfort-v1.test.mjs",
+        "apps/web/reader-scene-editor-interaction-v1.mjs",
+        "apps/web/reader-scene-editor-interaction-v1.test.mjs",
+    )
+    for path in accepted:
+        assert mod.is_allowed_path(path), path
+        assert mod.web_train_workflow_families([path]), path
+
+    rejected = (
+        "apps/web/temporary-editor-preview.mjs",
+        "apps/web/temporary-editor-preview.html",
+        "apps/web/temporary-editor-preview.css",
+        "apps/web/temporary-edit-browser-session-v0.mjs",
+        "apps/web/temporary-edit-move-client-v1.mjs",
+        "apps/web/observability-v1.mjs",
+        "apps/chaptera-server/src/guest_reader_http.rs",
+        ".github/workflows/cloud-reader-linux-release.yml",
+        "deploy/nginx/chaptera-reader.conf.example",
+    )
+    for path in rejected:
+        assert not mod.is_allowed_path(path), path
+
+
+def test_web_editor_workflow_path_drift_fails_closed() -> None:
+    path = "apps/web/editor-comfort-v1.mjs"
+    original = mod.WEB_TRAIN_WORKFLOW_BY_PATH[path]
+    try:
+        # An existing unrelated workflow cannot claim to test this module.
+        mod.WEB_TRAIN_WORKFLOW_BY_PATH[path] = "web-editor-http-seam.yml"
+        expect_rejected(
+            lambda: mod.web_train_workflow_families([path]),
+            "does not list admitted path",
+        )
+    finally:
+        mod.WEB_TRAIN_WORKFLOW_BY_PATH[path] = original
+
+
 def main() -> None:
     test_heavy_family_union()
     test_unrelated_feature_has_no_heavy_family()
@@ -507,6 +586,9 @@ def main() -> None:
     test_merge_commit_rejected()
     test_file_limits_rejected()
     test_total_file_limit_rejected()
+    test_web_editor_train_composes_independent_modules()
+    test_web_editor_shared_and_authority_files_are_forbidden()
+    test_web_editor_workflow_path_drift_fails_closed()
     print("integration train tests: ok")
 
 

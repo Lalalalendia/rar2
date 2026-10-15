@@ -183,7 +183,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   font-size: 12px;
 }
 #temporary-story-text { min-height: 105px; line-height: 1.5; resize: vertical; }
-#temporary-story-apply { width: 100%; }
+#temporary-story-panel .actions { flex-direction: column; }
+#temporary-story-apply, #temporary-story-discard { width: 100%; }
+#temporary-story-discard { background: #182330; color: #bdc9db; }
 
 .page-shell > section.panel[aria-labelledby="pages-heading"] {
   grid-column: 2;

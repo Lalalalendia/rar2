@@ -11,6 +11,8 @@ on:
       - "tools/run_temporary_editor_sbdc034_r1_browser.mjs"
       - "tools/sbdc_r1_raster_disagreement_census.py"
       - "tools/test_sbdc_r1_raster_disagreement_census.py"
+      - "tools/sbdc_r1_text_metrics_census.py"
+      - "tools/test_sbdc_r1_text_metrics_census.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -791,8 +793,9 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.4"
           node --check tools/run_temporary_editor_sbdc034_r1_browser.mjs
-          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py
+          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py
           python tools/test_sbdc_r1_raster_disagreement_census.py
+          python tools/test_sbdc_r1_text_metrics_census.py
           python tools/run_temporary_editor_current_acceptance.py \
             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
             --caddy "/tmp/chaptera-safe-preview-022/caddy" \
@@ -831,6 +834,11 @@ jobs:
           assert counts["shared_resolved_plan_nodes"] + counts["fallback_frame_nodes"] + counts["table_cells_with_text"] > 0
           assert census["source_picture_frame_nodes"] >= 4
           assert census["source_text_pixels_pdf_and_coordinates_exported"] is False
+          text_metrics = pair["text_metrics_census"]
+          assert text_metrics["schema"] == "chaptera.sbdc034-r1-text-metrics-census.v1"
+          assert text_metrics["source_shared_resolved_frame_count"] >= 1
+          assert text_metrics["pdf_extracted_text_span_count"] >= text_metrics["pdf_assigned_spans_to_source_frames"] > 0
+          assert text_metrics["private_story_text_glyph_bytes_font_names_node_ids_positions_exported"] is False
           comparison = Path("target/safe-preview-022-visual/sbdc034-r1-browser-ownpdf-raster.json")
           comparison.write_text(json.dumps(pair, indent=2, sort_keys=True) + "\n")
           print('SBDC034_R1_BROWSER_OWNPDF_RASTER ' + json.dumps(pair, sort_keys=True))
