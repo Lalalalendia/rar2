@@ -280,7 +280,14 @@ function applyZoom() {
   if (!scene || !pages.length) return;
   const current = pageOffsets.length ? pageAtScroll(Math.max(0, viewer.scrollTop)) : pageIndex;
   const offsetInPage = pageOffsets.length ? Math.max(0, viewer.scrollTop - pageOffsets[current]) : 0;
-  const normalized = Math.min(1, offsetInPage / Math.max(1, pageHeight(current)));
+  // The zoom selector already contains the NEW scale, so pageHeight(current)
+  // would incorrectly measure the new page. Use the OLD prefix offsets to
+  // preserve the user's relative position inside the current PageId.
+  const oldPageHeight = pageOffsets.length
+    ? pageOffsets[current + 1] - pageOffsets[current]
+      - (current + 1 < pages.length ? PAGE_GAP : 0)
+    : pageHeight(current);
+  const normalized = Math.min(1, offsetInPage / Math.max(1, oldPageHeight));
   recomputeOffsets();
   mountedPageIds = "";
   viewer.scrollTop = pageOffsets[current] + normalized * pageHeight(current);
