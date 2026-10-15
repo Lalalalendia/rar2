@@ -680,7 +680,9 @@ try {
   await check("500-page Reader mounts only nearby SVGs and preserves distant page navigation", async () => {
     const big = fixture("Large synthetic viewport document");
     big.pages = Array.from({ length: 500 }, (_, i) => ({
-      page_id: "p" + (i + 1), order: i, width_emu: emu(600), height_emu: emu(760)
+      page_id: "p" + (i + 1), order: i,
+      width_emu: emu(i === 0 ? 900 : i === 399 ? 300 : 600),
+      height_emu: emu(760)
     }));
     // Deliberately interleaved input: filter indexes follow legacy page-major
     // paint order, not array order or the currently mounted window.
@@ -700,9 +702,13 @@ try {
     assert.equal(await page.locator("#page-select option").count(), 500);
     assert.ok(await page.locator("#pages > svg.page").count() <= 6,
       "initial Reader window must not materialize all 500 SVGs");
+    const originalDocumentWidth = await page.locator("#pages").evaluate(element => element.getBoundingClientRect().width);
     await page.locator("#page-select").selectOption("399");
     await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p400"]') !== null);
     assert.equal(await page.locator("#page-select").inputValue(), "399");
+    assert.ok(Math.abs(await page.locator("#pages").evaluate(element =>
+      element.getBoundingClientRect().width) - originalDocumentWidth) < 1,
+      "the widest offscreen page must still define the stable document width");
     assert.ok(await page.locator("#pages > svg.page").count() <= 6,
       "distant jump must keep a bounded number of mounted SVG pages");
     assert.equal(await page.locator("#pages > svg.page[data-page-id='p1']").count(), 0);
