@@ -14,10 +14,10 @@ use std::{
 
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoringTextPresetV1,
-    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, EditOperation,
-    EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, Srgb8V1,
-    StoryId, open_mature_0x2c_editor,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
+    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoringTextPresetV1,
+    EditOperation, EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu,
+    Sha256Digest, Srgb8V1, StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use serde::{Deserialize, Serialize};
@@ -179,7 +179,6 @@ fn exact_create_shape_operation(
     })
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IsolatedCreateTextBoxIntentV1 {
@@ -204,7 +203,8 @@ fn temporary_textbox_preset_v1() -> AuthoringTextPresetV1 {
     // Server-selected canonical authoring preset, never supplied by a browser.
     AuthoringTextPresetV1 {
         resource_id: "chaptera.desktop.fallback-font.ubuntu-light.v1".to_owned(),
-        font_fingerprint_sha256: "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70".to_owned(),
+        font_fingerprint_sha256: "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70"
+            .to_owned(),
         face_index: 0,
         font_size_emu: LengthEmu::new(114_300),
         line_height_emu: LengthEmu::new(142_875),
@@ -214,19 +214,25 @@ fn temporary_textbox_preset_v1() -> AuthoringTextPresetV1 {
 fn validate_create_textbox_intent(
     intent: &IsolatedCreateTextBoxIntentV1,
 ) -> Result<(), ProductReplayWorkerError> {
-    let valid_v7 = |id: &str| id.len() == 36
-        && id.as_bytes().get(14) == Some(&b'7')
-        && serde_json::from_value::<NodeId>(Value::String(id.to_owned())).is_ok();
-    if !valid_v7(&intent.node_id) || !valid_v7(&intent.story_id)
+    let valid_v7 = |id: &str| {
+        id.len() == 36
+            && id.as_bytes().get(14) == Some(&b'7')
+            && serde_json::from_value::<NodeId>(Value::String(id.to_owned())).is_ok()
+    };
+    if !valid_v7(&intent.node_id)
+        || !valid_v7(&intent.story_id)
         || intent.node_id == intent.story_id
         || serde_json::from_value::<PageId>(Value::String(intent.page_id.clone())).is_err()
-        || intent.x_emu < 0 || intent.y_emu < 0
-        || intent.width_emu <= 0 || intent.height_emu <= 0
+        || intent.x_emu < 0
+        || intent.y_emu < 0
+        || intent.width_emu <= 0
+        || intent.height_emu <= 0
         || intent.x_emu.checked_add(intent.width_emu).is_none()
         || intent.y_emu.checked_add(intent.height_emu).is_none()
     {
         return Err(ProductReplayWorkerError::new(
-            "product_create_textbox_invalid", "CreateTextBox intent has invalid IDs or bounds",
+            "product_create_textbox_invalid",
+            "CreateTextBox intent has invalid IDs or bounds",
         ));
     }
     Ok(())
@@ -237,17 +243,24 @@ fn exact_create_textbox_operation(
 ) -> Result<EditOperation, ProductReplayWorkerError> {
     validate_create_textbox_intent(intent)?;
     let typed = |id: &str| Value::String(id.to_owned());
-    let node_id = serde_json::from_value::<NodeId>(typed(&intent.node_id))
-        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "NodeId invalid"))?;
-    let story_id = serde_json::from_value::<StoryId>(typed(&intent.story_id))
-        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "StoryId invalid"))?;
-    let page_id = serde_json::from_value::<PageId>(typed(&intent.page_id))
-        .map_err(|_| ProductReplayWorkerError::new("product_create_textbox_invalid", "PageId invalid"))?;
+    let node_id = serde_json::from_value::<NodeId>(typed(&intent.node_id)).map_err(|_| {
+        ProductReplayWorkerError::new("product_create_textbox_invalid", "NodeId invalid")
+    })?;
+    let story_id = serde_json::from_value::<StoryId>(typed(&intent.story_id)).map_err(|_| {
+        ProductReplayWorkerError::new("product_create_textbox_invalid", "StoryId invalid")
+    })?;
+    let page_id = serde_json::from_value::<PageId>(typed(&intent.page_id)).map_err(|_| {
+        ProductReplayWorkerError::new("product_create_textbox_invalid", "PageId invalid")
+    })?;
     Ok(EditOperation::CreateTextBox {
-        node_id, story_id, page_id,
+        node_id,
+        story_id,
+        page_id,
         bounds: RectEmu::new(
-            LengthEmu::new(intent.x_emu), LengthEmu::new(intent.y_emu),
-            LengthEmu::new(intent.width_emu), LengthEmu::new(intent.height_emu),
+            LengthEmu::new(intent.x_emu),
+            LengthEmu::new(intent.y_emu),
+            LengthEmu::new(intent.width_emu),
+            LengthEmu::new(intent.height_emu),
         ),
         text_preset: temporary_textbox_preset_v1(),
     })
@@ -701,13 +714,17 @@ pub fn validate_product_replay_receipt(
     }
 
     let authority_count = usize::from(receipt.baseline_project.is_some())
-        + usize::from(receipt.move_node.is_some()) + usize::from(receipt.resize_node.is_some())
-        + usize::from(receipt.create_shape.is_some()) + usize::from(receipt.create_textbox.is_some())
-        + usize::from(receipt.story_range.is_some()) + usize::from(receipt.reader_scene.is_some())
+        + usize::from(receipt.move_node.is_some())
+        + usize::from(receipt.resize_node.is_some())
+        + usize::from(receipt.create_shape.is_some())
+        + usize::from(receipt.create_textbox.is_some())
+        + usize::from(receipt.story_range.is_some())
+        + usize::from(receipt.reader_scene.is_some())
         + usize::from(receipt.editable_export.is_some());
     if authority_count > 1 {
         return Err(ProductReplayWorkerError::new(
-            "product_replay_receipt_invalid", "isolated receipt has multiple mutation authorities",
+            "product_replay_receipt_invalid",
+            "isolated receipt has multiple mutation authorities",
         ));
     }
     let serialized_graph = serde_json::to_vec(&receipt.authoring_graph).map_err(|_| {
@@ -779,11 +796,15 @@ pub fn validate_product_replay_receipt(
         && (!matches!(created.operation, EditOperation::CreateTextBox { .. })
             || created.resulting_project.source_hash.to_string() != source_sha256
             || project_sha256(&created.resulting_project).map_err(|_| {
-                ProductReplayWorkerError::new("product_replay_receipt_invalid", "unhashable TextBox project")
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "unhashable TextBox project",
+                )
             })? != created.resulting_project_sha256)
     {
         return Err(ProductReplayWorkerError::new(
-            "product_replay_receipt_invalid", "CreateTextBox source/project identity invalid",
+            "product_replay_receipt_invalid",
+            "CreateTextBox source/project identity invalid",
         ));
     }
     if let Some(resize) = &receipt.resize_node
@@ -1198,7 +1219,8 @@ pub fn run_product_replay_worker(
     }
     if create_textbox_intent_path.is_some() && project_path.is_none() {
         return Err(ProductReplayWorkerError::new(
-            "product_create_textbox_invalid", "CreateTextBox requires a verified base project",
+            "product_create_textbox_invalid",
+            "CreateTextBox requires a verified base project",
         ));
     }
     if create_shape_intent_path.is_some() && project_path.is_none() {
@@ -1424,11 +1446,13 @@ pub fn run_product_replay_worker(
 
     let create_textbox_intent = if let Some(path) = create_textbox_intent_path {
         let bytes = read_bounded(path, MAX_CREATE_TEXTBOX_INTENT_BYTES)?;
-        let intent: IsolatedCreateTextBoxIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "CreateTextBox private JSON is not typed",
-            )
-        })?;
+        let intent: IsolatedCreateTextBoxIntentV1 =
+            serde_json::from_slice(&bytes).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid",
+                    "CreateTextBox private JSON is not typed",
+                )
+            })?;
         validate_create_textbox_intent(&intent)?;
         Some(intent)
     } else {
@@ -1708,60 +1732,83 @@ pub fn run_product_replay_worker(
     let create_textbox = if let Some(intent) = create_textbox_intent {
         let expected = exact_create_textbox_operation(&intent)?;
         let EditOperation::CreateTextBox {
-            node_id, story_id, page_id, bounds, text_preset,
-        } = &expected else {
+            node_id,
+            story_id,
+            page_id,
+            bounds,
+            text_preset,
+        } = &expected
+        else {
             unreachable!("CreateTextBox intent builds one canonical operation")
         };
         let page = session.graph().pages.get(page_id).ok_or_else(|| {
             ProductReplayWorkerError::new(
-                "product_create_textbox_rejected", "TextFrame page missing",
+                "product_create_textbox_rejected",
+                "TextFrame page missing",
             )
         })?;
-        if bounds.right().is_none_or(|x| x.get() > page.size.width.get())
-            || bounds.bottom().is_none_or(|y| y.get() > page.size.height.get())
+        if bounds
+            .right()
+            .is_none_or(|x| x.get() > page.size.width.get())
+            || bounds
+                .bottom()
+                .is_none_or(|y| y.get() > page.size.height.get())
         {
             return Err(ProductReplayWorkerError::new(
-                "product_create_textbox_rejected", "TextFrame extends beyond canonical page",
+                "product_create_textbox_rejected",
+                "TextFrame extends beyond canonical page",
             ));
         }
         let operation = session
             .create_text_box(*node_id, *story_id, *page_id, *bounds, text_preset.clone())
-            .map_err(|_| ProductReplayWorkerError::new(
-                "product_create_textbox_rejected", "isolated EditorSession rejected TextFrame",
-            ))?;
-        let proof = session.prove_author_created_story_v1(*story_id).map_err(|_| {
-            ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "author-created Story has no canonical proof",
-            )
-        })?;
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_rejected",
+                    "isolated EditorSession rejected TextFrame",
+                )
+            })?;
+        let proof = session
+            .prove_author_created_story_v1(*story_id)
+            .map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid",
+                    "author-created Story has no canonical proof",
+                )
+            })?;
         if operation != expected
             || proof.frame_id != *node_id
             || proof.page_id != *page_id
             || proof.text_preset != *text_preset
         {
             return Err(ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "TextFrame/Story differ from canonical operation",
+                "product_create_textbox_invalid",
+                "TextFrame/Story differ from canonical operation",
             ));
         }
         let resulting_project = cloud_revision_project(&session.project());
         let expected_project =
             append_event_operation(project.clone(), operation.clone()).map_err(|_| {
                 ProductReplayWorkerError::new(
-                    "product_create_textbox_invalid", "TextFrame event append failed",
+                    "product_create_textbox_invalid",
+                    "TextFrame event append failed",
                 )
             })?;
         if expected_project != resulting_project {
             return Err(ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "TextFrame exact project replay differs",
+                "product_create_textbox_invalid",
+                "TextFrame exact project replay differs",
             ));
         }
         let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
             ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "TextFrame canonical hash invalid",
+                "product_create_textbox_invalid",
+                "TextFrame canonical hash invalid",
             )
         })?;
         Some(IsolatedCreateTextBoxReceiptV1 {
-            operation, resulting_project, resulting_project_sha256,
+            operation,
+            resulting_project,
+            resulting_project_sha256,
         })
     } else {
         None
@@ -2139,7 +2186,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2182,7 +2229,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         if receipt.move_node.is_some()
@@ -2274,7 +2321,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2360,7 +2407,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2487,7 +2534,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 Some(intent),
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2612,7 +2659,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2814,7 +2861,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2926,7 +2973,7 @@ impl IsolatedProductReplayProducer {
                 Some(target),
                 None,
                 None,
-                            None,
+                None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -3032,7 +3079,8 @@ impl IsolatedProductReplayProducer {
         }
         if create_textbox.is_some() && project.is_none() {
             return Err(ProductReplayWorkerError::new(
-                "product_create_textbox_invalid", "CreateTextBox needs a verified project",
+                "product_create_textbox_invalid",
+                "CreateTextBox needs a verified project",
             ));
         }
         if create_shape.is_some() && project.is_none() {
@@ -3101,12 +3149,14 @@ impl IsolatedProductReplayProducer {
             validate_create_textbox_intent(intent)?;
             let bytes = serde_json::to_vec(intent).map_err(|_| {
                 ProductReplayWorkerError::new(
-                    "product_create_textbox_invalid", "private TextFrame intent cannot be serialized",
+                    "product_create_textbox_invalid",
+                    "private TextFrame intent cannot be serialized",
                 )
             })?;
             if bytes.len() as u64 > MAX_CREATE_TEXTBOX_INTENT_BYTES {
                 return Err(ProductReplayWorkerError::new(
-                    "product_create_textbox_invalid", "private TextFrame intent too large",
+                    "product_create_textbox_invalid",
+                    "private TextFrame intent too large",
                 ));
             }
             write_private_replay_input(&create_textbox_intent_path, &bytes).await?;
@@ -3198,7 +3248,9 @@ impl IsolatedProductReplayProducer {
                 .arg(&create_shape_intent_path);
         }
         if create_textbox.is_some() {
-            command.arg("--create-textbox-intent-json").arg(&create_textbox_intent_path);
+            command
+                .arg("--create-textbox-intent-json")
+                .arg(&create_textbox_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);

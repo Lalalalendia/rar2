@@ -43,8 +43,9 @@ use crate::{
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     product_replay_worker::{
-        IsolatedCreateShapeIntentV1, IsolatedCreateTextBoxIntentV1, IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer,
-        IsolatedReaderSceneIntentV1, IsolatedResizeNodeIntentV1, IsolatedStoryRangeIntentV1,
+        IsolatedCreateShapeIntentV1, IsolatedCreateTextBoxIntentV1, IsolatedMoveNodeIntentV1,
+        IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1, IsolatedResizeNodeIntentV1,
+        IsolatedStoryRangeIntentV1,
     },
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
@@ -1154,8 +1155,9 @@ fn temporary_create_textbox_accepted(
             "temporary_editor_create_textbox_receipt_invalid",
         ));
     }
-    let event = decode_editor_revision_event_v1(&edge)
-        .map_err(|_| GuestReaderError::internal("temporary_editor_create_textbox_receipt_invalid"))?;
+    let event = decode_editor_revision_event_v1(&edge).map_err(|_| {
+        GuestReaderError::internal("temporary_editor_create_textbox_receipt_invalid")
+    })?;
     if !matches!(event.operation, EditOperation::CreateTextBox { .. }) {
         return Err(GuestReaderError::internal(
             "temporary_editor_create_textbox_receipt_invalid",
@@ -4795,7 +4797,13 @@ mod tests {
             temporary_editor_trace_stage(&Method::POST, "/v1/editor/temporary-sessions"),
             Some("temporary.session_create")
         );
-        for endpoint in ["move-node", "resize-node", "story-range", "create-shape", "create-textbox"] {
+        for endpoint in [
+            "move-node",
+            "resize-node",
+            "story-range",
+            "create-shape",
+            "create-textbox",
+        ] {
             assert_eq!(
                 temporary_editor_trace_stage(&Method::POST, &format!("{prefix}/{endpoint}")),
                 Some("temporary.commit")
