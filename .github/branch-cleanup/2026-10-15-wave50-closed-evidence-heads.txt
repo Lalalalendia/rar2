@@ -1,0 +1,12 @@
+# RAR2 guarded GC wave 50: completed execution-only manifest heads
+# Closed, unmerged draft PRs #2798, #2799, #2803, #2807, #2808.
+# All five corresponding execution workflows finished SUCCESS and left receipts.
+# These branch pointers exist only for submitting historical SHA-pinned manifests;
+# the PR comments and GitHub Actions run artifact receipts preserve provenance.
+# Do NOT merge this manifest into main. Guard GC engine still rechecks open PR
+# head/base and exact branch SHA before deletion, and emits a durable receipt.
+ops/branch-gc-20261015-evidence-batch45 5a9517bef09302527ce369a378786c5716becfe1 # previous branch-gc manifest PR #2798, closed without merge
+ops/branch-gc-20261015-wave46-tmp-1120-1148 8ef57e5cbae944363af6db71d9c2646c587c4589 # previous branch-gc manifest PR #2799, closed without merge
+ops/branch-gc-20261015-wave47-tmp-1128-1135-1152 8cfd7a6d4bb9f417f8021ed638b8d2e4110d7e33 # previous branch-gc manifest PR #2803, closed without merge
+ops/branch-gc-20261015-wave48-merged-restacks 656fc2fa6c758cbb1bd95616274e8e908af94f4a # previous branch-gc manifest PR #2807, closed without merge
+ops/branch-gc-20261015-wave49-accepted-restacks 1f3a62d76549da68dbfd4eee7885df46c5456b7e # previous branch-gc manifest PR #2808, closed without merge
