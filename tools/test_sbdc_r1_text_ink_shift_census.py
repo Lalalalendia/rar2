@@ -58,6 +58,32 @@ class ShiftProbeTest(unittest.TestCase):
         self.assertNotIn("PRIVATE-SYNTHETIC", str(result))
         self.assertNotIn("fake-private-node", str(result))
         self.assertEqual(len(result["shift_scores"]), 13)
+        for direction in (
+            "pixel_neighborhood_browser_to_pdf",
+            "pixel_neighborhood_pdf_to_browser",
+        ):
+            stats = result[direction]
+            self.assertLessEqual(
+                stats["radius2_unmatched_pixels"], stats["radius1_unmatched_pixels"]
+            )
+            self.assertLessEqual(
+                stats["radius1_unmatched_pixels"],
+                result["baseline_source_mask_different_pixels"],
+            )
+
+    def test_one_pixel_edge_displacement_recovers_without_moving_pdf(self):
+        browser, pdf, changed = sample(1)
+        result = probe_shared_text_composite_shift(browser, pdf, scene(), changed)
+        self.assertGreater(result["baseline_source_mask_different_pixels"], 0)
+        self.assertEqual(result["best_virtual_pdf_dy_px"], 0)
+        for direction in (
+            "pixel_neighborhood_browser_to_pdf",
+            "pixel_neighborhood_pdf_to_browser",
+        ):
+            self.assertEqual(result[direction]["radius1_unmatched_pixels"], 0)
+            self.assertEqual(result[direction]["radius2_unmatched_pixels"], 0)
+        self.assertNotIn("PRIVATE-SYNTHETIC", str(result))
+        self.assertNotIn("fake-private-node", str(result))
 
     def test_baseline_is_best_on_identical_inputs(self):
         browser, _, _ = sample(4)
