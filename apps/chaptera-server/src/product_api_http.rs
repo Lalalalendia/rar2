@@ -511,6 +511,7 @@ fn project_reader_scene_with_worker_samples(
 
     let mut authored_rectangles = Vec::<AuthoredShapeRuntimeV1>::new();
     let mut authored_text_frames = Vec::<AuthoredTextFrameReaderV1>::new();
+    let mut authored_text_frame_ids = Vec::new();
     if revision_id != baseline_revision_id {
         let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
             ProductApiError::internal(
@@ -599,6 +600,7 @@ fn project_reader_scene_with_worker_samples(
                             "current TextFrame geometry or bounded Story differs from canonical CreateTextBox",
                         ));
                     }
+                    authored_text_frame_ids.push(*node_id);
                     authored_text_frames.push(AuthoredTextFrameReaderV1 {
                         node_id: node_id.as_canonical().to_string(),
                         story_id: story_id.as_canonical().to_string(),
@@ -655,6 +657,23 @@ fn project_reader_scene_with_worker_samples(
             }
         }
 
+        // Refreshing the authored Story creates a StoryFrame binding. That
+        // binding is invalid unless its canonical page-owned node is also in
+        // the Viewer physical scene. Use the existing guarded Viewer sync,
+        // not a second synthetic node injected after Reader projection.
+        bundle
+            .geometry
+            .sync_editor_created_text_box_scene_nodes(
+                session.graph(),
+                &authored_text_frame_ids,
+                &std::collections::BTreeSet::new(),
+            )
+            .map_err(|_| {
+                ProductApiError::conflict(
+                    "reader_scene_authored_text_frame_sync_failed",
+                    "canonical authored TextFrame could not enter the current Viewer scene",
+                )
+            })?;
         bundle
             .geometry
             .refresh_text_projection_from_resolved(session.graph())
@@ -753,7 +772,7 @@ fn project_reader_scene_with_worker_samples(
         )
     })?;
     append_authored_rectangles_to_reader_scene(&mut scene, &authored_rectangles)?;
-    append_authored_text_frames_to_reader_scene(&mut scene, &authored_text_frames)?;
+    admit_projected_authored_text_frames_in_reader_scene(&mut scene, &authored_text_frames)?;
 
     // Only the syscall-confined worker may decode immutable PUB image bytes.
     // The server receives decoded samples, not original PNG/JPEG containers.
@@ -784,135 +803,106 @@ fn project_reader_scene_with_worker_samples(
 
 const MAX_AUTHORED_TEXT_FRAMES_PER_READER_SCENE: usize = 128;
 
-/// Admit only replay-proven Chaptera-created Story/Frame projections. No new
-/// native Publisher geometry or invented source paint order is implied.
-/// Until glyph shaping is independently established, visible text is marked
-/// browser-preview-only and the whole mixed scene remains Needs review / Partial.
-fn append_authored_text_frames_to_reader_scene(
+/// Consume only already-resolved, EditorSession-proven TextFrames. The Viewer
+/// must have synced the exact author-created node before projecting Story text;
+/// a missing or inconsistent physical Reader node is a hard failure, never a
+/// cue to synthesize a second node or make up source paint order.
+fn admit_projected_authored_text_frames_in_reader_scene(
     scene: &mut ReaderSceneV1,
     authored: &[AuthoredTextFrameReaderV1],
 ) -> Result<(), ProductApiError> {
     if authored.len() > MAX_AUTHORED_TEXT_FRAMES_PER_READER_SCENE {
         return Err(ProductApiError::conflict(
             "reader_scene_authored_text_frame_limit",
-            "too many author-created text frames for a bounded Reader scene",
+            "too many author-created TextFrames for one bounded Reader scene",
         ));
     }
     for frame in authored {
-        let page = scene
-            .pages
-            .iter()
+        let page = scene.pages.iter()
             .find(|page| page.page_id == frame.page_id)
-            .ok_or_else(|| {
-                ProductApiError::conflict(
-                    "reader_scene_authored_text_frame_page_missing",
-                    "canonical authored TextFrame is not attached to a Reader page",
-                )
-            })?;
+            .ok_or_else(|| ProductApiError::conflict(
+                "reader_scene_authored_text_frame_page_missing",
+                "canonical authored TextFrame is not attached to a Reader page",
+            ))?;
         let b = &frame.bounds;
-        if b.x < 0
-            || b.y < 0
-            || b.width <= 0
-            || b.height <= 0
-            || b.x
-                .checked_add(b.width)
-                .is_none_or(|right| right > page.width_emu)
-            || b.y
-                .checked_add(b.height)
-                .is_none_or(|bottom| bottom > page.height_emu)
+        if b.x < 0 || b.y < 0 || b.width <= 0 || b.height <= 0
+            || b.x.checked_add(b.width).is_none_or(|right| right > page.width_emu)
+            || b.y.checked_add(b.height).is_none_or(|bottom| bottom > page.height_emu)
             || frame.font_size_emu != 114_300
             || frame.text.len() > 8192
             || frame.text.chars().any(char::is_control)
             || frame.node_id == frame.story_id
-            || scene.nodes.iter().any(|node| node.node_id == frame.node_id)
-            || scene
-                .stories
-                .iter()
-                .any(|story| story.story_id == frame.story_id)
         {
             return Err(ProductApiError::conflict(
                 "reader_scene_authored_text_frame_invalid",
                 "author-created TextFrame geometry, Story or identity is outside the guarded scene contract",
             ));
         }
-        scene.nodes.push(ReaderNodeV1 {
-            node_id: frame.node_id.clone(),
-            origin_node_id: None,
-            page_id: frame.page_id.clone(),
-            parent_node_id: None,
-            kind: "text_frame",
-            bounds: ReaderRectV1 {
-                x: b.x,
-                y: b.y,
-                width: b.width,
-                height: b.height,
-            },
-            text_bounds: None,
-            transform: ReaderTransformV1 {
-                a: "1".into(),
-                b: "0".into(),
-                c: "0".into(),
-                d: "1".into(),
-                tx: 0,
-                ty: 0,
-            },
-            paint: None,
-            decorative_border: None,
-            resource_id: None,
-            image_source_window: None,
-            image_content_rotation_degrees: None,
-            image_recolor: None,
-            table: None,
-            text: Some(frame.text.clone()),
-            // No browser-invented line breaking or glyph advances.
-            text_layout: None,
-            preview_text_style: Some(ReaderPreviewTextStyleV1 {
+        if scene.nodes.iter().filter(|n| n.node_id == frame.node_id).count() != 1 {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_duplicate",
+                "Reader Scene contains an ambiguous authored TextFrame identity",
+            ));
+        }
+        let Some(node) = scene.nodes.iter_mut()
+            .find(|node| node.node_id == frame.node_id)
+        else {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_unprojected",
+                "canonical TextFrame was not resolved by the source-neutral Viewer",
+            ));
+        };
+        if node.page_id != frame.page_id || node.kind != "text_frame"
+            || node.bounds.x != b.x || node.bounds.y != b.y
+            || node.bounds.width != b.width || node.bounds.height != b.height
+            || node.text.as_deref().unwrap_or("") != frame.text
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_mismatch",
+                "Reader TextFrame does not equal the canonical authored node and Story",
+            ));
+        }
+        let exact_stories = scene.stories.iter()
+            .filter(|story| story.story_id == frame.story_id
+                && story.text == frame.text)
+            .count();
+        if exact_stories != 1
+            || scene.stories.iter()
+                .filter(|story| story.story_id == frame.story_id).count() != 1
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_story_projection_mismatch",
+                "Reader Scene did not resolve the exact canonical authored Story",
+            ));
+        }
+        if node.preview_text_style.is_none() {
+            node.preview_text_style = Some(ReaderPreviewTextStyleV1 {
                 font_size_emu: Some(frame.font_size_emu),
                 color_rgb: Some([0, 0, 0]),
-            }),
-        });
-        scene.stories.push(ReaderStoryV1 {
-            story_id: frame.story_id.clone(),
-            text: frame.text.clone(),
-            text_fidelity: "partial",
-        });
+            });
+        }
     }
     if !authored.is_empty() {
         scene.stacking_fidelity = "unknown";
         scene.fidelity.state = "partial";
-        if !scene
-            .fidelity
-            .reasons
-            .contains(&"authored_text_frame_preview_only")
-        {
-            scene
-                .fidelity
-                .reasons
-                .push("authored_text_frame_preview_only");
-        }
-        if !scene
-            .fidelity
-            .reasons
-            .contains(&"authored_text_frame_mixed_order_unsupported")
-        {
-            scene
-                .fidelity
-                .reasons
-                .push("authored_text_frame_mixed_order_unsupported");
+        for reason in [
+            "authored_text_frame_preview_only",
+            "authored_text_frame_mixed_order_unsupported",
+        ] {
+            if !scene.fidelity.reasons.contains(&reason) {
+                scene.fidelity.reasons.push(reason);
+            }
         }
         if serde_json::to_vec(scene)
-            .map_err(|_| {
-                ProductApiError::internal(
-                    "reader_scene_projection_failed",
-                    "bounded authored text Scene serialization failed",
-                )
-            })?
-            .len()
-            > MAX_SCENE_BYTES
+            .map_err(|_| ProductApiError::internal(
+                "reader_scene_projection_failed",
+                "bounded authored TextFrame Scene serialization failed",
+            ))?
+            .len() > MAX_SCENE_BYTES
         {
             return Err(ProductApiError::conflict(
                 "reader_scene_authored_text_frame_size_limit",
-                "author-created TextFrame Reader scene exceeds byte cap",
+                "author-created TextFrame Reader scene exceeds the byte cap",
             ));
         }
     }
