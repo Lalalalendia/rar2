@@ -81,43 +81,7 @@ jobs:
           python -m unittest discover -s tools/research-runner/tests -p "test_auth_wrap_*_1188.py" -v
           if ($LASTEXITCODE -ne 0) { throw "AUTH-WRAP offline contract regressions" }
           $checkoutSha = (& git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $checkoutSha -notmatch '^[0-9a-f]{40}        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          python -m unittest -v tools.test_pub_operation_algebra_fingerprint
-
-      - name: Validate T891 evidence classifier
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          python -m unittest -v tools.test_t891_evidence_classifier
-
-      - name: Guard M1 native trust and evidence wiring
-        shell: pwsh
-        run: python tools/research-runner/tests/test_text_width_m1_contract.py
-
-      - name: Guard bounded M2 Publisher breakpoint contract
-        shell: pwsh
-        run: python tools/research-runner/tests/test_text_width_m2_contract.py
-
-      - name: Guard M3 read-only hyphenation options audit
-        shell: pwsh
-        run: python tools/research-runner/tests/test_text_width_m3_audit_contract.py
-
-      - name: Guard M3b application-wide preference transaction
-        shell: pwsh
-        run: python tools/research-runner/tests/test_text_width_m3b_contract.py
-
-      - name: Guard M4 three-arm hyphenation CFB localization
-        shell: pwsh
-        run: python tools/research-runner/tests/test_text_width_m4_contract.py
-
-      - name: Exercise Structured Storage deletion helper
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          pwsh -NoProfile -File tools/research-runner/tests/test_cfb_structured_storage.ps1
-) {
+          if ($LASTEXITCODE -ne 0 -or $checkoutSha -notmatch '^[0-9a-f]{40}$') {
             throw "Invalid exact checked-out commit SHA for hosted preflight"
           }
           pwsh -NoProfile -File tools/research-runner/auth_wrap_direct_1188.ps1 `
