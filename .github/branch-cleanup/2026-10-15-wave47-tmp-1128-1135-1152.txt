@@ -1,0 +1,15 @@
+# RAR2 guarded branch cleanup wave 47 — 2026-10-15
+# Execution-only manifest; do not merge this PR.
+# Provenance: PRs #1128, #1135 and #1152 are merged into main.
+# All seven temp-restack branches are old (Oct 3–4), 1200+ commits behind current main.
+# None is a PR head (open or closed) in the GitHub API at review time.
+# Use existing GC workflow: exact SHA lease and open-PR head/base protections;
+# preserve merged PR history and commit identities.
+
+tmp-restack-1128-20261004 744c47006a212729f609ffad13a79b7f9738f8f2 # obsolete temporary restack for merged PR #1128
+tmp-restack-1128-history-20261004 d7bc8eb75e083d731bc687691823dc73edd12ee1 # obsolete temporary restack for merged PR #1128
+tmp-restack-1135-20261004 9a9444de3e2eb3af72196a19ba6be7b986a77ab1 # obsolete temporary restack for merged PR #1135
+tmp-restack-1135-clean-20261004 ec6ccf10eed4e77d29f5bc9def9cb83ccecb9ad6 # obsolete temporary restack for merged PR #1135
+tmp-restack-1135-history-20261004 be94a9d5228f2eb014e7e03c41b0836386786499 # obsolete temporary restack for merged PR #1135
+tmp-restack-1135-semantic-20261004 719a436f9514985bd7a6dce332bbfded8709362a # obsolete temporary restack for merged PR #1135
+tmp-restack-1152-main-20261004 23b662fd522951a9c4c8a404d6ee073d5f6239ec # obsolete temporary restack for merged PR #1152
