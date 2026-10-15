@@ -158,9 +158,9 @@ try {
     // Source bytes, filenames, DOM errors, URLs and identities stay private.
     const ui = await page.evaluate(() => ({
       status: document.querySelector("#status")?.textContent ?? null,
-      hasError: Boolean(document.querySelector("#error")?.textContent?.trim()),
-    })).catch(() => ({ status: null, hasError: false }));
-    const code = classifyNavigationFailure(ui.status, ui.hasError);
+      errorCode: document.querySelector("#error")?.textContent?.trim() ?? null,
+    })).catch(() => ({ status: null, errorCode: null }));
+    const code = classifyNavigationFailure(ui.status, Boolean(ui.errorCode), ui.errorCode);
     await writeFile(responsePhasePath, code + "\n", "utf8");
     throw new Error("Product document navigation did not reach canonical editor");
   }

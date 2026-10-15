@@ -30,6 +30,15 @@ FAILURES = frozenset({
     'http_both_unanswered','http_both_unrequested','http_both_mixed',
     'http_current_unanswered','http_current_unrequested',
     'http_scene_unanswered','http_scene_unrequested',
+    'ingress_reject_source_validation_timeout',
+    'ingress_reject_source_validation_failed',
+    'ingress_reject_source_validation_exhausted',
+    'ingress_reject_source_baseline_worker_failed',
+    'ingress_reject_source_baseline_worker_timeout',
+    'ingress_reject_source_already_consumed',
+    'ingress_reject_source_not_validated_durable',
+    'ingress_reject_network_error',
+    'ingress_reject_invalid_ingress_response',
 })
 PUBLIC = frozenset({
     'redacted','grant_missing','grant_expired','capability_denied',

@@ -73,6 +73,15 @@ OWNER_NAVIGATION_CODES = frozenset({
     "ingress_project_timeout", "ingress_open_timeout",
     "ingress_ready_without_navigation", "ingress_file_entry_rejected",
     "ingress_navigation_timeout",
+    "ingress_reject_source_validation_timeout",
+    "ingress_reject_source_validation_failed",
+    "ingress_reject_source_validation_exhausted",
+    "ingress_reject_source_baseline_worker_failed",
+    "ingress_reject_source_baseline_worker_timeout",
+    "ingress_reject_source_already_consumed",
+    "ingress_reject_source_not_validated_durable",
+    "ingress_reject_network_error",
+    "ingress_reject_invalid_ingress_response",
 })
 
 

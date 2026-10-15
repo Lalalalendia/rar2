@@ -13,6 +13,12 @@ test("known existing file-entry states get only fixed code", () => {
   })) assert.equal(classifyNavigationFailure(status, false), code);
 });
 
+test("known validation errors are fixed enums", () => {
+  for (const code of ["source_validation_timeout", "source_validation_failed", "source_validation_exhausted"]) {
+    assert.equal(classifyNavigationFailure("Needs attention", true, code), "ingress_reject_" + code);
+  }
+});
+
 test("unknown/private DOM strings are redacted", () => {
   assert.equal(classifyNavigationFailure("secret book title and private path", false), "ingress_navigation_timeout");
   assert.equal(classifyNavigationFailure(null, false), "ingress_navigation_timeout");
