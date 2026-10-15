@@ -37,14 +37,9 @@ def load(path: Path) -> tuple[dict, str, int]:
     return value, hashlib.sha256(raw).hexdigest(), len(raw)
 
 
-def _subsequence(before: list, after: list) -> bool:
-    it = iter(after)
-    return all(any(a == b for a in it) for b in before)
-
-
 def compare(before: dict, after: dict) -> tuple[dict, list[str]]:
     """Compare all CDM registries. Only a single source-backed node insertion
-    into one existing Page is tentatively admissible for issue #2813.
+    with exact page-parent and source proof is tentatively admissible for issue #2813.
     """
     errors: list[str] = []
     report: dict = {"registries": {}, "changed_existing_nodes": 0}
@@ -82,6 +77,95 @@ def compare(before: dict, after: dict) -> tuple[dict, list[str]]:
     if not all(isinstance(m, dict) for m in
                (old_nodes, new_nodes, old_pages, new_pages)):
         return report, sorted(set(errors))
+
+    # In the current Reader CDM, newly materialized direct PAGE shapes
+    # attach by NodeHeader.parent_id. Page.children is not mutated by
+    # node_materialization.rs; accepted source paint order is an independent
+    # PAGE-order sidecar. Require the entire old Page registry unchanged.
+    report["changed_pages"] = sum(
+        old_pages.get(k) != new_pages.get(k) for k in old_pages.keys() & new_pages.keys()
+    )
+    report["new_page_children"] = sum(
+        len(new_pages[k].get("children", [])) - len(old_pages[k].get("children", []))
+        for k in old_pages.keys() & new_pages.keys()
+        if isinstance(old_pages[k], dict) and isinstance(new_pages[k], dict)
+    )
+    if old_pages != new_pages:
+        errors.append("page_registry_changed")
+
+    additions = set(new_nodes) - set(old_nodes)
+    if len(additions) != 1:
+        errors.append("expected_exactly_one_new_source_node")
+    if len(additions) == 1:
+        node_id = next(iter(additions))
+        node = new_nodes[node_id]
+        kind = node.get("kind") if isinstance(node, dict) else None
+        report["new_node_kind"] = kind if isinstance(kind, str) and kind in KINDS else "unrecognized"
+        header = node.get("header") if isinstance(node, dict) else None
+        refs = header.get("source_refs") if isinstance(header, dict) else None
+        payload = node.get("payload") if isinstance(node, dict) else None
+        refs = refs if isinstance(refs, list) else []
+        report["new_node_has_source_refs"] = bool(refs)
+        if kind != "shape":
+            errors.append("new_node_not_shape")
+        if not isinstance(header, dict) or header.get("id") != node_id:
+            errors.append("new_node_header_identity_mismatch")
+        parent = header.get("parent_id") if isinstance(header, dict) else None
+        report["new_node_parent_is_existing_page"] = (
+            isinstance(parent, str) and parent in old_pages
+        )
+        if not report["new_node_parent_is_existing_page"]:
+            errors.append("new_node_missing_existing_page_parent")
+        if not refs:
+            errors.append("new_node_missing_physical_source_refs")
+
+        expected_path = "SpContainer/ClientAnchor/source-horizontal-line-stroke"
+        source_hash = before.get("document", {}).get("source_hash")
+        authoritative = any(
+            isinstance(ref, dict)
+            and ref.get("path") == expected_path
+            and ref.get("role") == "projection"
+            and ref.get("authority") == "authoritative"
+            and ref.get("confidence") == "exact"
+            and ref.get("source_hash") == source_hash
+            for ref in refs
+        )
+        report["new_node_has_exact_stroke_source_authority"] = authoritative
+        if not authoritative:
+            errors.append("new_node_missing_exact_stroke_authority")
+
+        bounds = header.get("bounds") if isinstance(header, dict) else None
+        expected_bounds = {
+            "x": 1058750, "y": 705474, "width": 6729849, "height": 101600
+        }
+        expected_payload = (
+            isinstance(payload, dict)
+            and payload.get("contents_seq_num") == 405
+            and payload.get("officeart_shape_type") == 20
+        )
+        paint = payload.get("effective_paint") if isinstance(payload, dict) else None
+        line = paint.get("line") if isinstance(paint, dict) else None
+        fill = paint.get("fill") if isinstance(paint, dict) else None
+        expected_stroke = (
+            isinstance(line, dict)
+            and isinstance(fill, dict)
+            and isinstance(line.get("color_rgb"), dict)
+            and line["color_rgb"].get("value") == [255, 0, 255]
+            and isinstance(line.get("width_emu"), dict)
+            and line["width_emu"].get("value") == 101600
+            and isinstance(line.get("visible"), dict)
+            and line["visible"].get("value") is True
+            and fill.get("solid") is None
+            and fill.get("color_rgb") is None
+            and fill.get("visible") is None
+        )
+        report["new_node_exact_source_line_405"] = (
+            bounds == expected_bounds and expected_payload and expected_stroke
+        )
+        if not report["new_node_exact_source_line_405"]:
+            errors.append("new_node_not_exact_line_405_geometry_and_paint")
+
+    return report, sorted(set(errors))
 
     additions = set(new_nodes) - set(old_nodes)
     if len(additions) != 1:
