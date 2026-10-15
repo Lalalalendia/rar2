@@ -659,4 +659,230 @@ mod tests {
             payload.validate().unwrap();
         }
     }
+
+    /// Proves the existing exact-revision exporter consumes a real Story edit
+    /// from a pinned PUB. It does NOT claim native PUB write-back or a target
+    /// application's successful reopen; those are separate release gates.
+    #[tokio::test]
+    async fn real_pub_story_range_is_exported_only_from_its_exact_revision() {
+        use std::io::{Cursor, Read as _};
+
+        use base64::Engine as _;
+        use chaptera_cdm_model::{
+            AUTHORING_REVISION_SCHEMA_V1, AuthoringRevisionIdV1, derive_authoring_revision_id_v1,
+        };
+        use pub_editor::open_mature_0x2c_editor;
+
+        use crate::{
+            revision_materializer::{
+                ExactRevisionMaterializationReceipt, ExactRevisionMaterializedState,
+                MATERIALIZATION_RECEIPT_SCHEMA_V1, cloud_revision_project, project_sha256,
+            },
+            source_baseline::{
+                derive_commit_revision_identities, derive_import_baseline_identities,
+            },
+        };
+
+        #[derive(Clone)]
+        struct PinnedRevision(ExactRevisionMaterializedState);
+
+        #[async_trait]
+        impl ExactRevisionStateProvider for PinnedRevision {
+            async fn materialize_state(
+                &self,
+                tenant_id: &str,
+                document_id: &str,
+                exact_revision_id: &str,
+            ) -> Result<ExactRevisionMaterializedState, ExportExecutorError> {
+                if self.0.receipt.tenant_id != tenant_id
+                    || self.0.receipt.document_id != document_id
+                    || self.0.receipt.requested_revision_id != exact_revision_id
+                {
+                    return Err(ExportExecutorError::new(
+                        "materialized_identity_mismatch",
+                        "the requested revision is not the pinned authenticated state",
+                    ));
+                }
+                Ok(self.0.clone())
+            }
+        }
+
+        let encoded = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vendor/producer-a/crates/pub-quill/tests/fixtures/Sample3.pub.b64"
+        ));
+        let fixture = encoded
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        let source = base64::engine::general_purpose::STANDARD
+            .decode(fixture)
+            .expect("pinned public PUB fixture must decode");
+        assert_eq!(source.len(), 72_192);
+        let source_hash = format!("{:x}", Sha256::digest(&source));
+        assert_eq!(
+            source_hash,
+            "424c69173ff08948c2529c8084b4ac2403f1ff1057146f4edd02fc29b44481fc"
+        );
+
+        let mut session =
+            open_mature_0x2c_editor(&source, Sha256Digest::from_str(&source_hash).unwrap())
+                .expect("pinned real PUB must open in the canonical EditorSession");
+        let baseline_project = cloud_revision_project(&session.project());
+        let story = session
+            .graph()
+            .stories
+            .iter()
+            .find_map(|(id, story)| {
+                (!story.text.is_empty() && session.can_replace_story_text(*id).is_ok())
+                    .then(|| (*id, story.text.chars().next().unwrap().to_string()))
+            })
+            .expect("the pinned PUB needs one admitted plain Story");
+        let marker = "QaZx";
+        let operation = session
+            .replace_story_range(story.0, 0, 1, story.1, marker)
+            .expect("isolated canonical Story edit must be admitted");
+        let edited_project = cloud_revision_project(&session.project());
+        assert_eq!(
+            edited_project.operations.len(),
+            baseline_project.operations.len() + 1
+        );
+
+        let document_id = "document:real-story-export";
+        let tenant_id = "tenant:real-story-export";
+        let baseline = derive_import_baseline_identities(
+            document_id,
+            &source_hash,
+            &baseline_project.schema_version,
+            &baseline_project,
+        )
+        .unwrap();
+        let child = derive_commit_revision_identities(
+            document_id,
+            &source_hash,
+            &edited_project.schema_version,
+            &edited_project,
+            &baseline.service_revision_id,
+            &operation,
+        )
+        .unwrap();
+        let canonical_parent: AuthoringRevisionIdV1 =
+            baseline.canonical_authoring_revision_id.parse().unwrap();
+        let canonical_child =
+            derive_authoring_revision_id_v1(&edited_project, Some(canonical_parent))
+                .unwrap()
+                .to_string();
+        let materialized = ExactRevisionMaterializedState {
+            receipt: ExactRevisionMaterializationReceipt {
+                schema_version: MATERIALIZATION_RECEIPT_SCHEMA_V1.to_owned(),
+                tenant_id: tenant_id.to_owned(),
+                document_id: document_id.to_owned(),
+                source_binding_id: "binding:real-story-export".to_owned(),
+                source_sha256: source_hash.clone(),
+                baseline_revision_id: baseline.service_revision_id.clone(),
+                baseline_cursor: 0,
+                requested_revision_id: child.service_revision_id.clone(),
+                canonical_revision_schema_version: AUTHORING_REVISION_SCHEMA_V1.to_owned(),
+                canonical_authoring_revision_id: canonical_child.clone(),
+                replayed_edges: 1,
+                project_sha256: project_sha256(&edited_project).unwrap(),
+                authoring_root_hash: None,
+                project: edited_project,
+            },
+            source_bytes: source.clone(),
+        };
+        let exporter = ExactRevisionEditableExporter::new(Arc::new(PinnedRevision(materialized)));
+        let mut artifact_hashes = Vec::new();
+
+        for target in [IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE] {
+            let payload = ExportJobPayloadV1 {
+                schema_version: EXPORT_JOB_PAYLOAD_SCHEMA_V1.to_owned(),
+                tenant_id: tenant_id.to_owned(),
+                document_id: document_id.to_owned(),
+                requesting_principal_id: "principal:real-story-export".to_owned(),
+                exact_revision_id: child.service_revision_id.clone(),
+                canonical_authoring_revision_id: canonical_child.clone(),
+                target_profile: target.to_owned(),
+                layout_environment_id: format!("sha256:{}", "b".repeat(64)),
+            };
+            let export = exporter
+                .produce(&payload)
+                .await
+                .expect("edited exact revision must produce its admitted target");
+            assert_eq!(export.exact_revision_id, child.service_revision_id);
+            assert_eq!(export.canonical_authoring_revision_id, canonical_child);
+            assert_eq!(export.source_sha256, source_hash);
+            assert_eq!(
+                export.project_sha256,
+                project_sha256(
+                    &exporter
+                        .materializer
+                        .materialize_state(tenant_id, document_id, &child.service_revision_id,)
+                        .await
+                        .unwrap()
+                        .receipt
+                        .project,
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                export.artifact_sha256,
+                format!("sha256:{:x}", Sha256::digest(&export.artifact_bytes))
+            );
+            assert_eq!(
+                export.loss_report_sha256,
+                format!("sha256:{:x}", Sha256::digest(&export.loss_report_json))
+            );
+            assert!(serde_json::from_slice::<serde_json::Value>(&export.loss_report_json).is_ok());
+
+            // XML-level witness only: a separate target-application consumer
+            // is required before this can be marked as cross-app acceptance.
+            let mut package = zip::ZipArchive::new(Cursor::new(&export.artifact_bytes))
+                .expect("editable output must be an actual ZIP package");
+            let mut marker_in_xml = false;
+            for entry_index in 0..package.len() {
+                let mut entry = package.by_index(entry_index).unwrap();
+                if !entry.name().ends_with(".xml") {
+                    continue;
+                }
+                let mut contents = String::new();
+                if entry.read_to_string(&mut contents).is_ok() && contents.contains(marker) {
+                    marker_in_xml = true;
+                    break;
+                }
+            }
+            assert!(
+                marker_in_xml,
+                "new Story marker must survive the target XML package"
+            );
+            if let Some(root) = std::env::var_os("CHAPTERA_EXPORT_EVIDENCE_DIR") {
+                let root = std::path::PathBuf::from(root);
+                std::fs::create_dir_all(&root).expect("private Story consumer directory");
+                let extension = if target == IDML_BOUNDED_EDITABLE_PROFILE {
+                    "idml"
+                } else {
+                    "odg"
+                };
+                std::fs::write(
+                    root.join(format!("story-edited.{extension}")),
+                    &export.artifact_bytes,
+                )
+                .expect("private Story target consumer output");
+                std::fs::write(
+                    root.join(format!("story-edited.{extension}.loss.json")),
+                    &export.loss_report_json,
+                )
+                .expect("private canonical Story LossReport");
+            }
+            artifact_hashes.push(export.artifact_sha256);
+
+            let mut mismatched_identity = payload;
+            mismatched_identity.canonical_authoring_revision_id = "f".repeat(64);
+            let denial = exporter.produce(&mismatched_identity).await.unwrap_err();
+            assert_eq!(denial.code, "materialized_identity_mismatch");
+        }
+        assert_eq!(artifact_hashes.len(), 2);
+        assert_ne!(artifact_hashes[0], artifact_hashes[1]);
+        assert_eq!(format!("{:x}", Sha256::digest(&source)), source_hash);
+    }
 }

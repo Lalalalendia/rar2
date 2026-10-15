@@ -1,6 +1,36 @@
 // Browser-only transport for the existing source-bound Guest MoveNode endpoint.
 // No private PUB parsing, browser-owned revision, OIDC or editable Scene claim.
 import { TEMPORARY_EDIT_STORAGE_KEY } from "./temporary-edit-browser-session-v0.mjs";
+import { diffObservedTextToScalarReplacement } from "./text-protocol-v1.mjs";
+import {
+  prepareStoryTextForTextarea,
+  restoreStoryTextFromTextarea,
+} from "./story-line-endings-v1.mjs";
+
+
+function optionalGuestTraceContext(trace, operationClass, clientOperationId = null) {
+  try {
+    return trace?.recorder?.createContext({
+      operationClass, interactionId: trace.interactionId,
+      ...(clientOperationId ? {clientOperationId} : {}),
+    }) ?? null;
+  } catch { return null; } // Diagnostics cannot affect semantic authority.
+}
+function optionalGuestTraceHeaders(trace, context) {
+  try { return context ? (trace?.headersFor?.(context) ?? {}) : {}; }
+  catch { return {}; }
+}
+function guestTraceTimeMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+function markGuestHttpTrace(trace, context, started, outcome) {
+  if (!context) return;
+  try {
+    trace?.recorder?.mark("browser.guest_http", context, {
+      outcome, durationMs: Math.max(0, guestTraceTimeMs() - started),
+    });
+  } catch { /* Tracing is not a mutation or access-control gate. */ }
+}
 
 const SESSION = /^tempedit:[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;
@@ -11,6 +41,59 @@ const CURRENT_PROTOCOL = "chaptera.temporary-editor-current.v1";
 const ACCEPTED_PROTOCOL = "chaptera.temporary-editor-move-node.v1";
 const REQUEST_PROTOCOL = "chaptera.commit-request.v1";
 const LOCAL_SCHEMA = "chaptera.temporary-edit.browser.v0";
+const SHAPE_ACK_PROTOCOL = "chaptera.temporary-editor-create-shape.v1";
+const AUTHORED_UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function safeRgb(value) {
+  return Array.isArray(value) && value.length === 3 &&
+    value.every(component => Number.isInteger(component) && component >= 0 && component <= 255);
+}
+function sameRgb(a, b) {
+  return safeRgb(a) && safeRgb(b) && a.every((value, index) => value === b[index]);
+}
+function canonicalCreatedRectangleMatches(operation, command) {
+  if (!object(operation) || operation.kind !== "create_shape" ||
+      !AUTHORED_UUID_V7.test(operation.node_id ?? "") ||
+      operation.page_id !== command.page_id ||
+      operation.parent_id !== command.page_id ||
+      operation.shape_kind !== "rectangle" ||
+      operation.transform?.kind !== "identity" ||
+      operation.provenance?.kind !== "author_created" ||
+      operation.paint?.provenance?.kind !== "author_created") return false;
+  const bounds = operation.bounds;
+  if (!isSafeResizeRect(bounds) ||
+      bounds.x !== command.x_emu || bounds.y !== command.y_emu ||
+      bounds.width !== command.width_emu || bounds.height !== command.height_emu) return false;
+  const fill = operation.paint?.fill, stroke = operation.paint?.stroke;
+  return fill?.visible === true && stroke?.visible === true &&
+    sameRgb([fill.color?.r, fill.color?.g, fill.color?.b], command.fill_rgb) &&
+    sameRgb([stroke.color?.r, stroke.color?.g, stroke.color?.b], command.stroke_rgb) &&
+    stroke.width_emu === command.stroke_width_emu;
+}
+function sameAuthoredRectangleEvent(a, b) {
+  // Host-generated NodeId is unknown before the POST; after ACK it must
+  // exactly match the last canonical operation in the reopened project.
+  if (!object(a) || !object(b) || a.node_id !== b.node_id ||
+      a.page_id !== b.page_id) return false;
+  const keys = ["kind", "node_id", "page_id", "parent_id", "shape_kind"];
+  if (!keys.every(key => a[key] === b[key])) return false;
+  return JSON.stringify(a.bounds) === JSON.stringify(b.bounds) &&
+    JSON.stringify(a.paint) === JSON.stringify(b.paint) &&
+    JSON.stringify(a.transform) === JSON.stringify(b.transform) &&
+    JSON.stringify(a.provenance) === JSON.stringify(b.provenance);
+}
+
+
+// Only a server-confirmed 429 on an idempotent, private GET may be retried.
+// A server-supplied Retry-After must be a small, positive delta-seconds value;
+// never parse an arbitrary date or wait indefinitely on untrusted headers.
+const READ_RETRY_MAX_SECONDS = 10;
+function boundedReadRetryAfterMs(response) {
+  const value = response?.headers?.get?.("retry-after");
+  if (typeof value !== "string" || !/^[1-9][0-9]?$/.test(value)) return null;
+  const seconds = Number(value);
+  return seconds <= READ_RETRY_MAX_SECONDS ? seconds * 1000 : null;
+}
+const defaultSleep = durationMs => new Promise(done => setTimeout(done, durationMs));
 
 function failure(code, status) {
   const error = new Error(code);
@@ -27,6 +110,18 @@ function safePosition(value) {
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value);
 }
+
+function isSafeResizeRect(rect) {
+  return object(rect) && [rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger) &&
+    rect.width > 0 && rect.height > 0 &&
+    Number.isSafeInteger(rect.x + rect.width) &&
+    Number.isSafeInteger(rect.y + rect.height);
+}
+function sameBounds(a, b) {
+  return a.x === b.x && a.y === b.y &&
+    a.width === b.width && a.height === b.height;
+}
+
 function defaultStorage() {
   try { return globalThis.sessionStorage ?? null; } catch { return null; }
 }
@@ -49,6 +144,79 @@ function newOperationId(cryptoObject) {
   return "temp-move-" + [...bytes].map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
+
+// A deliberately narrow Guest V0 text gate. Only one-frame, unstyled,
+// source-backed, single-paragraph Stories enter the editable list. The
+// isolated EditorSession remains the final eligibility authority.
+
+// Source Publisher CR/CRLF separators are preserved through the existing
+// canonical textarea bridge; the browser cannot add/remove paragraph breaks.
+const HAS_CONTROL = /\p{Cc}/u;
+const UTF8 = new TextEncoder();
+function checkedTextareaProfile(canonicalText) {
+  if (typeof canonicalText !== "string") throw failure("temporary_story_intent_invalid");
+  const profile = prepareStoryTextForTextarea(canonicalText);
+  if (!profile.value.length || UTF8.encode(canonicalText).length > 8192 ||
+      [...profile.value].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  return profile;
+}
+
+export function temporaryStoryTextForTextarea(canonicalText) {
+  return checkedTextareaProfile(canonicalText).value;
+}
+
+export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText) {
+  const profile = checkedTextareaProfile(canonicalText);
+  if (typeof observedText !== "string" || !observedText.length ||
+      observedText.includes("\r") ||
+      [...observedText].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  const countLf = text => [...text].filter(ch => ch === "\n").length;
+  if (countLf(observedText) !== countLf(profile.value)) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  let desired;
+  try { desired = restoreStoryTextFromTextarea(observedText, profile); }
+  catch { throw failure("temporary_story_intent_invalid"); }
+  if (desired === canonicalText || UTF8.encode(desired).length > 8192) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  const range = diffObservedTextToScalarReplacement(canonicalText, desired);
+  // Existing canonical separators must remain outside the modified scalar
+  // span: neither client nor isolated worker admits new paragraph controls.
+  if (range.replacement_text.length > 8192 ||
+      [...range.replacement_text].some(ch => HAS_CONTROL.test(ch))) {
+    throw failure("temporary_story_intent_invalid");
+  }
+  return {canonicalText: desired, range};
+}
+
+export function temporaryPlainStoryCandidates(graph) {
+  if (!object(graph?.nodes) || !object(graph?.stories)) return [];
+  const frames = new Map();
+  const tables = new Set();
+  for (const node of Object.values(graph.nodes)) {
+    const frame = node?.payload?.story_frame?.story_id;
+    if (typeof frame === "string") frames.set(frame, (frames.get(frame) ?? 0) + 1);
+    for (const owner of [node?.payload?.table_story, node?.payload?.table]) {
+      if (typeof owner?.story_id === "string") tables.add(owner.story_id);
+    }
+  }
+  return Object.entries(graph.stories).filter(([id, story]) =>
+    typeof id === "string" && id.length > 0 && id.length <= 128 &&
+    (frames.get(id) ?? 0) === 1 && !tables.has(id) &&
+    typeof story?.text === "string" && (() => {
+      try { checkedTextareaProfile(story.text); return true; } catch { return false; }
+    })() &&
+    ["runs", "paragraphs", "fields", "hyperlinks"].every(part =>
+      !Array.isArray(story[part]) || story[part].length === 0)
+  ).map(([story_id, story]) => ({story_id, text: story.text}))
+    .sort((a,b) => a.story_id.localeCompare(b.story_id));
+}
+
 export class TemporaryGuestMoveClientV1 {
   #sessionId;
   #token;
@@ -56,28 +224,34 @@ export class TemporaryGuestMoveClientV1 {
   #csrf;
   #fetch;
   #operationIdFactory;
+  #sleep;
+  #trace = null;
+  #latestTrace = null;
+  #lastExportTrace = null;
   #current = null;
   #pending = null;
   #busy = false;
   #refreshRequired = false;
 
   static fromTab({ storage = defaultStorage(), csrfToken, fetchImpl,
-    cryptoObject = globalThis.crypto, operationIdFactory } = {}) {
+    cryptoObject = globalThis.crypto, operationIdFactory, trace = null } = {}) {
     const record = recordFromTab(storage);
     if (!record) throw failure("temporary_edit_capability_missing");
     return new TemporaryGuestMoveClientV1({
       sessionId: record.session_id, accessToken: record.access_token,
       sourceHash: record.source_sha256, csrfToken, fetchImpl, cryptoObject,
-      operationIdFactory,
+      operationIdFactory, trace,
     });
   }
 
   constructor({ sessionId, accessToken, sourceHash, csrfToken,
     fetchImpl = globalThis.fetch, cryptoObject = globalThis.crypto,
-    operationIdFactory = () => newOperationId(cryptoObject) } = {}) {
+    operationIdFactory = () => newOperationId(cryptoObject),
+    sleepImpl = defaultSleep, trace = null } = {}) {
     if (!SESSION.test(sessionId ?? "") || !SECRET.test(accessToken ?? "") ||
         !SOURCE.test(sourceHash ?? "") || !/^[0-9a-f]{32}$/.test(csrfToken ?? "") ||
-        typeof fetchImpl !== "function" || typeof operationIdFactory !== "function") {
+        typeof fetchImpl !== "function" || typeof operationIdFactory !== "function"
+        || typeof sleepImpl !== "function") {
       throw failure("temporary_move_client_config_invalid");
     }
     this.#sessionId = sessionId;
@@ -86,6 +260,24 @@ export class TemporaryGuestMoveClientV1 {
     this.#csrf = csrfToken;
     this.#fetch = fetchImpl;
     this.#operationIdFactory = operationIdFactory;
+    this.#sleep = sleepImpl;
+    this.#trace = trace;
+  }
+
+  async #fetchTraced(path, options, context) {
+    const started = guestTraceTimeMs();
+    let outcome = "unknown";
+    try {
+      const response = await this.#fetch.call(globalThis, path, options);
+      outcome = response?.ok ? "success" :
+        response?.status >= 500 ? "error" : "rejected";
+      return response;
+    } catch (error) {
+      outcome = "error";
+      throw error;
+    } finally {
+      markGuestHttpTrace(this.#trace, context, started, outcome);
+    }
   }
 
   // No bearer or raw PUB contents are ever exposed by status introspection.
@@ -105,19 +297,32 @@ export class TemporaryGuestMoveClientV1 {
     return "/v1/editor/temporary-sessions/" + this.#sessionId + "/" + action;
   }
 
-  async #request(action, method = "GET", body = null) {
-    const response = await this.#fetch.call(globalThis, this.#path(action), {
+  async #request(action, method = "GET", body = null, traceContext = null) {
+    const options = {
       method,
       headers: {
         "accept": "application/json",
         "x-chaptera-reader-session": this.#token,
         "x-csrf-token": this.#csrf,
+        ...optionalGuestTraceHeaders(this.#trace, traceContext),
         ...(body ? { "content-type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
       credentials: "omit", mode: "same-origin", cache: "no-store",
       redirect: "error", referrerPolicy: "no-referrer",
-    });
+    };
+    const path = this.#path(action);
+    let response = await this.#fetchTraced(path, options, traceContext);
+    if (response?.status === 429 && method === "GET" &&
+        (action === "current" || action === "scene")) {
+      const delayMs = boundedReadRetryAfterMs(response);
+      if (delayMs !== null) {
+        // The retry is one-shot. Never replay mutation, export, or DELETE.
+        // The same bearer/source/revision checks still run on the fresh reply.
+        await this.#sleep(delayMs);
+        response = await this.#fetchTraced(path, options, traceContext);
+      }
+    }
     if (!response?.ok) {
       const status = Number.isSafeInteger(response?.status) ? response.status : undefined;
       throw failure("temporary_move_request_rejected", status);
@@ -149,7 +354,11 @@ export class TemporaryGuestMoveClientV1 {
     if (this.#busy) throw failure("temporary_move_busy");
     this.#busy = true;
     try {
-      const current = this.#checkedCurrent(await this.#request("current"));
+      const traceContext = optionalGuestTraceContext(this.#trace, "scene_read");
+      const current = this.#checkedCurrent(
+        await this.#request("current", "GET", null, traceContext),
+      );
+      this.#latestTrace = traceContext;
       this.#current = current;
       this.#refreshRequired = false;
       return current;
@@ -160,7 +369,13 @@ export class TemporaryGuestMoveClientV1 {
   }
 
   #checkedAck(ack, request, previous) {
-    if (ack.protocol_version !== ACCEPTED_PROTOCOL ||
+    const protocol = request.command.kind === "replace_story_range"
+      ? "chaptera.temporary-editor-story-range.v1"
+      : request.command.kind === "resize_node"
+        ? "chaptera.temporary-editor-resize-node.v1"
+        : request.command.kind === "create_shape"
+          ? SHAPE_ACK_PROTOCOL : ACCEPTED_PROTOCOL;
+    if (ack.protocol_version !== protocol ||
         ack.document_id !== this.#sessionId || ack.source_hash !== this.#sourceHash ||
         ack.base_revision_id !== request.base_revision_id ||
         ack.client_operation_id !== request.client_operation_id ||
@@ -172,14 +387,45 @@ export class TemporaryGuestMoveClientV1 {
         !object(ack.canonical_operation)) {
       throw failure("temporary_move_ack_identity_invalid");
     }
+    if (request.command.kind === "replace_story_range" &&
+        (ack.canonical_operation.kind !== "replace_story_range" ||
+         ack.canonical_operation.story_id !== request.command.story_id ||
+         ack.canonical_operation.start_scalar !== request.command.start_scalar ||
+         ack.canonical_operation.end_scalar !== request.command.end_scalar ||
+         ack.canonical_operation.replacement_text !== request.command.replacement_text)) {
+      throw failure("temporary_story_ack_operation_mismatch");
+    }
+    if (request.command.kind === "create_shape" &&
+        !canonicalCreatedRectangleMatches(ack.canonical_operation, request.command)) {
+      throw failure("temporary_create_shape_ack_operation_mismatch");
+    }
+    if (request.command.kind === "resize_node") {
+      const after = ack.canonical_operation.after;
+      const command = request.command;
+      const prior = previous.authoring_graph?.nodes?.[command.node_id]?.header?.bounds;
+      const before = ack.canonical_operation.before;
+      if (ack.canonical_operation.kind !== "resize_node" ||
+          ack.canonical_operation.node_id !== command.node_id ||
+          !isSafeResizeRect(after) || !isSafeResizeRect(before) ||
+          !isSafeResizeRect(prior) || !sameBounds(before, prior) ||
+          after.x !== command.x_emu || after.y !== command.y_emu ||
+          after.width !== command.width_emu ||
+          after.height !== command.height_emu) {
+        throw failure("temporary_resize_ack_operation_mismatch");
+      }
+    }
     return ack;
   }
 
   async #finishPending() {
     const pending = this.#pending;
     if (!pending) throw failure("temporary_move_nothing_to_reconcile");
+    const traceContext = pending.traceContext ?? optionalGuestTraceContext(
+      this.#trace, "commit", pending.request.client_operation_id,
+    );
+    pending.traceContext = traceContext; // Exact retry keeps attempt correlation.
     let rawAck;
-    try { rawAck = await this.#request("move-node", "POST", pending.request); }
+    try { rawAck = await this.#request(pending.action, "POST", pending.request, traceContext); }
     catch (error) {
       // Only this POST rejection is conclusive. A later GET 4xx after a
       // successful POST does NOT prove that the edit failed.
@@ -195,18 +441,34 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_move_ack_changed_on_replay");
     }
     pending.ack = ack;
-    const current = this.#checkedCurrent(await this.#request("current"));
-    const node = current.authoring_graph.nodes[pending.request.command.node_id];
+    const current = this.#checkedCurrent(
+      await this.#request("current", "GET", null, traceContext),
+    );
+    const command = pending.request.command;
+    const node = current.authoring_graph.nodes[command.node_id];
+    const currentOperation = current.project?.operations?.at(-1);
+    const exactMutation = pending.action === "create-shape"
+      ? canonicalCreatedRectangleMatches(currentOperation, command) &&
+        sameAuthoredRectangleEvent(currentOperation, ack.canonical_operation)
+      : pending.action === "story-range"
+      ? current.authoring_graph.stories?.[command.story_id]?.text === pending.expectedText
+      : pending.action === "resize-node"
+        ? isSafeResizeRect(node?.header?.bounds) &&
+          node.header.bounds.x === command.x_emu &&
+          node.header.bounds.y === command.y_emu &&
+          node.header.bounds.width === command.width_emu &&
+          node.header.bounds.height === command.height_emu
+        : object(node?.header?.bounds) &&
+          node.header.bounds.x === command.x_emu &&
+          node.header.bounds.y === command.y_emu;
     if (current.revision_id !== ack.revision_id ||
         current.canonical_authoring_revision_id !== ack.canonical_authoring_revision_id ||
         current.revision_cursor !== pending.before.revision_cursor + 1 ||
-        current.expires_at_ms !== ack.expires_at_ms ||
-        !object(node?.header?.bounds) ||
-        node.header.bounds.x !== pending.request.command.x_emu ||
-        node.header.bounds.y !== pending.request.command.y_emu) {
+        current.expires_at_ms !== ack.expires_at_ms || !exactMutation) {
       throw failure("temporary_move_reopened_state_mismatch");
     }
     this.#current = current;
+    this.#latestTrace = traceContext;
     this.#pending = null;
     this.#refreshRequired = false;
     return { accepted: ack, current };
@@ -220,7 +482,12 @@ export class TemporaryGuestMoveClientV1 {
     }
     const head = this.#current;
     let response;
-    try { response = await this.#request("scene"); }
+    try {
+      response = await this.#request(
+        "scene", "GET", null, this.#latestTrace ??
+          optionalGuestTraceContext(this.#trace, "scene_read"),
+      );
+    }
     catch (error) {
       this.#refreshRequired = true;
       throw error;
@@ -242,34 +509,51 @@ export class TemporaryGuestMoveClientV1 {
     return response.scene;
   }
 
-  // A private edited-revision report or physical download, never original PUB.
+  // Private current-revision reports/downloads: pristine PDF is allowed.
+  // Original PUB bytes are never downloaded here.
   // Only query-bound public revision identities appear in the URL, never bearer.
-  async exportEdited(target, { reportOnly = false } = {}) {
-    if (!["idml", "odg", "pdf"].includes(target)) {
+  async exportEdited(target, { reportOnly = false, expectedSha256 = null } = {}) {
+    if (!["idml", "odg", "pdf", "pdf9up"].includes(target)) {
       throw failure("temporary_export_target_invalid");
     }
     if (this.#busy || this.#pending || this.#refreshRequired ||
-        !this.#current || this.#current.revision_cursor === 0) {
+        !this.#current || (this.#current.revision_cursor === 0 && target !== "pdf")) {
       throw failure("temporary_export_current_required");
     }
+    if (expectedSha256 !== null && (reportOnly || !SECRET.test(expectedSha256))) {
+      throw failure("temporary_export_expected_hash_invalid");
+    }
     const head = this.#current;
+    const physicalPdf = target === "pdf" || target === "pdf9up";
+    // Keep the export report and its immediately following binary on the
+    // same execution trace; a different target or revision creates a new one.
+    const previousExport = this.#lastExportTrace;
+    const traceContext = !reportOnly && previousExport?.target === target &&
+      previousExport.revisionId === head.revision_id
+      ? previousExport.context
+      : optionalGuestTraceContext(this.#trace, "export");
+    this.#lastExportTrace = reportOnly
+      ? {target, revisionId: head.revision_id, context: traceContext}
+      : null;
     const query = new URLSearchParams({
       revision_id: head.revision_id,
       canonical_authoring_revision_id: head.canonical_authoring_revision_id,
       report_only: String(reportOnly),
     });
-    const response = await this.#fetch.call(
-      globalThis, this.#path("exports/" + target) + "?" + query.toString(),
+    const response = await this.#fetchTraced(
+      this.#path("exports/" + target) + "?" + query.toString(),
       {
         method: "GET",
         headers: {
-          accept: reportOnly ? "application/json" : target === "pdf" ? "application/pdf" : "application/octet-stream",
+          accept: reportOnly ? "application/json" : physicalPdf ? "application/pdf" : "application/octet-stream",
           "x-chaptera-reader-session": this.#token,
           "x-csrf-token": this.#csrf,
+          ...optionalGuestTraceHeaders(this.#trace, traceContext),
         },
         credentials: "omit", mode: "same-origin", cache: "no-store",
         redirect: "error", referrerPolicy: "no-referrer",
       },
+      traceContext,
     );
     if (!response?.ok) {
       this.#refreshRequired = true;
@@ -278,7 +562,7 @@ export class TemporaryGuestMoveClientV1 {
     if (reportOnly) {
       let report;
       try { report = await response.json(); }
-      catch { throw failure("temporary_export_report_invalid"); }
+      catch { this.#refreshRequired = true; throw failure("temporary_export_report_invalid"); }
       if (report?.protocol_version !== "chaptera.temporary-edited-export-report.v1" ||
           report.revision_id !== head.revision_id ||
           report.canonical_authoring_revision_id !== head.canonical_authoring_revision_id ||
@@ -300,26 +584,45 @@ export class TemporaryGuestMoveClientV1 {
       this.#refreshRequired = true;
       throw failure("temporary_export_download_identity_mismatch");
     }
-    const blob = await response.blob();
+    let blob;
+    try { blob = await response.blob(); }
+    catch {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_download_read_failed");
+    }
     if (blob.size <= 0 || blob.size > 16 * 1024 * 1024) {
+      this.#refreshRequired = true;
       throw failure("temporary_export_download_size_invalid");
     }
     // PDF is never admitted by MIME and digest alone: require physical PDF signature.
-    if (target === "pdf") {
+    if (physicalPdf) {
       const signature = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
       if (signature.length !== 5 ||
           String.fromCharCode(...signature) !== "%PDF-") {
+        this.#refreshRequired = true;
         throw failure("temporary_export_pdf_signature_invalid");
       }
     }
     const subtle = globalThis.crypto?.subtle;
     if (!subtle || typeof subtle.digest !== "function") {
+      this.#refreshRequired = true;
       throw failure("temporary_export_crypto_unavailable");
     }
-    const digest = new Uint8Array(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+    let digest;
+    try {
+      digest = new Uint8Array(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+    } catch {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_digest_failed");
+    }
     const actualHash = [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
     if (actualHash !== expectedHash) {
+      this.#refreshRequired = true;
       throw failure("temporary_export_hash_mismatch");
+    }
+    if (expectedSha256 !== null && actualHash !== expectedSha256) {
+      this.#refreshRequired = true;
+      throw failure("temporary_export_report_hash_mismatch");
     }
     return { blob, target, sha256: actualHash, revision_id: head.revision_id };
   }
@@ -341,6 +644,7 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_move_operation_id_invalid");
     }
     this.#pending = {
+      action: "move-node",
       before: this.#current,
       request: {
         protocol_version: REQUEST_PROTOCOL,
@@ -359,6 +663,157 @@ export class TemporaryGuestMoveClientV1 {
     } catch (error) {
       // A 4xx is an explicit rejection, not a lost ACK. Require an exact
       // new Current before the caller can submit a different operation.
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
+
+  // Guest single-paragraph Story replacement. Full-range scalar replacement
+  // avoids browser-dependent caret offsets and newline normalization. No
+  // speculative local authoritative state is ever exposed or persisted.
+
+  async resizeNode({ nodeId, bounds } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const before = this.#current.authoring_graph.nodes[nodeId]?.header?.bounds;
+    if (!NODE.test(nodeId ?? "") || !isSafeResizeRect(before) ||
+        !isSafeResizeRect(bounds) || sameBounds(before, bounds) ||
+        (before.width === bounds.width && before.height === bounds.height)) {
+      throw failure("temporary_resize_intent_invalid");
+    }
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "resize-node",
+      before: this.#current,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "resize_node", node_id: nodeId,
+          x_emu: bounds.x, y_emu: bounds.y,
+          width_emu: bounds.width, height_emu: bounds.height,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
+
+  // Only geometry/paint are browser intent. The server owns NodeId, source
+  // page eligibility and the atomic RevisionStream append.
+  async createRectangle({ pageId, bounds, fillRgb = [18, 52, 86],
+    strokeRgb = [170, 187, 204], strokeWidthEmu = 12_700 } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const page = this.#current.authoring_graph.pages?.[pageId];
+    const width = page?.size?.width, height = page?.size?.height;
+    if (!NODE.test(pageId ?? "") || !object(page) ||
+        !safeUnsigned(width) || width <= 0 || !safeUnsigned(height) || height <= 0 ||
+        !isSafeResizeRect(bounds) || bounds.x < 0 || bounds.y < 0 ||
+        bounds.x + bounds.width > width || bounds.y + bounds.height > height ||
+        !safeRgb(fillRgb) || !safeRgb(strokeRgb) ||
+        !Number.isSafeInteger(strokeWidthEmu) || strokeWidthEmu <= 0 ||
+        strokeWidthEmu > 1_000_000) {
+      throw failure("temporary_create_shape_intent_invalid");
+    }
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "create-shape",
+      before: this.#current,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "create_shape", page_id: pageId,
+          x_emu: bounds.x, y_emu: bounds.y,
+          width_emu: bounds.width, height_emu: bounds.height,
+          fill_rgb: [...fillRgb], stroke_rgb: [...strokeRgb],
+          stroke_width_emu: strokeWidthEmu,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
+      if (this.#pending?.postRejected === true) {
+        this.#pending = null;
+        this.#refreshRequired = true;
+      }
+      throw error;
+    } finally { this.#busy = false; }
+  }
+
+  async replaceStory({ storyId, newText } = {}) {
+    if (this.#busy) throw failure("temporary_move_busy");
+    if (this.#pending) throw failure("temporary_move_reconciliation_required");
+    if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
+    const eligible = temporaryPlainStoryCandidates(this.#current.authoring_graph)
+      .find(story => story.story_id === storyId);
+    if (!eligible) throw failure("temporary_story_intent_invalid");
+    const {canonicalText, range} =
+      temporaryStoryObservedToCanonicalStory(eligible.text, newText);
+    const clientOperationId = this.#operationIdFactory();
+    if (typeof clientOperationId !== "string" ||
+        !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
+      throw failure("temporary_move_operation_id_invalid");
+    }
+    this.#pending = {
+      action: "story-range",
+      before: this.#current,
+      expectedText: canonicalText,
+      request: {
+        protocol_version: REQUEST_PROTOCOL,
+        document_id: this.#sessionId,
+        source_hash: this.#sourceHash,
+        base_revision_id: this.#current.revision_id,
+        client_operation_id: clientOperationId,
+        command: {
+          kind: "replace_story_range", story_id: storyId,
+          start_scalar: range.start_scalar, end_scalar: range.end_scalar,
+          replacement_text: range.replacement_text,
+        },
+      },
+      ack: null,
+      postRejected: false,
+    };
+    this.#busy = true;
+    try {
+      return await this.#finishPending();
+    } catch (error) {
       if (this.#pending?.postRejected === true) {
         this.#pending = null;
         this.#refreshRequired = true;

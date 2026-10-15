@@ -5,6 +5,39 @@ on:
     branches: [main]
     paths:
       - "apps/cloud-reader/**"
+      # Chaptera embeds both temporary and authenticated Editor assets via include_bytes!.
+      # Track exact compiled inputs; a JS-only change must publish a fresh immutable binary.
+      # The contract test checks all direct includes against these push path filters.
+      - "apps/web/temporary-editor-preview.html"
+      - "apps/web/temporary-editor-preview.mjs"
+      - "apps/web/temporary-editor-preview.css"
+      - "apps/web/temporary-edit-browser-session-v0.mjs"
+      - "apps/web/temporary-edit-move-client-v1.mjs"
+      - "apps/web/reader-scene-editor-interaction-v1.mjs"
+      - "apps/web/interaction-v1.mjs"
+      - "apps/web/observability-v1.mjs"
+      # Other directly embedded Web / protocol inputs.
+      - "apps/web/chaptera-cloud-project-catalog-v1.mjs"
+      - "apps/web/chaptera-cloud-source-ingress-v1.mjs"
+      - "apps/web/chaptera-cloud-workspace-session-v1.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.mjs"
+      - "apps/web/cloud-project-home-v1.mjs"
+      - "apps/web/cloud-project-home.css"
+      - "apps/web/cloud-project-home.html"
+      - "apps/web/cloud-project-new-v1.mjs"
+      - "apps/web/cloud-project-new.css"
+      - "apps/web/cloud-project-new.html"
+      - "apps/web/cloud-project-rename-v1.mjs"
+      - "apps/web/file-entry-v1.mjs"
+      - "apps/web/product-editor-entry-v1.mjs"
+      - "apps/web/product-editor.css"
+      - "apps/web/product-editor.html"
+      - "apps/web/project-home-v1.mjs"
+      - "apps/web/reader-scene-editor-adapter-v1.mjs"
+      - "apps/web/rich-reader-editor-shell-v1.mjs"
+      - "apps/web/story-line-endings-v1.mjs"
+      - "apps/web/text-protocol-v1.mjs"
+      - "packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"
       - "apps/chaptera-server/**"
       - "crates/chaptera-untrusted-pub-scan/**"
       - "deploy/config/chaptera.reader.prod.example.toml"
@@ -88,7 +121,12 @@ jobs:
           set -euo pipefail
           asset="chaptera-cloud-reader-linux-amd64.tar.gz"
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" "${asset}" --clobber --repo "${GITHUB_REPOSITORY}"
-          else
-            gh release create "${TAG}" "${asset}"               --repo "${GITHUB_REPOSITORY}"               --target "${GITHUB_SHA}"               --title "Chaptera Cloud Reader ${GITHUB_SHA}"               --notes "Immutable Linux amd64 deployment packet for Chaptera Cloud Reader."               --prerelease
+            echo "::error::Immutable Cloud Reader release ${TAG} already exists; refusing asset overwrite"
+            exit 1
           fi
+          gh release create "${TAG}" "${asset}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Chaptera Cloud Reader ${GITHUB_SHA}" \
+            --notes "Immutable Linux amd64 deployment packet for Chaptera Cloud Reader." \
+            --prerelease

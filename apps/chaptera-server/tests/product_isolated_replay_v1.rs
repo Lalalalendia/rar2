@@ -335,6 +335,9 @@ async fn pinned_sample3_exact_project_replays_in_real_seccomp_worker() {
         .await
         .expect("current edited PDF must be physically rendered");
     assert!(baseline_pdf.artifact_bytes.starts_with(b"%PDF-"));
+    assert_eq!(baseline_pdf.loss_report["counts"]["moved_nodes"], 0);
+    assert_eq!(baseline_pdf.loss_report["counts"]["blocking"], 0);
+    assert_eq!(baseline_pdf.loss_report["source_hash"], source_sha256);
     assert!(edited_pdf.artifact_bytes.starts_with(b"%PDF-"));
     assert_ne!(
         baseline_pdf.artifact_sha256, edited_pdf.artifact_sha256,

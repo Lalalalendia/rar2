@@ -68,3 +68,13 @@ A green public run proves:
 7. document payload is not recorded.
 
 The run remains synthetic protocol plumbing: it does not close WEB-ACCEPTANCE-01 or establish numeric production SLOs. A later real-PUB acceptance run should reuse this trace contract rather than create a second telemetry model.
+
+## 2026-10-15 — anonymous Temporary Guest Editor trace extension
+
+The existing `chaptera.trace-context.v1` contract is reused for browser Guest upload/open and for the authenticated-by-private-capability, no-login temporary edit/Scene/export path. The browser keeps one opaque, tab-local `interaction_id` for this editing journey. Upload/create/open share one trace ID; a canonical commit, exact operation-ID retry, verified Current and Scene share another; the export report and matching binary export reuse one export trace ID. The semantic `client_operation_id`, revision and bearer identities remain separate from tracing.
+
+`apps/web/temporary-editor-preview.mjs` loads the pre-existing, public Reader allowlisted `/observability-v1.mjs`, not a new telemetry provider. Missing/invalid telemetry is non-authoritative: all existing guest auth, TTL, write replay, loss report, Scene identity and artifact checks remain unchanged. In-memory browser spans only include bounded trace metadata, outcome and duration; the bearer, PUB/Story payload, filename, source hash and exact revision are never recorded in span labels.
+
+The already-existing server `ReaderObservabilityV1` records sanitized HTTP request outcomes/latencies for `temporary.session_create`, `temporary.current`, `temporary.commit`, `temporary.scene`, `temporary.export` and `temporary.delete`. The middleware consults the static Axum `MatchedPath` route template, never real URL/query/source paths. The existing Reader create/upload/open/scanner/cleanup stages are retained without changes. Bounded operation class, outcome, region, protocol and browser labels are unchanged; new event stages are explicitly enumerated.
+
+**Evidence boundary:** this code supplies request/route correlation, not isolated-worker per-substep spans, physical production tracing proof or new numeric SLOs. CI must verify real PUB browser/HTTPS edit/export and privacy fences, then a separate source-safe live receipt can join browser and server interaction IDs at an exact deployed SHA. A successful GitHub PR alone is not physical deploy.

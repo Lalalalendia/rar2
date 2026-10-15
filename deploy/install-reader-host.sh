@@ -15,6 +15,7 @@ fi
 
 RELEASE="/opt/chaptera/releases/${COMMIT_SHA}"
 CURRENT="/opt/chaptera/current"
+PREVIOUS="/opt/chaptera/previous"
 CONFIG_DIR="/etc/chaptera"
 STATE_DIR="/var/lib/chaptera"
 CREDENTIAL_DIR="${CONFIG_DIR}/credentials"
@@ -43,6 +44,20 @@ if [[ ! -s "${CREDENTIAL_DIR}/reader_rate_subject_secret" ]]; then
   openssl rand -hex 32 > "${CREDENTIAL_DIR}/reader_rate_subject_secret"
 fi
 chmod 0600 "${CREDENTIAL_DIR}/reader_rate_subject_secret"
+
+# Preserve only a verified immutable Chaptera release as rollback authority.
+# A malformed current target is a deployment error, not something to overwrite.
+if [[ -e "${CURRENT}" || -L "${CURRENT}" ]]; then
+  old_release="$(readlink -f "${CURRENT}" 2>/dev/null || true)"
+  if [[ ! "${old_release}" =~ ^/opt/chaptera/releases/[0-9a-f]{40}$ ]] \
+      || [[ ! -x "${old_release}/chaptera" ]]; then
+    echo "current Chaptera release is not a verified immutable release: ${old_release}" >&2
+    exit 1
+  fi
+  if [[ "${old_release}" != "${RELEASE}" ]]; then
+    ln -sfn "${old_release}" "${PREVIOUS}"
+  fi
+fi
 
 ln -sfn "${RELEASE}" "${CURRENT}"
 

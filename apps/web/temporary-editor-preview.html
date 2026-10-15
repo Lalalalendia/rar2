@@ -9,11 +9,22 @@
 </head>
 <body>
 <main id="temporary-preview-root" class="page-shell">
-  <header>
-    <strong>Chaptera</strong>
-    <h1>Временный редактор PUB</h1>
-    <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
-    <p class="notice"><strong>Правка поддерживаемых объектов.</strong> Временная сессия допускает перенос поддерживаемых фигур и выгрузку изменённого IDML, ODG или PDF с отчётом об ограничениях точности. Сохранение изменённого .pub не обещается. Исходный PUB неизменен.</p>
+  <header class="workspace-topbar">
+    <a class="workspace-brand" href="/" target="_blank" rel="noopener noreferrer" aria-label="Открыть облачную читалку в новой вкладке">
+      <span class="workspace-mark" aria-hidden="true">C</span>
+      <strong>Chaptera</strong>
+    </a>
+    <div class="workspace-document">
+      <h1>Временный редактор PUB</h1>
+      <span class="workspace-subtitle">Работа с документом · временная сессия</span>
+    </div>
+    <details class="workspace-about">
+      <summary>Возможности и ограничения</summary>
+      <div class="workspace-about-content">
+        <p>Проверка анонимной временной сессии. Регистрация и постоянное сохранение не нужны.</p>
+        <p class="notice"><strong>Просмотр и PDF без правки.</strong> Откройте поддерживаемый PUB и скачайте PDF с отчётом об ограничениях точности. Можно перемещать поддерживаемые объекты (после выбора — стрелками по 1 пункту), менять размер, редактировать простой текст и создавать прямоугольники. Изменённые PDF, IDML или ODG доступны после подтверждённой правки. Порядок наложения новых объектов может быть частичным. Сохранение изменённого .pub не обещается; исходный PUB неизменен.</p>
+      </div>
+    </details>
   </header>
   <section aria-labelledby="open-heading" class="panel">
     <h2 id="open-heading">Открыть файл</h2>
@@ -22,6 +33,7 @@
       <input id="temporary-file" name="pub" type="file" accept=".pub,application/vnd.ms-publisher" required>
       <button id="temporary-start" type="submit">Открыть временно</button>
     </form>
+    <p class="editor-safety-note">Исходный PUB не изменяется. Сохранение обратно в .pub пока недоступно.</p>
     <div class="actions">
       <button id="temporary-resume" type="button" hidden>Восстановить в этой вкладке</button>
       <button id="temporary-forget" type="button" hidden>Забыть в этой вкладке</button>
@@ -29,15 +41,66 @@
     </div>
     <p id="temporary-status" role="status" aria-live="polite">Выберите PUB. Данные временной сессии не добавляются в постоянные проекты.</p>
     <p id="temporary-expiry" class="secondary"></p>
-    <p class="secondary">Вкладка хранит приватный ключ временной сессии. «Забыть» удаляет только локальный ключ. «Удалить временную сессию с сервера» немедленно отзывает доступ и очищает временные файлы после подтверждения. Иначе сервер удаляет данные через час после последней принятой правки.</p>
+    <details class="privacy-help">
+      <summary>Хранение и удаление данных</summary>
+      <p class="secondary">Вкладка хранит приватный ключ временной сессии. «Забыть» удаляет только локальный ключ. «Удалить временную сессию с сервера» немедленно отзывает доступ и очищает временные файлы после подтверждения. Иначе сервер удаляет данные через час после последней принятой правки.</p>
+    </details>
+  </section>
+  <section id="temporary-story-panel" class="panel" aria-labelledby="story-heading" hidden>
+    <h2 id="story-heading">Изменить текст</h2>
+    <details class="story-help">
+      <summary>Ограничения редактирования текста</summary>
+      <p class="secondary">Поддерживается простой текст одной несвязанной рамки. Выберите рамку прямо на странице или в списке. Несохранённый ввод нужно применить либо сбросить перед переключением. Существующие окончания строк сохраняются; новые абзацы и сложное оформление не поддерживаются. Все изменения подтверждает сервер.</p>
+    </details>
+    <label for="temporary-story-select">Текстовая рамка</label>
+    <select id="temporary-story-select"></select>
+    <label for="temporary-story-text">Текст</label>
+    <textarea id="temporary-story-text" rows="4" spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="temporary-story-apply" type="button" disabled>Сохранить текст</button>
+      <button id="temporary-story-discard" type="button" disabled>Сбросить черновик</button>
+    </div>
   </section>
   <section class="panel" aria-labelledby="pages-heading">
-    <h2 id="pages-heading">Страницы</h2>
+    <h2 id="pages-heading">Страницы <span class="canvas-hint">Выберите объект или включите инструмент прямоугольника и протяните по странице</span></h2>
+    <div id="temporary-view-controls" class="canvas-view-controls" role="toolbar" aria-label="Навигация по страницам и масштаб">
+      <span class="canvas-view-group">
+        <button id="temporary-page-prev" type="button" disabled aria-label="Предыдущая страница">←</button>
+        <output id="temporary-page-position" aria-live="polite">0 / 0</output>
+        <button id="temporary-page-next" type="button" disabled aria-label="Следующая страница">→</button>
+      </span>
+      <span class="canvas-view-group">
+        <button id="temporary-zoom-out" type="button" disabled aria-label="Уменьшить масштаб">−</button>
+        <button id="temporary-zoom-fit" type="button" disabled aria-pressed="true">По ширине</button>
+        <button id="temporary-zoom-actual" type="button" disabled>100%</button>
+        <button id="temporary-zoom-in" type="button" disabled aria-label="Увеличить масштаб">+</button>
+        <output id="temporary-zoom-percent" aria-live="polite">По ширине</output>
+      </span>
+    </div>
     <div id="temporary-pages" class="pages" role="region" aria-label="Страницы временного PUB" tabindex="0"></div>
     <div id="temporary-export-actions" class="actions" hidden>
+      <button id="temporary-draw-rectangle" type="button" aria-pressed="false" disabled>Прямоугольник</button>
       <button id="temporary-download-idml" type="button" disabled>Скачать изменённый IDML</button>
       <button id="temporary-download-odg" type="button" disabled>Скачать изменённый ODG</button>
-      <button id="temporary-download-pdf" type="button" disabled>Скачать изменённый PDF</button>
+      <button id="temporary-download-pdf" type="button" disabled>Скачать PDF</button>
+      <button id="temporary-preview-pdf" type="button" disabled>Просмотреть PDF</button>
+      <button id="temporary-preview-pdf9up" type="button" disabled hidden>Предпросмотр листа А4 (9 визиток)</button>
+      <button id="temporary-download-pdf9up" type="button" disabled hidden>Скачать 9 визиток на А4 (PDF)</button>
+    </div>
+    <div id="temporary-pdf-preview" class="sheet-preview" hidden>
+      <div class="pdf-preview-header">
+        <h3>PDF последней сохранённой ревизии</h3>
+        <button id="temporary-close-pdf-preview" type="button" disabled>Закрыть просмотр</button>
+      </div>
+      <p id="temporary-pdf-preview-info" class="secondary" aria-live="polite"></p>
+      <iframe id="temporary-pdf-frame" title="Проверенный PDF сохранённой ревизии" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <p class="secondary">Если браузер не отображает PDF, используйте «Скачать PDF». Изменения в несохранённом текстовом поле не включены в этот предпросмотр.</p>
+    </div>
+    <div id="temporary-sheet-preview" class="sheet-preview" hidden>
+      <h3>Печатный лист А4 — девять визиток</h3>
+      <p class="secondary">Предпросмотр формируется из проверенного PDF текущей редакции. После правки документ проверяется заново.</p>
+      <iframe id="temporary-sheet-pdf-frame" title="Проверенный печатный PDF: девять визиток на листе А4" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <p class="secondary">Если встроенный PDF не отображается, скачайте файл и откройте его в программе для просмотра PDF.</p>
     </div>
   </section>
 </main>

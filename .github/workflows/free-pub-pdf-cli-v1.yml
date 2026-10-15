@@ -46,6 +46,7 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-pdf
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli report_label_ --bin pub
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli resource_scene_ --bin pub
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-cli trace_image_placement_ --bin pub
 
       - name: Build public CLI
         run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-cli --bin pub
@@ -183,6 +184,102 @@ jobs:
           test -s "$out/a.pdf.loss.txt"
           echo "CHAPTERA_CLI_OUT=$out" >> "$GITHUB_ENV"
 
+      - name: Validate opted-in source-to-paint trace on pinned real PUB
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/free-pub-pdf-trace-v1"
+          mkdir -p "$out"
+          cli="vendor/producer-a/target/debug/pub"
+          CHAPTERA_PDF_PAINT_TRACE=1 "$cli" convert "$CHAPTERA_SAMPLE_NEWSLETTER" --to pdf \
+            --output "$out/trace.pdf" --fallback-font "$CHAPTERA_FIXED_OUTPUT_FONT" \
+            > "$out/run.log"
+
+          cmp "$CHAPTERA_CLI_OUT/a.pdf" "$out/trace.pdf"
+          cmp "$CHAPTERA_CLI_OUT/a.pdf.loss.json" "$out/trace.pdf.loss.json"
+          python - "$out" <<'PY'
+          import collections
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          pdf = (root / "trace.pdf").read_bytes()
+          trace = json.loads((root / "trace.pdf.paint-trace.json").read_text())
+          assert trace["schema_version"] == "chaptera.pdf-paint-trace.v1"
+          assert trace["candidate_pdf_sha256"] == hashlib.sha256(pdf).hexdigest()
+          assert trace["source_sha256"] == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          events = trace["paint_trace"]
+          links = trace["source_nodes"]
+          assert events and links
+          painted = {event["node_origin"] for event in events}
+          assert painted == {link["node_origin"] for link in links}
+          image_events = [
+              event for event in events if event["kind"] == "image"
+          ]
+          image_inputs = trace["image_inputs"]
+          assert len(image_inputs) == len(image_events)
+          assert {
+              (entry["node_origin"], entry["resource_origin"])
+              for entry in image_inputs
+          } == {
+              (event["node_origin"], event["resource_origin"])
+              for event in image_events
+          }
+          allowed_image_statuses = {
+              "unmatched_or_ambiguous_image_identity",
+              "ambiguous_placement_records",
+              "pdf_has_unmatched_placement",
+              "no_explicit_viewer_placement",
+              "viewer_crop_not_forwarded",
+              "pdf_crop_not_in_viewer",
+              "viewer_recolor_not_forwarded",
+              "pdf_recolor_not_in_viewer",
+              "viewer_rotation_not_forwarded",
+              "placement_fields_forwarded",
+          }
+          assert all(
+              item["transfer_status"] in allowed_image_statuses
+              for item in image_inputs
+          )
+          statuses = {
+              "exact_source_byte_range",
+              "exact_source_object_only",
+              "unmapped_projected_node",
+              "no_exact_authoritative_source_ref",
+          }
+          assert all(link["status"] in statuses for link in links)
+          for link in links:
+              refs = link["source_refs"]
+              for ref in refs:
+                  assert ref["source_hash"] == trace["source_sha256"]
+                  assert ref["authority"] == "authoritative"
+                  assert ref["confidence"] == "exact"
+                  assert ref["role"] in ("semantic", "projection")
+                  if (span := ref.get("byte_range")) is not None:
+                      assert 0 <= span["offset"]
+                      assert 0 <= span["length"]
+                      assert span["offset"] + span["length"] <= (2**64 - 1)
+              if link["status"].startswith("exact_"):
+                  assert refs
+              else:
+                  assert not refs
+          # No NodeIds, raw SourceRefs, content or image bytes in public logs.
+          print(json.dumps({
+              "trace_schema": trace["schema_version"],
+              "paint_event_count": len(events),
+              "source_link_count": len(links),
+              "source_status_counts": dict(collections.Counter(link["status"] for link in links)),
+              "painted_image_input_count": len(image_inputs),
+              "image_transfer_status_counts": dict(
+                  collections.Counter(item["transfer_status"] for item in image_inputs)
+              ),
+              "unchanged_pdf_and_loss_bytes": True,
+          }, sort_keys=True))
+          PY
+          rm -rf "$out"
+
       - name: Validate source-safe acceptance receipt
         shell: bash
         run: |
@@ -244,13 +341,16 @@ jobs:
               for item in report["pdf"].get("nodes", [])
           )
 
+          # 2026-10-14 independent main control PR #2747, run #38484851433:
+          # four A4 pages, /Pages Kids and MediaBoxes agree with report.
+          # Exact output equals nine-up PR #2740 ordinary PDF, not a 9-up regression.
           # Canonical fixed-PDF baseline, independently measured on unchanged main
           # in comment-only PR #2657, physical Free PUB PDF CLI #38236001178.
           # Strict hashes remain enforced; do not infer native Publisher parity.
           # SampleNewsletter carries alpha through a derived Viewer preview, not
           # an exact embedded image resource, so it must not inherit /SMask.
-          assert canonical["pdf_sha256"] == "edd12f20f705227014fab0e8cb2887c2d796492e937764d40a1c871cb872209e"
-          assert canonical["loss_json_sha256"] == "45e2ee3c9d8ae82a5e4b4f675206d2ca2e77c301f58def8a16362ebdd5843538"
+          assert canonical["pdf_sha256"] == "289fe56016106d8ab176ddadc46d5cb3acd54eb99abc29c10a3b1dda3651b7cf"
+          assert canonical["loss_json_sha256"] == "db38ff5f009060052a22cb47bc08006d04c77b15040af8c3042bb4c8ee15e2a0"
           assert canonical["loss_text_sha256"] == "0a8c0d14e72d81c4db8d3fd1e3ad320d18c1dbe4edcc7ccae93539251c616774"
 
           receipt = {

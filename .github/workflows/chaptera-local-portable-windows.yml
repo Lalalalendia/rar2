@@ -3,12 +3,19 @@ name: Chaptera Local Windows Portable V0
 on:
   workflow_call:
   workflow_dispatch:
-  # Seed the default-branch Cargo cache once when this workflow lands.
-  # Existing scheduled/manual main runs maintain it; feature PRs never save.
+  # Refresh the trusted main cache when Cargo graph/toolchain inputs change.
+  # rust-cache hashes all Cargo.toml/Cargo.lock; avoid source-wide main pushes.
+  # Untrusted PR workflows may only restore: save-if below stays main-only.
   push:
     branches: [main]
     paths:
       - ".github/workflows/chaptera-local-portable-windows.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".cargo/**"
+      - "rust-toolchain*"
 
 permissions:
   contents: read

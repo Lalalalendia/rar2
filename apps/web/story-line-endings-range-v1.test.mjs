@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {prepareStoryTextForTextarea, restoreStoryTextFromTextarea,
-  mapUnchangedTextareaSelectionToSourceScalarRange as map} from "./story-line-endings-v1.mjs";
+  mapUnchangedTextareaSelectionToSourceScalarRange as map,
+  canonicalStorySelectionFromTextarea,
+  textareaSelectionFromCanonicalStory} from "./story-line-endings-v1.mjs";
 
 const range=(source,a,b)=> {
   const profile=prepareStoryTextForTextarea(source);
@@ -57,4 +59,47 @@ test("empty, reversed, outside and fractional offset ranges fail closed",()=>{
 
 test("unsupported mixed source separators remain rejected",()=>{
   assert.throws(()=>prepareStoryTextForTextarea("A\r\nB\nC"),/mixed Publisher Story/);
+});
+
+test("post-edit caret round-trips through canonical Story scalar positions",()=>{
+  const source="A😀\r\nB\r";
+  const observed="Z😀\nB";
+  const captured=canonicalStorySelectionFromTextarea(
+    source,observed,3,3,"none",
+  );
+  assert.deepEqual(captured,{start_scalar:2,end_scalar:2,direction:"none"});
+  assert.deepEqual(
+    textareaSelectionFromCanonicalStory("Z😀\r\nB\r",2,2,"none"),
+    {start_utf16:3,end_utf16:3,direction:"none"},
+  );
+});
+
+test("post-edit range preserves direction across CRLF projection",()=>{
+  const captured=canonicalStorySelectionFromTextarea(
+    "ab\r\ncd\r","ab\nXY",3,5,"backward",
+  );
+  assert.deepEqual(captured,{start_scalar:4,end_scalar:6,direction:"backward"});
+  assert.deepEqual(
+    textareaSelectionFromCanonicalStory("ab\r\nXY\r",4,6,"backward"),
+    {start_utf16:3,end_utf16:5,direction:"backward"},
+  );
+});
+
+test("selection reconciliation fails closed on invalid browser or canonical boundaries",()=>{
+  assert.throws(
+    ()=>canonicalStorySelectionFromTextarea("A😀B","A😀B",2,3),
+    /surrogate pair/,
+  );
+  assert.throws(
+    ()=>canonicalStorySelectionFromTextarea("AB","AB",2,1),
+    /ordered in-bounds/,
+  );
+  assert.throws(
+    ()=>textareaSelectionFromCanonicalStory("A\r\nB",2,2),
+    /splits CRLF/,
+  );
+  assert.throws(
+    ()=>textareaSelectionFromCanonicalStory("AB",0,3),
+    /outside the visible Story/,
+  );
 });
