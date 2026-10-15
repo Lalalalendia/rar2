@@ -43,7 +43,10 @@ def _redact_caddy_log(path: pathlib.Path) -> None:
         return
     secrets = {
         "authorization", "proxy-authorization", "cookie", "set-cookie",
-        "x-chaptera-reader-session", "x-csrf-token",
+        "x-chaptera-reader-session", "x-csrf-token", "x-api-key",
+        # Do not publish private session IDs, source revisions or query secrets
+        # embedded in URLs even when HTTP headers themselves are scrubbed.
+        "uri", "url", "raw_uri", "request_uri", "query", "referer", "referrer",
     }
 
     def strip(value):
@@ -60,7 +63,10 @@ def _redact_caddy_log(path: pathlib.Path) -> None:
         cleaned = []
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
-                cleaned.append(json.dumps(strip(json.loads(line)), sort_keys=True))
+                entry = json.loads(line)
+                if not isinstance(entry, dict):
+                    raise ValueError("Caddy diagnostic is not an object")
+                cleaned.append(json.dumps(strip(entry), sort_keys=True))
             except (json.JSONDecodeError, TypeError, ValueError):
                 cleaned.append('{"level":"warn","msg":"unparseable Caddy diagnostic suppressed"}')
         safe = path.with_name(path.name + ".safe")
@@ -223,8 +229,7 @@ def main() -> int:
                         0, _cgroup_memory_events().get("oom_kill", 0)
                         - oom_before.get("oom_kill", 0)),
                 }, sort_keys=True) +
-                "; source-safe browser diagnostic: " +
-                (result.stderr or result.stdout)[-1800:]
+                "; browser exit status: " + str(result.returncode)
             )
         receipt = json.loads((out / "receipt.json").read_text(encoding="utf-8"))
 
