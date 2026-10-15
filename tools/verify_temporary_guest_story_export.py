@@ -68,6 +68,7 @@ def verify(artifact: pathlib.Path, target: str, expected: str) -> dict:
         raise AssertionError("current-revision Story marker absent from real editable content")
     return {
         "schema": "chaptera.tempedit-independent-story-xml-consumer.v1",
+        "status": "PASS",
         "target": target,
         "artifact_sha256": hashlib.sha256(raw).hexdigest(),
         "artifact_byte_len": len(raw),
