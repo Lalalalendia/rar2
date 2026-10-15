@@ -98,7 +98,7 @@ test("CreateTextBox private POST reopens exact authored TextFrame and never supp
   assert.equal(calls[1].options.credentials, "omit");
 });
 
-test("CreateTextBox refuses unknown page, nonpositive/overflow geometry and invalid paint before HTTP", async () => {
+test("CreateTextBox refuses unknown page and nonpositive/overflow geometry before HTTP", async () => {
   const {client, calls} = harness([current]);
   await client.refresh();
   const variants = [
@@ -109,7 +109,7 @@ test("CreateTextBox refuses unknown page, nonpositive/overflow geometry and inva
     {pageId: page, bounds: {...bounds, x: Number.MAX_SAFE_INTEGER}},
   ];
   for (const data of variants) {
-    await assert.rejects(client.createTextBox(data), /temporary_create_text_box_intent_invalid/);
+    await assert.rejects(client.createTextBox(data), /temporary_create_textbox_intent_invalid/);
   }
   assert.equal(calls.length, 1, "invalid intent cannot POST");
 });
@@ -120,7 +120,7 @@ test("CreateTextBox rejects forged ACK fields and fences a second command", asyn
   }};
   const {client, calls} = harness([current, altered]);
   await client.refresh();
-  await assert.rejects(create(client), /temporary_create_text_box_ack_operation_mismatch/);
+  await assert.rejects(create(client), /temporary_create_textbox_ack_operation_mismatch/);
   assert.equal(client.status.pending_reconciliation, true);
   await assert.rejects(create(client), /temporary_move_reconciliation_required/);
   assert.equal(calls.length, 2);
