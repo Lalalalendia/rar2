@@ -292,6 +292,14 @@ def sbdc_r1_browser_own_pdf_raster(
     )
     if not diff["raster_size_match"]:
         raise AssertionError("R1 own PDF and browser raster consumer cannot be compared")
+    # This path is strictly pinned SBDC034, accepted same-revision R1, 144 DPI,
+    # max-RGB delta >=24. The exact current approved PDF consumer measured
+    # 134,740/1,938,816 significant pixels (6.9496%). Preserve a bounded
+    # 7.5% margin for browser raster differences without permitting the
+    # independently observed 8.78%-9.44% former PDF layout regressions.
+    # This is Chrome versus our PDF, NOT Microsoft Publisher parity.
+    if diff["significant_fraction"] > 0.075:
+        raise AssertionError("sbdc034_exact_r1_browser_own_pdf_visual_budget_exceeded")
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
     from sbdc_r1_text_metrics_census import census_r1_text_metrics
     disagreement_census = census_r1_disagreement(
