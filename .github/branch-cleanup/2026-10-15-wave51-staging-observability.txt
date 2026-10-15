@@ -1,0 +1,15 @@
+# RAR2 guarded branch GC wave 51 — October 15 2026
+# Execution only. Do NOT merge into main.
+# Four October 1 stale Cloud Reader observability staging refs have no PR heads
+# (open or closed), are over 1500 commits behind main, and only change paths
+# that belong to subsequently merged production trace/SLI PR #537.
+# After #537, merged #2796 continued the same canonical tracing contract.
+# Fifth ref is an earlier completed guard-GC manifest; associated PR #2809 is closed
+# without merge, receipt retained in GitHub Actions.
+# Preserve accepted feature commits, original PR history and exact SHA evidence.
+# At execution the existing branch-gc workflow rechecks remote SHA/open PR heads/bases.
+staging/cloud-reader-observability-01-acceptance 6893dcc31ba5949e8ca6128bafff9475a629f8dd # 12-file acceptance-stage subset of merged PR #537
+staging/cloud-reader-observability-01-fix 8d1a2b3faf87edb143f80044bd1ae7faee6634af # 7-file interim implementation subset of merged PR #537
+staging/cloud-reader-observability-final 5daf3626d0b4718c3ab77cab46e2e85626c41752 # 6-file final staging subset of merged PR #537
+staging/cloud-reader-observability-rebase de69cbfd8c884d7bbe92c0d58f5b07e8ed40ad94 # 12-file intermediate staging subset of merged PR #537
+ops/branch-gc-20261015-wave50-closed-evidence 3e4d1553c706f0d21275c2778315bce4f5a7390e # closed unmerged execution-only PR #2809 completed successfully
