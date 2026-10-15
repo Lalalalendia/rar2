@@ -19,7 +19,8 @@ class TestBrowserLogSafety(unittest.TestCase):
                 "level": "warn",
                 "logger": "http.handlers.reverse_proxy",
                 "msg": "aborting with incomplete response",
-                "error": "reading: connection reset by peer",
+                "error": "reading: connection reset by peer; private-proxy-query=" + token,
+                "unexpected_extension": {"dynamic": token, "secret": csrf},
                 "request": {
                     "method": "POST",
                     "uri": "/v1/reader/guest-sessions/{session}/open?secret=" + token,
@@ -30,6 +31,7 @@ class TestBrowserLogSafety(unittest.TestCase):
                         "Authorization": ["Bearer hidden"],
                         "Cookie": ["session=hidden"],
                         "Content-Type": ["application/json"],
+                        "X-Experimental-Secret": [token],
                     },
                 },
             }
@@ -45,6 +47,12 @@ class TestBrowserLogSafety(unittest.TestCase):
             self.assertIn("connection reset by peer", result)
             self.assertIn("aborting with incomplete response", result)
             self.assertIn("application/json", result)
+            self.assertNotIn("unexpected_extension", result)
+            self.assertNotIn("X-Experimental-Secret", result)
+            self.assertNotIn("private-proxy-query", result)
+            self.assertNotIn("reading:", result)
+            self.assertEqual(json.loads(result.splitlines()[0])["msg"],
+                             "aborting with incomplete response")
             self.assertIn("unparseable Caddy diagnostic suppressed", result)
             clean_request = json.loads(result.splitlines()[0])["request"]
             self.assertEqual(clean_request["uri"], "[redacted]")
