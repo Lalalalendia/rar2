@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-server/src/safe_preview_scene.rs"
+      - "apps/chaptera-server/src/temporary_fixed_pdf.rs"
       - "apps/cloud-reader/real-browser.test.mjs"
       - "tools/run_cloud_reader_live_acceptance.py"
       - "tools/run_reader_sbdc034_host_acceptance.py"
