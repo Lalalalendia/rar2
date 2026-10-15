@@ -37,6 +37,7 @@ const page = await browser.newPage({
 });
 const observed = { current:[],scenes:[],accepted:[],storyAccepted:[],reports:[],requests:[],responses:[] };
 const pending = [],errors=[];
+let phase = "ui_open";
 page.on("pageerror",error => errors.push(error.name || "PageError"));
 page.on("request",request => {
   if (!request.url().startsWith(origin)) return;
@@ -82,6 +83,7 @@ try {
   assert.equal(entry?.status(),200,"real TLS guest editor page unavailable");
   await page.locator("#temporary-file").setInputFiles(fixture);
   await page.locator("#temporary-start").click();
+  phase = "pub_ingress";
   try {
     await page.waitForFunction(() =>
       /(?:PUB открыт|Открыта редактируемая ревизия)/.test(
@@ -104,6 +106,7 @@ try {
     baseline.authoring_graph?.pages?.[p.page_id] &&
     p.width_emu>2_000_000 && p.height_emu>2_000_000);
   assert.ok(eligible,"real Publisher source offers no canonically authorable page");
+  phase = "draw_tool";
   const drawButton=page.locator("#temporary-draw-textbox");
   await drawButton.waitFor({state:"visible",timeout:10000});
   assert.equal(await drawButton.isEnabled(),true,"Guest TextFrame tool did not admit source page");
@@ -112,6 +115,7 @@ try {
 
   const svg = page.locator('svg.page[data-page-id="'+eligible.page_id+'"]').first();
   await svg.scrollIntoViewIfNeeded({timeout:10000});
+  phase = "pointer_geometry";
   const positions=await page.evaluate(pageId=>{
     const svg=[...document.querySelectorAll("#temporary-pages svg.page")]
       .find(s=>s.getAttribute("data-page-id")===pageId);
@@ -131,6 +135,7 @@ try {
     return element?.closest?.("svg.page")===svg ? {start,finish} : null;
   },eligible.page_id);
   assert.ok(positions,"real Publisher page-local pointer coordinates are unavailable");
+  phase = "pointer_commit";
   await page.mouse.move(positions.start.x,positions.start.y);
   await page.mouse.down();
   await page.mouse.move(positions.finish.x,positions.finish.y,{steps:7});
@@ -146,6 +151,7 @@ try {
       " page_errors="+JSON.stringify(errors));
   }
   await settle();
+  phase = "create_contract";
   const ack=observed.accepted.at(-1),now=observed.current.at(-1),envelope=observed.scenes.at(-1);
   assert.equal(ack?.protocol_version,"chaptera.temporary-editor-create-textbox.v1");
   assert.equal(ack.source_hash,expectedSourceHash);
@@ -181,6 +187,7 @@ try {
 
   // Physical user edit: exactly one additional source-preserving StoryRange
   // commit to the freshly authored empty Story. No direct browser API POST.
+  phase = "story_edit";
   const textMarker="ChapteraNewTextBoxProof42";
   await page.waitForTimeout(5400);
   await editor.fill(textMarker);
@@ -196,6 +203,7 @@ try {
     document.querySelector("#temporary-status")?.textContent.includes(
       "Текст подтверждён сервером"),null,{timeout:120000});
   await settle();
+  phase = "story_contract";
   const storyAck=observed.storyAccepted.at(-1);
   const textCurrent=observed.current.at(-1);
   const textScene=observed.scenes.at(-1)?.scene;
@@ -212,6 +220,7 @@ try {
 
   // Existing trusted temporary exports consume the edited current revision.
   await page.waitForTimeout(7500);
+  phase = "export";
   const button=page.locator("#temporary-download-"+target);
   await button.waitFor({state:"visible"});
   assert.equal(await button.isEnabled(),true,"created authoring did not unlock export");
@@ -232,6 +241,7 @@ try {
   assert.equal(report.loss_report?.can_serialize,true);
   assert.equal(report.loss_report?.counts?.blocking,0);
 
+  phase = "physical_consumer";
   const consumerCheck=spawnSync("python3",[
     "tools/verify_temporary_guest_story_export.py",
     "--artifact",artifactPath,
@@ -250,6 +260,7 @@ try {
   assert.equal(consumer.target_application_consumer?.reopened,true);
   assert.equal(consumer.target_application_consumer?.story_marker_retained,true);
 
+  phase = "reopen";
   await page.reload({waitUntil:"domcontentloaded"});
   await page.locator("#temporary-resume").click();
   await page.waitForFunction(nodeId=>
@@ -280,6 +291,7 @@ try {
     "private bearer leaked into a request URL");
   assert.equal(errors.length,0,"Chromium emitted an uncaught page error");
 
+  phase = "revoke";
   page.once("dialog",dialog=>dialog.accept());
   await page.locator("#temporary-delete").click();
   await page.waitForFunction(()=>
@@ -303,6 +315,7 @@ try {
   assert.equal(await page.evaluate(()=>
     sessionStorage.getItem("chaptera.temporary-edit.v0")),null);
   assert.equal(await page.locator("#temporary-resume").isHidden(),true);
+  phase = "receipt";
   const receipt={
     schema:"chaptera.tempedit-real-pub-create-textbox-chromium-https.v1",
     status:"PASS",source_sha256:expectedSourceHash,source_byte_len:original.length,
@@ -324,6 +337,38 @@ try {
   console.log(JSON.stringify({schema:receipt.schema,status:"PASS",
     target,real_pub_browser_https:true,physical_target_consumer:true,
     artifact_sha256:receipt.changed_artifact_sha256}));
+} catch (error) {
+  // Fail-closed physical evidence: do not expose browser stderr, server URLs,
+  // private bearer, Story text, raw headers or foreign source identifiers.
+  const endpointStatuses = suffix => observed.responses
+    .filter(x => x.path?.endsWith(suffix) && Number.isInteger(x.status))
+    .slice(-8).map(x => x.status);
+  const diagnostic = {
+    schema: "chaptera.tempedit-physical-textbox-failure.v1",
+    status: "FAIL",
+    phase,
+    export_target: target,
+    failure_class: error?.name === "AssertionError" ? "assertion"
+      : error?.name === "TimeoutError" ? "timeout" : "other",
+    browser_page_error_count: Math.min(100, errors.length),
+    current_success_replies: observed.current.length,
+    scene_success_replies: observed.scenes.length,
+    create_ack_replies: observed.accepted.length,
+    story_ack_replies: observed.storyAccepted.length,
+    create_request_count: observed.requests.filter(x =>
+      x.method === "POST" && x.path.endsWith("/create-textbox")).length,
+    story_request_count: observed.requests.filter(x =>
+      x.method === "POST" && x.path.endsWith("/story-range")).length,
+    create_statuses: endpointStatuses("/create-textbox"),
+    story_statuses: endpointStatuses("/story-range"),
+  };
+  try {
+    await mkdir(dirname(receiptPath), {recursive:true});
+    await writeFile(receiptPath, JSON.stringify(diagnostic,null,2)+"\n");
+  } catch {
+    // Artifact publication has its own fail-closed gate; no raw fallback.
+  }
+  throw new Error("source-neutral real CreateTextBox acceptance failed at "+phase);
 } finally {
   await browser.close();
 }
