@@ -29,6 +29,7 @@ const WINDOW_OVERSCAN_PAGES = 1;
 let generation = 0;
 let pending = null;
 let pageIndex = 0;
+let navigationTarget = null;
 let contributionContext = null;
 let contributionExpiry = null;
 let openingFocusTarget = null;
@@ -152,6 +153,7 @@ function clearReader() {
   scene = null;
   pages = [];
   pageIndex = 0;
+  navigationTarget = null;
   preparedScene = null;
   pageOffsets = [];
   mountedPageIds = "";
@@ -281,11 +283,15 @@ function goToPage(index) {
   updatePageControls(index);
   viewer.scrollTop = pageOffsets[pageIndex];
   updateWindow();
+  // For pages shorter than the viewport the browser may clamp scrollTop.
+  // Keep an explicitly requested PageId selected until a real scroll occurs.
+  navigationTarget = { index: pageIndex, scrollTop: viewer.scrollTop };
 }
 
 function applyZoom() {
   if (!scene || !pages.length) return;
-  const current = pageOffsets.length ? pageAtScroll(Math.max(0, viewer.scrollTop)) : pageIndex;
+  const current = navigationTarget?.index ??
+    (pageOffsets.length ? pageAtScroll(Math.max(0, viewer.scrollTop)) : pageIndex);
   const offsetInPage = pageOffsets.length ? Math.max(0, viewer.scrollTop - pageOffsets[current]) : 0;
   // The zoom selector already contains the NEW scale, so pageHeight(current)
   // would incorrectly measure the new page. Use the OLD prefix offsets to
@@ -299,6 +305,10 @@ function applyZoom() {
   mountedPageIds = "";
   viewer.scrollTop = pageOffsets[current] + normalized * pageHeight(current);
   updateWindow();
+  if (navigationTarget) {
+    navigationTarget = { index: current, scrollTop: viewer.scrollTop };
+    updatePageControls(current);
+  }
 }
 
 function showStory(index) {
@@ -736,6 +746,11 @@ viewer.addEventListener("keydown", (event) => {
 viewer.addEventListener("scroll", () => {
   if (!pages.length || !pageOffsets.length) return;
   updateWindow();
+  if (navigationTarget && Math.abs(viewer.scrollTop - navigationTarget.scrollTop) <= 1) {
+    updatePageControls(navigationTarget.index);
+    return;
+  }
+  navigationTarget = null;
   const current = pageAtScroll(Math.max(0, viewer.scrollTop + 12));
   updatePageControls(current);
 });
