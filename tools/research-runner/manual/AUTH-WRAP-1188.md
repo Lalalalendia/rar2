@@ -42,7 +42,8 @@ pinned full commit SHA (not an untrusted branch name):
 ```powershell
 pwsh -NoProfile -File tools/research-runner/auth_wrap_direct_1188.ps1 `
   -TrustedCommitSha <verified40hexsha> `
-  -OutputRoot C:\Temp\auth-wrap-1188-exact
+  -OutputRoot C:\Temp\auth-wrap-1188-exact `
+  -AcknowledgeIsolatedLab
 ```
 
 Use `-CheckOnly` for source/packet preflight without native execution.
@@ -94,3 +95,20 @@ exclude concurrent human Publisher use. The approved isolated VM, owned-PID
 review, and independently verified reset-provider negative tests remain
 required. Hosted -CheckOnly is not a native semantic or safety PASS.
 
+
+## 2026-10-15 native-mode interlock and reset-time collision checks
+
+Native execution now requires an explicit `-AcknowledgeIsolatedLab` flag;
+omitting it fails before native host access or output creation. This flag is a
+human acknowledgement, **not** proof that the Publisher instance is owned.
+The child rejects MSPUB processes observed after reset-provider preparation,
+and the operation rejects ambient MSPUB processes immediately before each
+of the two COM activations (Open and fresh reopen). These checks narrow the
+race window but cannot replace exclusive VM access and independently
+validated ownership of the out-of-process COM server PID.
+
+The oracle binary path is resolved using Cargo metadata, honoring an
+explicit `CARGO_TARGET_DIR` rather than assuming a workspace-local target.
+The Windows research packet CI exercises the no-acknowledgement negative
+path without starting Publisher. Keep the PR Draft and the native gate blocked
+until physical lab owner review and reset-provider negative controls.

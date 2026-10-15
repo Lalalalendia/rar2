@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$TrustedCommitSha,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$AcknowledgeIsolatedLab
 )
 
 Set-StrictMode -Version Latest
@@ -67,6 +68,11 @@ try {
         Write-Host "AUTH-WRAP 1188 trusted offline static preflight OK: HEAD=$TrustedCommitSha"
         return
     }
+    # This explicit acknowledgement reduces accidental native execution.
+    # It is NOT evidence of host exclusivity or Publisher COM PID ownership.
+    if (-not $AcknowledgeIsolatedLab) {
+        throw 'Native AUTH-WRAP requires explicit -AcknowledgeIsolatedLab; CheckOnly remains non-native'
+    }
     if (-not $IsWindows) { throw 'Native AUTH-WRAP may only run on an authorized Windows Publisher2019 lab' }
     if (-not $env:PUB_RESEARCH_RESET_PROVIDER -or
         -not (Test-Path -LiteralPath $env:PUB_RESEARCH_RESET_PROVIDER -PathType Leaf)) {
@@ -94,7 +100,13 @@ try {
     # runner registration are performed by this launcher.
     InvokeTool 'cargo' @('build','--offline','--manifest-path','vendor/producer-a/Cargo.toml',
         '-p','pub-reader','--bin','auth_wrap_oracle_tool','--quiet')
-    $oracle = Join-Path $repo 'vendor/producer-a/target/debug/auth_wrap_oracle_tool.exe'
+    # Cargo honors CARGO_TARGET_DIR and workspace config; never assume the
+    # locally built oracle lives in vendor/producer-a/target.
+    $metadataJson = & cargo metadata --offline --no-deps --format-version 1 --manifest-path 'vendor/producer-a/Cargo.toml'
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed for source-pinned oracle output' }
+    $metadata = $metadataJson | ConvertFrom-Json
+    if (-not $metadata.target_directory) { throw 'Cargo target directory unavailable' }
+    $oracle = Join-Path ([string]$metadata.target_directory) 'debug/auth_wrap_oracle_tool.exe'
     if (-not (Test-Path -LiteralPath $oracle -PathType Leaf)) { throw 'Built AUTH-WRAP oracle binary missing' }
     $env:PUB_RESEARCH_AUTH_WRAP_ORACLE_EXE = $oracle
     $env:PUB_RESEARCH_PACKET_SHA256 = $packetHash

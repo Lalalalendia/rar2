@@ -117,6 +117,13 @@ function WrapState($shape) {
         }
     } finally { ReleaseCom $wrap }
 }
+function RequirePublisherNoAmbientInstance {
+    # A necessary but not sufficient condition: external exclusive host/PID
+    # attestation is still required for live native admission.
+    if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'Publisher active immediately before COM activation; unsafe attachment'
+    }
+}
 function ExactGeometry($before, $after) {
     for ($i = 0; $i -lt 4; $i++) {
         if ([Math]::Abs([double]$before.geometry[$i] - [double]$after.geometry[$i]) -gt 0.0001) { return $false }
@@ -132,6 +139,7 @@ $afterCom = $null
 $changedCom = $false
 $mutatedDistance = $null
 try {
+    RequirePublisherNoAmbientInstance
     $app = New-PubPublisherApplication
     $doc = $app.Open($prepared,$false,$false)
     $slot = FindShapeSlot -document $doc -sourceShape $rawObstacle
@@ -174,6 +182,7 @@ $app = $null
 $doc = $null
 $reopenedCom = $null
 try {
+    RequirePublisherNoAmbientInstance
     $app = New-PubPublisherApplication
     $doc = $app.Open($saved,$true,$false)
     $slot = FindShapeSlot -document $doc -sourceShape $rawObstacle

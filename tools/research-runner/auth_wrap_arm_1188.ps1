@@ -35,6 +35,11 @@ try {
     Remove-Item Env:PUB_RESEARCH_FIXTURE -ErrorAction SilentlyContinue
     Remove-Item Env:PUB_RESEARCH_PUBLISHER_EXE -ErrorAction SilentlyContinue
     & (Join-Path $repo 'tools/research-runner/prepare_native_run.ps1') -PacketPath $expectedPacket -OutputRoot $OutputRoot
+    # The reset provider may leave MSPUB running or a user may open Publisher
+    # while the VM is being restored. Never attach to that ambient COM instance.
+    if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'Publisher active after reset provider; refusing ambient COM instance'
+    }
     $fixture = [string]$env:PUB_RESEARCH_FIXTURE
     $publisher = [string]$env:PUB_RESEARCH_PUBLISHER_EXE
     if (-not $fixture -or -not (Test-Path -LiteralPath $fixture -PathType Leaf) -or

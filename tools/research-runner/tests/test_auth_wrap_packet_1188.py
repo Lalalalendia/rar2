@@ -1,6 +1,9 @@
 """Offline immutable-identity / admitted-contract checks for the native experiment."""
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 BASE = Path(__file__).resolve().parents[1]
@@ -8,6 +11,8 @@ PACKET = BASE / "experiments" / "auth-wrap-01.packet.json"
 SCRIPT = BASE / "operations" / "auth_wrap_01.ps1"
 LAUNCHER = BASE / "auth_wrap_direct_1188.ps1"
 CHILD = BASE / "auth_wrap_arm_1188.ps1"
+REPO = BASE.parents[1]
+OPERATION = BASE / "operations" / "auth_wrap_01.ps1"
 
 
 class PacketContract(unittest.TestCase):
@@ -69,8 +74,34 @@ class PacketContract(unittest.TestCase):
         self.assertNotIn("Stop-Process -Name MSPUB", direct)
         self.assertNotIn("Stop-Process -Id $publisherProcess.Id", direct)
 
+    def test_safe_native_admission_guards_are_present(self):
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+        child = CHILD.read_text(encoding="utf-8")
+        operation = OPERATION.read_text(encoding="utf-8")
+        self.assertIn("[switch]$AcknowledgeIsolatedLab", launcher)
+        self.assertIn("requires explicit -AcknowledgeIsolatedLab", launcher)
+        self.assertIn("cargo metadata --offline --no-deps", launcher)
+        self.assertIn("Publisher active after reset provider", child)
+        self.assertEqual(operation.count("    RequirePublisherNoAmbientInstance\n    $app = New-PubPublisherApplication"), 2)
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7 is unavailable")
+    def test_missing_native_acknowledgement_fails_without_output_or_publisher(self):
+        head = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"],
+                                       text=True).strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "must-not-be-created"
+            result = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(LAUNCHER),
+                 "-TrustedCommitSha", head, "-OutputRoot", str(out)],
+                cwd=REPO, capture_output=True, text=True, check=False, timeout=90,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires explicit -AcknowledgeIsolatedLab",
+                          result.stdout + result.stderr)
+            self.assertFalse(out.exists())
+
     def test_no_ambient_source_downloads(self):
-        for path in (SCRIPT, LAUNCHER):
+        for path in (SCRIPT, LAUNCHER, CHILD):
             script = path.read_text(encoding="utf-8").lower()
             for forbidden in ("invoke-webrequest", "start-bitstransfer", "downloadfile", "curl.exe"):
                 self.assertNotIn(forbidden, script)
