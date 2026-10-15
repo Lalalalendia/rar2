@@ -110,9 +110,16 @@ pub enum Command {
         #[arg(
             long,
             requires = "project_json",
-            conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "scene_revision_id", "editable_export_target"]
+            conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "create_textbox_intent_json", "scene_revision_id", "editable_export_target"]
         )]
         create_shape_intent_json: Option<PathBuf>,
+        /// Host-signed IDs and fixed preset are never supplied by an untrusted browser.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "create_shape_intent_json", "scene_revision_id", "editable_export_target"]
+        )]
+        create_textbox_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,

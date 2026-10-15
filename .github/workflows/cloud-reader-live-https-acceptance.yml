@@ -30,9 +30,13 @@ on:
       - "tools/run_temporary_editor_real_pub_browser.mjs"
       - "tools/run_temporary_editor_real_pub_story_browser.mjs"
       - "tools/run_temporary_editor_real_pub_create_browser.mjs"
+      - "tools/run_temporary_editor_real_pub_textbox_browser.mjs"
+      - "tools/verify_temporary_guest_story_pdf_export.py"
+      - "tools/test_verify_temporary_guest_story_pdf_export.py"
       - "tools/verify_temporary_guest_created_shape_export.py"
       - "tools/ci/verify_authored_rectangle_export.py"
       - "tools/verify_temporary_guest_story_export.py"
+      - "tools/test_verify_temporary_guest_story_export.py"
       - "tools/verify_temporary_guest_pdf_geometry.py"
       - "tools/verify_temporary_guest_resize_export.py"
       - ".github/workflows/cloud-reader-live-https-acceptance.yml"
@@ -71,11 +75,13 @@ jobs:
       - name: Verify acceptance host dependencies
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_resize_export.py
+          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_story_pdf_export.py tools/test_verify_temporary_guest_story_pdf_export.py tools/verify_temporary_guest_resize_export.py
           python -m unittest discover -s tools -p 'test_temporary_browser_log_safety.py'
+          python -m unittest discover -s tools -p 'test_verify_temporary_guest_story_export.py'
           node --check tools/run_temporary_editor_real_pub_browser.mjs
           node --check tools/run_temporary_editor_real_pub_story_browser.mjs
           node --check tools/run_temporary_editor_real_pub_create_browser.mjs
+          node --check tools/run_temporary_editor_real_pub_textbox_browser.mjs
           python -m py_compile tools/verify_temporary_guest_created_shape_export.py
           python - <<'PY'
           import ctypes.util
@@ -238,6 +244,26 @@ jobs:
               --out "$GITHUB_WORKSPACE/target/temporary-editor-create-$target"
           done
 
+      # Physical vertical slice: browser creates an empty TextFrame and Story,
+      # then uses the existing StoryRange mutation. Two native application
+      # consumers must recover exactly the authored text, not just geometry.
+      - name: Prove real PUB Chromium CreateTextBox + Story and IDML/ODG/PDF consumers
+        run: |
+          set -euo pipefail
+          # Only the pinned exact-revision PDF witness needs the independent
+          # PDF text consumer. Its synthetic fail-closed tests run first.
+          python3 -m pip install --disable-pip-version-check --no-input --no-cache-dir "PyMuPDF==1.26.7"
+          python3 -m unittest discover -v -s tools -p test_verify_temporary_guest_story_pdf_export.py
+          for target in idml odg; do
+            python tools/run_temporary_editor_real_pub_browser_acceptance.py \
+              --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
+              --caddy "$RUNNER_TEMP/live-reader/caddy" \
+              --fixture "$RUNNER_TEMP/live-reader/temp-current.pub" \
+              --fixture-sha256 "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf" \
+              --target "textbox-$target" \
+              --out "$GITHUB_WORKSPACE/target/temporary-editor-textbox-$target"
+          done
+
       - name: Prove real Guest Story edit through isolated worker and physical IDML/ODG consumer
         run: |
           set -euo pipefail
@@ -292,5 +318,7 @@ jobs:
             target/temporary-editor-resize-odg/receipt.json
             target/temporary-editor-create-idml/receipt.json
             target/temporary-editor-create-odg/receipt.json
+            target/temporary-editor-textbox-idml/receipt.json
+            target/temporary-editor-textbox-odg/receipt.json
           if-no-files-found: warn
           retention-days: 30
