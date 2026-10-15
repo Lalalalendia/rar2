@@ -280,7 +280,9 @@ fn render_current_fixed_pdf_with_sheet(
             && scaled_line_height > 0
         {
             let mut story_projection = projection.clone();
-            story_projection.stories.retain(|candidate| candidate.origin == story.origin);
+            story_projection
+                .stories
+                .retain(|candidate| candidate.origin == story.origin);
             story_projection
                 .story_frames
                 .retain(|candidate| candidate.story_origin == story.origin);
@@ -316,7 +318,11 @@ fn render_current_fixed_pdf_with_sheet(
             }
         }
         if !used_source_reflow {
-            for line in flow.lines.iter().filter(|line| line.story_origin == story.origin) {
+            for line in flow
+                .lines
+                .iter()
+                .filter(|line| line.story_origin == story.origin)
+            {
                 effective_lines.push((
                     line.clone(),
                     flow.environment.shaping.clone(),
