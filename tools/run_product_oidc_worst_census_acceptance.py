@@ -68,6 +68,12 @@ OWNER_HTTP_PHASE_CODES = frozenset({
     "http_current_unanswered", "http_current_unrequested",
     "http_scene_unanswered", "http_scene_unrequested",
 })
+OWNER_NAVIGATION_CODES = frozenset({
+    "ingress_uploading_timeout", "ingress_validation_timeout",
+    "ingress_project_timeout", "ingress_open_timeout",
+    "ingress_ready_without_navigation", "ingress_file_entry_rejected",
+    "ingress_navigation_timeout",
+})
 
 
 def read_private_fixed_code(path_string: str | None, allowed: set[str] | frozenset[str],
@@ -147,6 +153,10 @@ def classify_owner_failure(private_log: str, http_phase_path: str | None = None)
     if "Product owner HTTP response not observed" in private_log:
         code = read_private_fixed_code(
             http_phase_path, OWNER_HTTP_PHASE_CODES, "unclassified_browser_failure")
+        return fixed_failure(code)
+    if "Product document navigation did not reach canonical editor" in private_log:
+        code = read_private_fixed_code(
+            http_phase_path, OWNER_NAVIGATION_CODES, "ingress_navigation_timeout")
         return fixed_failure(code)
     for literal, code in OWNER_FAILURE_SIGNATURES:
         if literal in private_log:

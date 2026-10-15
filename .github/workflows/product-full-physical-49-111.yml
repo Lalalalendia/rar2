@@ -12,6 +12,10 @@ on:
       - tools/product_full_cohort_shards_v1.py
       - tools/run_product_oidc_worst_census_acceptance.py
       - tools/run_secure_origin_product_worst_browser.mjs
+      - tools/product-physical-ingress-phase.mjs
+      - tools/product-physical-ingress-phase.test.mjs
+      - apps/cloud-reader/product-worst-visual-resources.mjs
+      - apps/cloud-reader/product-worst-visual-resources.test.mjs
       - tools/reader_product_worst_visual_64.py
       - apps/cloud-reader/product-worst-visual-browser.test.mjs
       - .github/workflows/product-full-physical-49-111.yml
@@ -47,6 +51,7 @@ jobs:
           python tools/test_product_full_physical_receipts_v1.py -v
           python tools/test_product_full_case_census_v1.py -v
           python tools/test_product_visual_failure_diagnostics.py -v
+          node --test tools/product-physical-ingress-phase.test.mjs apps/cloud-reader/product-worst-visual-resources.test.mjs
           node --check tools/run_secure_origin_product_worst_browser.mjs
           node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
       - name: Emit fixed, complete and source-free four-shard selection

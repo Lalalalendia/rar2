@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { imageOnlyAblation } from "./product-worst-visual-resources.mjs";
 
 const cases = {
   "020": { source: "6c6af8064f91ad5321f76c97c00b1a6564794d92614373334de23e2759294aaa", pages: 1 },
@@ -56,7 +57,9 @@ assert.equal(scene.pages?.length, expected.pages, "pinned Publisher PAGE count d
 assert.ok(["supported", "partial"].includes(scene.fidelity?.state),
   "real Product fidelity disposition required");
 const images = new Set(["image/png", "image/jpeg"]);
-const accepted = (scene.resources ?? []).filter(r =>
+const resources = scene.resources ?? [];
+assert.ok(Array.isArray(resources), "Product Scene resources must be an array if present");
+const accepted = resources.filter(r =>
   images.has(r.mime) && r.availability === "inline_data_url" &&
   typeof r.inline_data_url === "string");
 assert.ok(accepted.length <= 96, "bounded host-owned image resources required");
@@ -67,18 +70,7 @@ if (accepted.length) {
 assert.equal(new Set(accepted.map(r => r.resource_id)).size, accepted.length,
   "duplicate Product resource IDs");
 
-const without = structuredClone(scene);
-for (const resource of without.resources ?? []) {
-  if (images.has(resource.mime)) {
-    delete resource.inline_data_url;
-    resource.availability = "descriptor_only";
-  }
-}
-assert.deepEqual(
-  without.resources.filter(r => !images.has(r.mime)),
-  scene.resources.filter(r => !images.has(r.mime)),
-  "font/nonimage resources must be byte-preserved by image-only ablation"
-);
+const without = imageOnlyAblation(scene);
 await markPrivatePhase("ablation_ready");
 const root = dirname(fileURLToPath(import.meta.url));
 const server = createServer(async (request, response) => {

@@ -11,6 +11,9 @@ SCHEMA = 'chaptera.product-49-111-physical-failure-census.v1'
 ROW_SCHEMA = 'chaptera.product-physical-case-outcome.v1'
 FAILURES = frozenset({
     'product_http_denial','ingress_navigation_timeout',
+    'ingress_uploading_timeout','ingress_validation_timeout',
+    'ingress_project_timeout','ingress_open_timeout',
+    'ingress_ready_without_navigation','ingress_file_entry_rejected',
     'product_http_response_timeout','chromium_paint_timeout',
     'source_or_revision_contract','image_count_contract','image_id_contract',
     'image_mime_contract','image_decode_cap','image_node_binding','scene_size_cap',

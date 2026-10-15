@@ -14,6 +14,7 @@ os.environ["CHAPTERA_PRODUCT_MULTI_ID"] = "020"
 from product_full_case_census_v1 import FAILURES
 from run_product_oidc_worst_census_acceptance import (
     OWNER_HTTP_PHASE_CODES,
+    OWNER_NAVIGATION_CODES,
     PRODUCT_VISUAL_PHASE_CODES,
     classify_owner_failure,
     classify_visual_failure,
@@ -36,6 +37,22 @@ class PhysicalFailureDiagnosticTests(unittest.TestCase):
 
     def test_all_fixed_http_phase_codes_census_admitted(self):
         self.assertTrue(OWNER_HTTP_PHASE_CODES <= FAILURES)
+        self.assertTrue(OWNER_NAVIGATION_CODES <= FAILURES)
+
+    def test_fixed_file_entry_phases_are_publicly_sanitized(self):
+        for phase in OWNER_NAVIGATION_CODES:
+            code = classify_owner_failure(
+                'Product document navigation did not reach canonical editor',
+                self.write(phase + '\n'))
+            self.assertEqual(code['failure_code'], phase)
+            self.assertEqual(code['public_error_code'], 'redacted')
+
+    def test_private_navigation_state_cannot_escape(self):
+        code = classify_owner_failure(
+            'Product document navigation did not reach canonical editor',
+            self.write('private PUB content or path\n'))
+        self.assertEqual(code['failure_code'], 'ingress_navigation_timeout')
+        self.assertNotIn('private', str(code))
 
     def test_source_neutral_render_phase(self):
         code = classify_visual_failure(self.write("after_render\n"))

@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { chromium } from "playwright";
+import { classifyNavigationFailure } from "./product-physical-ingress-phase.mjs";
 
 const origin = process.env.CHAPTERA_SECURE_ORIGIN;
 const fixturePath = process.env.CHAPTERA_PREVIEW_022_FIXTURE;
@@ -146,10 +147,23 @@ try {
     mimeType: "application/x-mspublisher",
     buffer: pub,
   });
-  await page.waitForURL(url =>
-    /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
-    { timeout: 150000, waitUntil: "domcontentloaded" },
-  );
+  try {
+    await page.waitForURL(url =>
+      /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
+      { timeout: 150000, waitUntil: "domcontentloaded" },
+    );
+  } catch (error) {
+    if (!String(error).includes("page.waitForURL: Timeout")) throw error;
+    // Only fixed file-entry phase codes leave the private browser.
+    // Source bytes, filenames, DOM errors, URLs and identities stay private.
+    const ui = await page.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent ?? null,
+      hasError: Boolean(document.querySelector("#error")?.textContent?.trim()),
+    })).catch(() => ({ status: null, hasError: false }));
+    const code = classifyNavigationFailure(ui.status, ui.hasError);
+    await writeFile(responsePhasePath, code + "\n", "utf8");
+    throw new Error("Product document navigation did not reach canonical editor");
+  }
   const documentId = decodeURIComponent(new URL(page.url()).pathname)
     .replace("/editor/doc/", "");
   const [currentObservation, sceneObservation] = await Promise.all([

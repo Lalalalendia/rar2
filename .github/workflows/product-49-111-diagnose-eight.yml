@@ -6,6 +6,10 @@ on:
       - .github/workflows/product-49-111-diagnose-eight.yml
       - tools/run_product_oidc_worst_census_acceptance.py
       - tools/run_secure_origin_product_worst_browser.mjs
+      - tools/product-physical-ingress-phase.mjs
+      - tools/product-physical-ingress-phase.test.mjs
+      - apps/cloud-reader/product-worst-visual-resources.mjs
+      - apps/cloud-reader/product-worst-visual-resources.test.mjs
       - apps/cloud-reader/product-worst-visual-browser.test.mjs
       - tools/product_full_case_census_v1.py
       - tools/test_product_visual_failure_diagnostics.py
@@ -59,6 +63,7 @@ jobs:
           python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
           python tools/test_product_visual_failure_diagnostics.py -v
           python -m py_compile tools/run_product_oidc_worst_census_acceptance.py tools/product_full_case_census_v1.py
+          node --test tools/product-physical-ingress-phase.test.mjs apps/cloud-reader/product-worst-visual-resources.test.mjs
           node --check tools/run_secure_origin_product_worst_browser.mjs
           node --check apps/cloud-reader/product-worst-visual-browser.test.mjs
           python - <<'PY'
