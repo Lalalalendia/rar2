@@ -717,7 +717,20 @@ try {
     await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p20"]') !== null);
     assert.equal(await page.locator("#page-select").inputValue(), "19");
     assert.equal(await page.locator("#pages > svg.page[data-page-id='p400']").count(), 0);
+    await page.locator("#viewer").evaluate(viewer => { viewer.scrollTop += 100; });
+    const pageFraction = async () => page.evaluate(() => {
+      const viewer = document.querySelector("#viewer");
+      const svg = document.querySelector('#pages > svg.page[data-page-id="p20"]');
+      if (!svg) throw new Error("p20 must remain mounted through zoom");
+      const padding = parseFloat(getComputedStyle(viewer).paddingTop);
+      return (viewer.getBoundingClientRect().top + padding - svg.getBoundingClientRect().top)
+        / svg.getBoundingClientRect().height;
+    });
+    const beforeFraction = await pageFraction();
     await page.locator("#zoom-select").selectOption("1.5");
+    const afterFraction = await pageFraction();
+    assert.ok(Math.abs(afterFraction - beforeFraction) < 0.035,
+      "zoom must preserve normalized location inside the current page");
     assert.equal(await page.locator("#page-select").inputValue(), "19");
     assert.equal(await page.locator("#pages > svg.page[data-page-id='p20']").count(), 1);
     assert.ok(await page.locator("#pages > svg.page").count() <= 6);
