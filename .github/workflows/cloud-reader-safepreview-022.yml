@@ -15,6 +15,8 @@ on:
       - "tools/test_sbdc_r1_text_metrics_census.py"
       - "tools/sbdc_r1_text_line_geometry.py"
       - "tools/test_sbdc_r1_text_line_geometry.py"
+      - "tools/sbdc_r1_text_ink_shift_census.py"
+      - "tools/test_sbdc_r1_text_ink_shift_census.py"
       - ".github/workflows/cloud-reader-safepreview-022.yml"
   workflow_dispatch:
 
@@ -795,10 +797,11 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.4"
           node --check tools/run_temporary_editor_sbdc034_r1_browser.mjs
-          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py
+          python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py tools/sbdc_r1_text_ink_shift_census.py tools/test_sbdc_r1_text_ink_shift_census.py
           python tools/test_sbdc_r1_raster_disagreement_census.py
           python tools/test_sbdc_r1_text_metrics_census.py
           python tools/test_sbdc_r1_text_line_geometry.py
+          python tools/test_sbdc_r1_text_ink_shift_census.py
           python tools/run_temporary_editor_current_acceptance.py \
             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
             --caddy "/tmp/chaptera-safe-preview-022/caddy" \
@@ -847,6 +850,13 @@ jobs:
           assert actual_lines["chromium_shared_painted_line_count"] > 0
           assert actual_lines["own_pdf_painted_text_line_count"] > 0
           assert actual_lines["source_text_hashes_and_coordinates_exported"] is False
+          shifted = pair["source_private_composite_shift_probe"]
+          assert shifted["schema"] == "chaptera.sbdc034-r1-private-shared-text-composite-shift.v1"
+          assert shifted["source_text_ids_coordinates_fonts_pixels_exported"] is False
+          assert shifted["baseline_source_mask_different_pixels"] >= shifted["best_virtual_different_pixels"]
+          assert shifted["eligible_source_mask_pixels"] >= 100
+          assert shifted["pixel_neighborhood_browser_to_pdf"]["radius2_unmatched_pixels"] <= shifted["pixel_neighborhood_browser_to_pdf"]["radius1_unmatched_pixels"]
+          assert shifted["pixel_neighborhood_pdf_to_browser"]["radius2_unmatched_pixels"] <= shifted["pixel_neighborhood_pdf_to_browser"]["radius1_unmatched_pixels"]
           comparison = Path("target/safe-preview-022-visual/sbdc034-r1-browser-ownpdf-raster.json")
           comparison.write_text(json.dumps(pair, indent=2, sort_keys=True) + "\n")
           print('SBDC034_R1_BROWSER_OWNPDF_RASTER ' + json.dumps(pair, sort_keys=True))

@@ -322,11 +322,16 @@ def sbdc_r1_browser_own_pdf_raster(
     text_metrics_census = census_r1_text_metrics(
         edited_scene, pdf_bytes, browser, own_pdf, diff["significant_pixel_count"],
     )
+    from sbdc_r1_text_ink_shift_census import probe_shared_text_composite_shift
+    shift_probe = probe_shared_text_composite_shift(
+        browser, own_pdf, edited_scene, diff["significant_pixel_count"],
+    )
     return {
         "schema": "chaptera.sbdc034-r1-browser-ownpdf-raster.v1",
         "disagreement_census": disagreement_census,
         "text_line_geometry": text_line_geometry,
         "text_metrics_census": text_metrics_census,
+        "source_private_composite_shift_probe": shift_probe,
         "source_r1_exact": True,
         "render_dpi": 144,
         "browser_source": "real_https_temporary_editor_scene",
