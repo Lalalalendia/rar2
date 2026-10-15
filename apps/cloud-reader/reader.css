@@ -303,6 +303,12 @@ body.reader-open .open-card{display:none}
   min-width:100%;
   width:max-content;
 }
+.page-window-spacer{
+  flex:none;
+  width:1px;
+  min-height:0;
+  pointer-events:none;
+}
 .page{
   display:block;
   flex:none;
