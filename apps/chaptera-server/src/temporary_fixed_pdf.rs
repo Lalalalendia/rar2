@@ -274,6 +274,9 @@ fn render_current_fixed_pdf_with_sheet(
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
     let mut shared_multiline = BTreeMap::<StoryId, Vec<FixedTextRun>>::new();
+    let mut mixed_size_accepted_stories = 0_usize;
+    let mut mixed_size_accepted_lines = 0_usize;
+    let mut mixed_size_accepted_spans = 0_usize;
     let fallback = ExplicitRenderTextFontResourceV1 {
         resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
         expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
@@ -365,7 +368,23 @@ fn render_current_fixed_pdf_with_sheet(
                 ) else {
                     continue;
                 };
-                if source_style.font_size_emu != Some(font_size_emu) {
+                // A mixed-size Reader line contains source-verified shaped
+                // spans, each with its own size and glyphs. Its top-level font
+                // size is only the maximum. Never flatten it to that size.
+                let mixed_size_spans = source_style.font_size_emu.is_none()
+                    && layout.lines.iter().any(|line| !line.spans.is_empty());
+                if source_style.font_size_emu != Some(font_size_emu) && !mixed_size_spans {
+                    continue;
+                }
+                if mixed_size_spans
+                    && layout
+                        .lines
+                        .iter()
+                        .flat_map(|line| &line.spans)
+                        .map(|span| span.font_size_emu)
+                        .max()
+                        != Some(font_size_emu)
+                {
                     continue;
                 }
 
@@ -412,10 +431,12 @@ fn render_current_fixed_pdf_with_sheet(
                         || source_scalars
                             .get(start..end)
                             .is_none_or(|slice| slice.iter().collect::<String>() != line.text)
-                        || !line.spans.is_empty()
+                        || (!mixed_size_spans && !line.spans.is_empty())
                         || line.measured_width_emu < 0
                         || line.x_offset_emu < 0
-                        || line.line_height_emu != line_height_emu
+                        || line.line_height_emu <= 0
+                        || line.line_height_emu > line_height_emu
+                        || (!mixed_size_spans && line.line_height_emu != line_height_emu)
                     {
                         valid = false;
                         break;
@@ -439,7 +460,111 @@ fn render_current_fixed_pdf_with_sheet(
                         valid = false;
                         break;
                     }
-                    if !line.text.is_empty() {
+                    if mixed_size_spans {
+                        // Reader mixed-size lines have no parent shaping:
+                        // each span is independently shaped at source size.
+                        // Verify the exact unchanged Quill interval of every
+                        // span before borrowing its glyphs into the own PDF.
+                        if line.shaping.is_some()
+                            || (line.text.is_empty() && !line.spans.is_empty())
+                            || (!line.text.is_empty() && line.spans.is_empty())
+                        {
+                            valid = false;
+                            break;
+                        }
+                        let mut span_cursor = line.scalar_start;
+                        for span in &line.spans {
+                            let Some(style) = admitted_source_line_style_v1(
+                                &bundle.geometry.typography_runs,
+                                story.origin,
+                                &story.text,
+                                span.scalar_start,
+                                span.scalar_end,
+                            ) else {
+                                valid = false;
+                                break;
+                            };
+                            let resource_matches = match (
+                                span.font_resource_id.as_deref(),
+                                span.font_fingerprint_sha256.as_deref(),
+                            ) {
+                                (None, None) => true,
+                                (Some(id), Some(hash)) => {
+                                    id == fallback.resource_id && hash == fingerprint.as_str()
+                                }
+                                _ => false,
+                            };
+                            let (Some(start), Some(end)) = (
+                                usize::try_from(span.scalar_start).ok(),
+                                usize::try_from(span.scalar_end).ok(),
+                            ) else {
+                                valid = false;
+                                break;
+                            };
+                            let Some(shaping) = span.shaping.as_ref() else {
+                                valid = false;
+                                break;
+                            };
+                            let (Some(span_x), Some(span_y)) = (
+                                local_x.checked_add(span.x_offset_emu),
+                                origin_y
+                                    .checked_add(cursor_y)
+                                    .and_then(|y| y.checked_add(span.font_size_emu)),
+                            ) else {
+                                valid = false;
+                                break;
+                            };
+                            if span.scalar_start != span_cursor
+                                || span.scalar_end <= span.scalar_start
+                                || span.scalar_end > line.scalar_end
+                                || source_scalars.get(start..end).is_none_or(|slice| {
+                                    slice.iter().collect::<String>() != span.text
+                                })
+                                || style.font_size_emu != Some(span.font_size_emu)
+                                || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT)
+                                    .contains(&span.font_size_emu)
+                                || !resource_matches
+                                || span.measured_width_emu < 0
+                                || span.x_offset_emu < 0
+                                || span
+                                    .x_offset_emu
+                                    .checked_add(span.measured_width_emu)
+                                    .is_none_or(|end_x| end_x > line.measured_width_emu)
+                                || shaping.units_per_em == 0
+                                || shaping.environment.face_index != fallback.face_index
+                                || shaping.environment.font_size_emu.get() != span.font_size_emu
+                                || shaping.environment.layout.font_set_fingerprint != fingerprint
+                                || shaping.glyphs.is_empty()
+                                || shaping.glyphs.iter().any(|glyph| {
+                                    glyph.glyph_id == 0
+                                        || glyph.cluster < span.scalar_start
+                                        || glyph.cluster >= span.scalar_end
+                                })
+                            {
+                                valid = false;
+                                break;
+                            }
+                            admitted.push(FixedTextRun {
+                                node_id: node.node_id,
+                                scalar_base: span.scalar_start,
+                                logical_text: span.text.clone(),
+                                shaped: BoundedShapedText {
+                                    environment: shaping.environment.clone(),
+                                    units_per_em: shaping.units_per_em,
+                                    glyphs: shaping.glyphs.clone(),
+                                    total_x_advance: LengthEmu::new(span.measured_width_emu),
+                                },
+                                baseline_x: LengthEmu::new(span_x),
+                                baseline_y: LengthEmu::new(span_y),
+                                fill_rgb,
+                            });
+                            span_cursor = span.scalar_end;
+                        }
+                        if !valid || span_cursor != line.scalar_end {
+                            valid = false;
+                            break;
+                        }
+                    } else if !line.text.is_empty() {
                         let Some(shaping) = line.shaping.as_ref() else {
                             valid = false;
                             break;
@@ -482,13 +607,26 @@ fn render_current_fixed_pdf_with_sheet(
                     && admitted.len() > 1
                     && counted + admitted.len() <= MAX_SHARED_LINES
                 {
+                    if mixed_size_spans {
+                        mixed_size_accepted_stories += 1;
+                        mixed_size_accepted_lines += layout
+                            .lines
+                            .iter()
+                            .filter(|line| !line.text.is_empty())
+                            .count();
+                        mixed_size_accepted_spans += admitted.len();
+                    }
                     shared_multiline.insert(story.origin, admitted);
                 }
             }
         }
     }
     let source_sized_multiline_stories = shared_multiline.len();
-    let source_sized_multiline_lines = shared_multiline.values().map(Vec::len).sum::<usize>();
+    // Each uniform FixedTextRun is a line. A mixed-size line may contain
+    // several FixedTextRuns; keep the published line count unambiguous.
+    let source_sized_multiline_lines = shared_multiline.values().map(Vec::len).sum::<usize>()
+        - mixed_size_accepted_spans
+        + mixed_size_accepted_lines;
 
     let mut text_runs = Vec::new();
     let mut glyphs = BTreeSet::new();
@@ -787,6 +925,9 @@ fn render_current_fixed_pdf_with_sheet(
             "source_sized_single_lines": source_sized_single_lines,
             "source_sized_multiline_stories": source_sized_multiline_stories,
             "source_sized_multiline_lines": source_sized_multiline_lines,
+            "source_sized_mixed_size_stories": mixed_size_accepted_stories,
+            "source_sized_mixed_size_lines": mixed_size_accepted_lines,
+            "source_sized_mixed_size_spans": mixed_size_accepted_spans,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "layout_warnings": layout_warnings,
@@ -866,6 +1007,43 @@ mod source_pdf_style_tests {
                 color_rgb: Some([211, 8, 81]),
                 font_size_emu: Some(28 * 12_700),
             })
+        );
+    }
+
+    #[test]
+    fn mixed_size_spans_require_source_verified_ranges_and_sizes() {
+        let text = "HelloWorld";
+        let runs = vec![
+            typography((0, 5), Some([17, 34, 51]), 10 * 12_700, text),
+            typography((5, 10), Some([17, 34, 51]), 11 * 12_700, text),
+        ];
+        let whole = admitted_source_line_style_v1(&runs, story_id(), text, 0, 10)
+            .expect("complete SHA-current source typography");
+        assert_eq!(
+            whole.font_size_emu, None,
+            "mixed size must not be flattened"
+        );
+        assert_eq!(whole.color_rgb, Some([17, 34, 51]));
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), text, 0, 5)
+                .and_then(|style| style.font_size_emu),
+            Some(10 * 12_700)
+        );
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), text, 5, 10)
+                .and_then(|style| style.font_size_emu),
+            Some(11 * 12_700)
+        );
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), "ChangedText", 0, 5),
+            None,
+            "stale Story hash may never authorize a mixed-size PDF span"
+        );
+        assert_eq!(
+            admitted_source_line_style_v1(&runs, story_id(), text, 4, 6)
+                .and_then(|style| style.font_size_emu),
+            None,
+            "a span that straddles two source sizes cannot claim a uniform size"
         );
     }
 
