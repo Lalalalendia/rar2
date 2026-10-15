@@ -1169,6 +1169,7 @@ pub fn run_product_replay_worker(
     editable_export_target: Option<&str>,
     resize_intent_path: Option<&Path>,
     create_shape_intent_path: Option<&Path>,
+    create_textbox_intent_path: Option<&Path>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -1187,11 +1188,17 @@ pub fn run_product_replay_worker(
         + usize::from(editable_export_target.is_some())
         + usize::from(resize_intent_path.is_some())
         + usize::from(create_shape_intent_path.is_some())
+        + usize::from(create_textbox_intent_path.is_some())
         > 1
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_identity_invalid",
             "isolated Product worker admits only one mutation or Scene command",
+        ));
+    }
+    if create_textbox_intent_path.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_create_textbox_invalid", "CreateTextBox requires a verified base project",
         ));
     }
     if create_shape_intent_path.is_some() && project_path.is_none() {
@@ -1410,6 +1417,19 @@ pub fn run_product_replay_worker(
             )
         })?;
         validate_create_shape_intent(&intent)?;
+        Some(intent)
+    } else {
+        None
+    };
+
+    let create_textbox_intent = if let Some(path) = create_textbox_intent_path {
+        let bytes = read_bounded(path, MAX_CREATE_TEXTBOX_INTENT_BYTES)?;
+        let intent: IsolatedCreateTextBoxIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "CreateTextBox private JSON is not typed",
+            )
+        })?;
+        validate_create_textbox_intent(&intent)?;
         Some(intent)
     } else {
         None
@@ -1685,6 +1705,68 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let create_textbox = if let Some(intent) = create_textbox_intent {
+        let expected = exact_create_textbox_operation(&intent)?;
+        let EditOperation::CreateTextBox {
+            node_id, story_id, page_id, bounds, text_preset,
+        } = &expected else {
+            unreachable!("CreateTextBox intent builds one canonical operation")
+        };
+        let page = session.graph().pages.get(page_id).ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_create_textbox_rejected", "TextFrame page missing",
+            )
+        })?;
+        if bounds.right().is_none_or(|x| x.get() > page.size.width.get())
+            || bounds.bottom().is_none_or(|y| y.get() > page.size.height.get())
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_textbox_rejected", "TextFrame extends beyond canonical page",
+            ));
+        }
+        let operation = session
+            .create_text_box(*node_id, *story_id, *page_id, *bounds, text_preset.clone())
+            .map_err(|_| ProductReplayWorkerError::new(
+                "product_create_textbox_rejected", "isolated EditorSession rejected TextFrame",
+            ))?;
+        let proof = session.prove_author_created_story_v1(*story_id).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "author-created Story has no canonical proof",
+            )
+        })?;
+        if operation != expected
+            || proof.frame_id != *node_id
+            || proof.page_id != *page_id
+            || proof.text_preset != *text_preset
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "TextFrame/Story differ from canonical operation",
+            ));
+        }
+        let resulting_project = cloud_revision_project(&session.project());
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid", "TextFrame event append failed",
+                )
+            })?;
+        if expected_project != resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "TextFrame exact project replay differs",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "TextFrame canonical hash invalid",
+            )
+        })?;
+        Some(IsolatedCreateTextBoxReceiptV1 {
+            operation, resulting_project, resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
     let story_range = if let Some(intent) = story_intent {
         // Only the canonical EditorSession sees PUB-derived Story text.
         // Browser input cannot name or forge expected_before.
@@ -1952,6 +2034,7 @@ pub fn run_product_replay_worker(
         move_node,
         resize_node,
         create_shape,
+        create_textbox,
         story_range,
         reader_scene,
         editable_export,
