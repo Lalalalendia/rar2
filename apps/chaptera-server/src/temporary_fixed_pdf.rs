@@ -252,7 +252,7 @@ fn render_current_fixed_pdf_with_sheet(
     )
     .map_err(|_| "edited_pdf_current_text_layout_unavailable")?;
 
-    // The Reader already shapes source-verified multi-line frames with the
+    // The Reader already shapes source-verified complete text frames with the
     // pinned fallback font at their admitted typography size, including exact
     // line breaks, alignment offsets and frame-local vertical placement.
     // Consume that shared RenderPlan directly instead of independently breaking
@@ -319,7 +319,7 @@ fn render_current_fixed_pdf_with_sheet(
                     || font_size_emu == font_size.get()
                     || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&font_size_emu)
                     || line_height_emu <= 0
-                    || !(2..=MAX_SHARED_LINES).contains(&layout.lines.len())
+                    || !(1..=MAX_SHARED_LINES).contains(&layout.lines.len())
                 {
                     continue;
                 }
@@ -479,7 +479,7 @@ fn render_current_fixed_pdf_with_sheet(
                 let counted = shared_multiline.values().map(Vec::len).sum::<usize>();
                 if valid
                     && consumed == scalar_len
-                    && admitted.len() > 1
+                    && (admitted.len() > 1 || (layout.lines.len() == 1 && admitted.len() == 1))
                     && counted + admitted.len() <= MAX_SHARED_LINES
                 {
                     shared_multiline.insert(story.origin, admitted);
@@ -487,8 +487,22 @@ fn render_current_fixed_pdf_with_sheet(
             }
         }
     }
-    let source_sized_multiline_stories = shared_multiline.len();
-    let source_sized_multiline_lines = shared_multiline.values().map(Vec::len).sum::<usize>();
+    // Preserve prior multi-line counters as strictly multi-line counts. The
+    // newly admitted exact one-line Reader plan is reported separately; no
+    // fallback single-line re-shape is disguised as a shared glyph run.
+    let source_sized_multiline_stories = shared_multiline
+        .values()
+        .filter(|runs| runs.len() > 1)
+        .count();
+    let source_sized_multiline_lines = shared_multiline
+        .values()
+        .filter(|runs| runs.len() > 1)
+        .map(Vec::len)
+        .sum::<usize>();
+    let shared_reader_single_lines = shared_multiline
+        .values()
+        .filter(|runs| runs.len() == 1)
+        .count();
 
     let mut text_runs = Vec::new();
     let mut glyphs = BTreeSet::new();
@@ -785,6 +799,7 @@ fn render_current_fixed_pdf_with_sheet(
             "font_missing_glyph_lines": unavailable_glyph_lines,
             "source_color_lines": source_color_lines,
             "source_sized_single_lines": source_sized_single_lines,
+            "shared_reader_single_lines": shared_reader_single_lines,
             "source_sized_multiline_stories": source_sized_multiline_stories,
             "source_sized_multiline_lines": source_sized_multiline_lines,
             "moved_nodes": moved.len(),
@@ -802,6 +817,7 @@ fn render_current_fixed_pdf_with_sheet(
             "fixed_pdf_bounded_visual_subset_not_publisher_parity",
             "fallback_ubuntu_light_not_original_source_font",
             "source_uniform_multiline_exact_reader_lines_only_for_current_quill_story",
+            "source_uniform_single_line_exact_reader_glyphs_if_current_and_complete",
             "source_size_single_line_only_if_fits_exact_frame",
             "mixed_or_stale_source_typography_keeps_fallback",
             "missing_fallback_glyph_lines_disclosed_not_serialized",
