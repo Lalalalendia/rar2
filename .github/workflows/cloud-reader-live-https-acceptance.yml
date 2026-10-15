@@ -251,8 +251,25 @@ jobs:
               --out "$GITHUB_WORKSPACE/target/temporary-editor-story-$target"
           done
 
-      - uses: actions/upload-artifact@v4
+      # All Caddy evidence paths must be sanitized before public artifacts are
+      # uploaded, even when an earlier acceptance step failed.
+      - name: Sanitize every Caddy artifact or fail closed
+        id: sanitized_caddy
         if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib
+          import sys
+          sys.path.insert(0, "tools")
+          from run_temporary_editor_real_pub_browser_acceptance import _redact_caddy_log
+          for log in pathlib.Path("target").glob("*/caddy.log"):
+              _redact_caddy_log(log)
+          PY
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.sanitized_caddy.outputs.safe == 'true' }}
         with:
           name: cloud-reader-live-https-acceptance
           path: |
