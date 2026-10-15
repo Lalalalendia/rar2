@@ -76,6 +76,43 @@ function path(action,id) {
   return "/v1/editor/temporary-sessions/" + id + "/" + action;
 }
 
+function classifiedCreateReopenFailure() {
+  // Only safe contract booleans are returned. Never persist raw response
+  // objects, Story text, capability, source paths, IDs or request URLs.
+  const ack=observed.accepted.at(-1);
+  const current=observed.current.at(-1);
+  if (!ack) return "create_ack_missing";
+  if (!current) return "reopened_current_missing";
+  const op=ack.canonical_operation,latest=current.project?.operations?.at(-1);
+  if (!op || !latest) return "canonical_operation_missing";
+  if (latest.kind!=="create_text_box" || op.kind!=="create_text_box") {
+    return "operation_kind_mismatch";
+  }
+  if (current.revision_id!==ack.revision_id) return "revision_identity_mismatch";
+  if (current.canonical_authoring_revision_id!==ack.canonical_authoring_revision_id) {
+    return "authoring_revision_mismatch";
+  }
+  if (current.revision_cursor!==1) return "cursor_mismatch";
+  if (current.expires_at_ms!==ack.expires_at_ms) return "ttl_identity_mismatch";
+  if (latest.node_id!==op.node_id || latest.story_id!==op.story_id) {
+    return "operation_id_mismatch";
+  }
+  if (latest.page_id!==op.page_id) return "operation_page_mismatch";
+  if (JSON.stringify(latest.bounds)!==JSON.stringify(op.bounds)) {
+    return "operation_bounds_mismatch";
+  }
+  if (JSON.stringify(latest.text_preset)!==JSON.stringify(op.text_preset)) {
+    return "operation_font_mismatch";
+  }
+  if (current.authoring_graph?.nodes?.[op.node_id]?.payload?.story_frame?.story_id!==op.story_id) {
+    return "authored_frame_story_link_missing";
+  }
+  if (current.authoring_graph?.stories?.[op.story_id]?.text!=="") {
+    return "authored_empty_story_missing";
+  }
+  return "client_validation_or_scene_pending";
+}
+
 try {
   const entry = await page.goto(origin+"/editor/temporary-preview",{
     waitUntil:"domcontentloaded",timeout:30000,
@@ -388,6 +425,7 @@ try {
     export_target: target,
     failure_class: error?.name === "AssertionError" ? "assertion"
       : error?.name === "TimeoutError" ? "timeout" : "other",
+    create_reopen_contract: classifiedCreateReopenFailure(),
     browser_page_error_count: Math.min(100, errors.length),
     current_success_replies: observed.current.length,
     scene_success_replies: observed.scenes.length,
