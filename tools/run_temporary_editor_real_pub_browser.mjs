@@ -210,6 +210,21 @@ try {
   if (exportTarget === "pdf") {
     const untouched = page.locator("#temporary-download-pdf");
     await untouched.waitFor({ state: "visible" });
+    // The controller sets its ready text at the end of show(), while
+    // guarded() clears the busy flag and enables export in finally.
+    // Status readiness does not imply that the button has been enabled yet.
+    // Poll only this local UI state; never retry/replay an export request.
+    try {
+      await page.waitForFunction(() => {
+        const control = document.getElementById("temporary-download-pdf");
+        return control && !control.disabled &&
+          control.textContent?.trim() === "Скачать PDF";
+      }, null, { timeout: 15000 });
+    } catch {
+      const ui = await page.locator("#temporary-status").textContent();
+      throw Error("unedited supported PUB baseline PDF control stayed unavailable: " +
+        String(ui).slice(0, 220));
+    }
     assert.equal(await untouched.isEnabled(), true,
       "unedited supported PUB must allow baseline PDF");
     assert.equal((await untouched.textContent())?.trim(), "Скачать PDF");
