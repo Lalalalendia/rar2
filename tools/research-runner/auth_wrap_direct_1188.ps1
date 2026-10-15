@@ -95,11 +95,28 @@ try {
         RequireProcessFree
         $armRoot = Join-Path $root "family-$family"
         $env:PUB_RESEARCH_AUTH_WRAP_FAMILY = $family
-        InvokeTool 'pwsh' @('-NoProfile','-File','tools/research-runner/prepare_native_run.ps1',
-            '-PacketPath',$packetPath,'-OutputRoot',$armRoot)
-        InvokeTool 'pwsh' @('-NoProfile','-File',$operationPath,'-PacketPath',$packetPath,'-OutputRoot',$armRoot)
-        InvokeTool 'pwsh' @('-NoProfile','-File','tools/research-runner/finalize_native_run.ps1',
-            '-PacketPath',$packetPath,'-OutputRoot',$armRoot)
+        # prepare_native_run.ps1 validates and binds the exact fixture and
+        # Publisher executable via process-scoped environment variables.
+        # Running it in a separate pwsh would discard both bindings before the
+        # operation. Clear previous-arm values and keep all three phases in this
+        # already provenance-checked PowerShell process.
+        Remove-Item Env:PUB_RESEARCH_FIXTURE -ErrorAction SilentlyContinue
+        Remove-Item Env:PUB_RESEARCH_PUBLISHER_EXE -ErrorAction SilentlyContinue
+        & (Join-Path $repo 'tools/research-runner/prepare_native_run.ps1') -PacketPath $packetPath -OutputRoot $armRoot
+        $boundFixture = [string]$env:PUB_RESEARCH_FIXTURE
+        $boundPublisher = [string]$env:PUB_RESEARCH_PUBLISHER_EXE
+        if (-not $boundFixture -or -not (Test-Path -LiteralPath $boundFixture -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $boundFixture -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                [string]$packet.fixture.sha256) {
+            throw 'Prepared fixture binding missing or changed after native preflight'
+        }
+        if (-not $boundPublisher -or -not (Test-Path -LiteralPath $boundPublisher -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $boundPublisher -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                [string]$packet.publisher.exe_sha256) {
+            throw 'Prepared Publisher executable binding missing or changed after native preflight'
+        }
+        & $operationPath -PacketPath $packetPath -OutputRoot $armRoot
+        & (Join-Path $repo 'tools/research-runner/finalize_native_run.ps1') -PacketPath $packetPath -OutputRoot $armRoot
         RequireProcessFree
     }
     $receiptA = Join-Path $root 'family-A/analysis/reset-receipt.json'
