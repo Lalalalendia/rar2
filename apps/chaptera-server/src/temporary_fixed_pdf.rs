@@ -244,6 +244,89 @@ fn render_current_fixed_pdf_with_sheet(
     )
     .map_err(|_| "edited_pdf_current_text_layout_unavailable")?;
 
+    // An unchanged, uniformly typed Quill Story can authorise a larger
+    // source-size shape BEFORE line breaking. The legacy fixed PDF forced
+    // every multi-line Story through the shared 9pt fallback, while the Reader
+    // resolved source 10-11pt lines. Restyling already-broken lines would
+    // overflow the frame, so shape and break the complete linked Story once
+    // at its admitted size. Mixed/stale typography remains on the old path.
+    //
+    // Bounded to 32 Stories: cloning a complete projection for each eligible
+    // source Story must not introduce quadratic work on huge publications.
+    const MAX_SOURCE_SIZED_REFLOW_STORIES: usize = 32;
+    let mut effective_lines = Vec::new();
+    let mut source_sized_multiline_stories = 0usize;
+    let mut source_sized_multiline_lines = 0usize;
+    for story in &projection.stories {
+        let mut used_source_reflow = false;
+        if projection.stories.len() <= MAX_SOURCE_SIZED_REFLOW_STORIES
+            && let Ok(story_scalar_len) = u32::try_from(story.text.chars().count())
+            && let Some(source_style) = admitted_source_line_style_v1(
+                &bundle.geometry.typography_runs,
+                story.origin,
+                &story.text,
+                0,
+                story_scalar_len,
+            )
+            && let Some(source_size) = source_style.font_size_emu
+            && source_size != font_size.get()
+            && (6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&source_size)
+            && let Some(scaled_line_height) =
+                chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU
+                    .checked_mul(source_size)
+                    .and_then(|value| {
+                        value.checked_div(chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU)
+                    })
+            && scaled_line_height > 0
+        {
+            let mut story_projection = projection.clone();
+            story_projection.stories.retain(|candidate| candidate.origin == story.origin);
+            story_projection
+                .story_frames
+                .retain(|candidate| candidate.story_origin == story.origin);
+            let source_runtime = BoundedShapedFlowRuntime {
+                shaping: BoundedShapingRuntime {
+                    layout: flow.environment.shaping.layout.clone(),
+                    face_index: 0,
+                    font_size_emu: LengthEmu::new(source_size),
+                    font_bytes: font,
+                },
+                line_height: LengthEmu::new(scaled_line_height),
+            };
+            if let Ok(candidate) = resolve_bounded_shaped_flow(&story_projection, &source_runtime)
+                && candidate.diagnostics.is_empty()
+                && candidate.lines.len() > 1
+                && candidate.lines.iter().all(|line| {
+                    line.story_origin == story.origin
+                        && line.glyphs.iter().all(|glyph| glyph.glyph_id != 0)
+                })
+            {
+                source_sized_multiline_stories += 1;
+                source_sized_multiline_lines += candidate.lines.len();
+                let descriptor = candidate.environment.shaping;
+                for line in candidate.lines {
+                    effective_lines.push((
+                        line,
+                        descriptor.clone(),
+                        source_runtime.line_height,
+                        true,
+                    ));
+                }
+                used_source_reflow = true;
+            }
+        }
+        if !used_source_reflow {
+            for line in flow.lines.iter().filter(|line| line.story_origin == story.origin) {
+                effective_lines.push((
+                    line.clone(),
+                    flow.environment.shaping.clone(),
+                    LengthEmu::new(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU),
+                    false,
+                ));
+            }
+        }
+    }
+
     let scene_ids = bundle
         .geometry
         .scene
@@ -256,7 +339,7 @@ fn render_current_fixed_pdf_with_sheet(
     let mut unavailable_glyph_lines = 0usize;
     let mut source_color_lines = 0usize;
     let mut source_sized_single_lines = 0usize;
-    for line in &flow.lines {
+    for (line, line_shaping, line_height, source_reflowed) in &effective_lines {
         if line.text.is_empty() {
             continue;
         }
@@ -287,16 +370,17 @@ fn render_current_fixed_pdf_with_sheet(
         }
 
         let mut shaped = BoundedShapedText {
-            environment: flow.environment.shaping.clone(),
+            environment: line_shaping.clone(),
             units_per_em: line.units_per_em,
             glyphs: line.glyphs.clone(),
             total_x_advance: line.measured_width,
         };
-        let mut line_font_size = font_size;
+        let mut line_font_size = line_shaping.font_size_emu;
         // Source size is only portable with our pinned fallback for complete,
         // one-line Stories whose independently re-shaped glyphs fit their exact
         // current frame. This must not silently reflow arbitrary paragraphs.
-        if let (Some(style), Some(story)) = (source_style, current_story)
+        if !source_reflowed
+            && let (Some(style), Some(story)) = (source_style, current_story)
             && let Some(source_size) = style.font_size_emu
             && (6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&source_size)
             && source_size != font_size.get()
@@ -336,7 +420,7 @@ fn render_current_fixed_pdf_with_sheet(
         }
 
         let row = i64::from(line.frame_line_index)
-            .checked_mul(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU)
+            .checked_mul(line_height.get())
             .ok_or("edited_pdf_text_coordinate_overflow")?;
         let baseline_y = row
             .checked_add(line_font_size.get())
@@ -534,6 +618,8 @@ fn render_current_fixed_pdf_with_sheet(
             "font_missing_glyph_lines": unavailable_glyph_lines,
             "source_color_lines": source_color_lines,
             "source_sized_single_lines": source_sized_single_lines,
+            "source_sized_multiline_stories": source_sized_multiline_stories,
+            "source_sized_multiline_lines": source_sized_multiline_lines,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "layout_warnings": layout_warnings,
@@ -548,7 +634,8 @@ fn render_current_fixed_pdf_with_sheet(
         "limitations": [
             "fixed_pdf_bounded_visual_subset_not_publisher_parity",
             "fallback_ubuntu_light_not_original_source_font",
-            "source_size_only_for_exact_uniform_single_line_that_fits",
+            "source_uniform_multiline_reflow_only_for_exact_current_quill_story",
+            "source_size_single_line_only_if_fits_exact_frame",
             "mixed_or_stale_source_typography_keeps_fallback",
             "missing_fallback_glyph_lines_disclosed_not_serialized",
             "publisher_rich_vectors_and_effects_not_fully_supported"
