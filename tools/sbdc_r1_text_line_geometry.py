@@ -75,6 +75,21 @@ def _statistics(values: list[float]) -> dict:
             "max": round(ordered[-1], 3)}
 
 
+def _signed_statistics(values: list[float]) -> dict:
+    """Signed PDF-minus-Chromium offsets, source-private aggregates only."""
+    if not values:
+        return {"min": None, "p10": None, "median": None, "p90": None, "max": None}
+    ordered = sorted(values)
+    n = len(ordered)
+    return {
+        "min": round(ordered[0], 3),
+        "p10": round(ordered[max(0, math.ceil(n * 0.1) - 1)], 3),
+        "median": round(median(ordered), 3),
+        "p90": round(ordered[max(0, math.ceil(n * 0.9) - 1)], 3),
+        "max": round(ordered[-1], 3),
+    }
+
+
 def compare_actual_text_line_geometry(browser: list[dict], pdf: list[dict]) -> dict:
     """Best-match equal-text lines by nearest physical center, no source text egress.
 
@@ -95,6 +110,10 @@ def compare_actual_text_line_geometry(browser: list[dict], pdf: list[dict]) -> d
     dw_abs = []
     dh_abs = []
     size_ratios = []
+    dx_signed = []
+    dy_signed = []
+    dw_signed = []
+    dh_signed = []
     matched = 0
     nonempty = 0
     for line in browser:
@@ -110,10 +129,18 @@ def compare_actual_text_line_geometry(browser: list[dict], pdf: list[dict]) -> d
         ))
         px, py, pw, ph = options.pop(index)
         matched += 1
-        dx_abs.append(abs(px - bx))
-        dy_abs.append(abs(py - by))
-        dw_abs.append(abs(pw - bw))
-        dh_abs.append(abs(ph - bh))
+        delta_x = px - bx
+        delta_y = py - by
+        delta_width = pw - bw
+        delta_height = ph - bh
+        dx_abs.append(abs(delta_x))
+        dy_abs.append(abs(delta_y))
+        dw_abs.append(abs(delta_width))
+        dh_abs.append(abs(delta_height))
+        dx_signed.append(delta_x)
+        dy_signed.append(delta_y)
+        dw_signed.append(delta_width)
+        dh_signed.append(delta_height)
         size_ratios.append(pw / bw)
     pdf_unmatched = sum(map(len, pdf_by_hash.values()))
     if matched + (nonempty - matched) != nonempty or matched + pdf_unmatched != len(pdf):
@@ -130,6 +157,10 @@ def compare_actual_text_line_geometry(browser: list[dict], pdf: list[dict]) -> d
         "matched_abs_line_width_delta_px": _statistics(dw_abs),
         "matched_abs_line_height_delta_px": _statistics(dh_abs),
         "matched_pdf_to_chromium_width_ratio": _statistics(size_ratios),
+        "matched_signed_pdf_minus_chromium_left_px": _signed_statistics(dx_signed),
+        "matched_signed_pdf_minus_chromium_top_px": _signed_statistics(dy_signed),
+        "matched_signed_pdf_minus_chromium_width_px": _signed_statistics(dw_signed),
+        "matched_signed_pdf_minus_chromium_height_px": _signed_statistics(dh_signed),
         "interpretation": "actual_glyph_rectangles_only_not_text_causal_proof",
         "source_text_hashes_and_coordinates_exported": False,
     }
