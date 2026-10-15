@@ -36,7 +36,7 @@ const page = await browser.newPage({
   viewport:{width:1280,height:900}, acceptDownloads:true, ignoreHTTPSErrors:true,
 });
 const observed = { current:[],scenes:[],accepted:[],storyAccepted:[],reports:[],requests:[],responses:[] };
-const pending = [],errors=[];
+const pending = [],errors=[],safeSceneFailureCodes=[];
 let phase = "ui_open";
 page.on("pageerror",error => errors.push(error.name || "PageError"));
 page.on("request",request => {
@@ -52,7 +52,21 @@ page.on("response", response => {
     path:path.replace(/tempedit:[0-9a-f]{32}/g,"{session}"),
     status:response.status(),
   });
-  if (response.status() !== 200) return;
+  if (response.status() !== 200) {
+    // Only narrow server error codes for the Scene endpoint are admissible
+    // as public CI diagnostics; never copy URLs, headers, arbitrary error
+    // strings, auth tokens or source/story payloads into artifacts.
+    if (/\/v1\/editor\/temporary-sessions\/[^/]+\/scene$/.test(path)) {
+      pending.push(response.json().then(body => {
+        const code=body?.error?.code;
+        if (typeof code==="string" &&
+            /^temporary_editor_[a-z0-9_]{1,72}$/.test(code)) {
+          safeSceneFailureCodes.push(code);
+        }
+      }).catch(()=>{}));
+    }
+    return;
+  }
   let bucket;
   if (/\/v1\/editor\/temporary-sessions\/[^/]+\/current$/.test(path)) {
     bucket=observed.current;
@@ -437,6 +451,11 @@ try {
       x.method === "POST" && x.path.endsWith("/story-range")).length,
     create_statuses: endpointStatuses("/create-textbox"),
     story_statuses: endpointStatuses("/story-range"),
+    scene_statuses: endpointStatuses("/scene"),
+    current_statuses: endpointStatuses("/current"),
+    scene_request_count: observed.requests.filter(x =>
+      x.method === "GET" && x.path.endsWith("/scene")).length,
+    safe_scene_failure_codes: safeSceneFailureCodes.slice(-8),
   };
   try {
     await mkdir(dirname(receiptPath), {recursive:true});
