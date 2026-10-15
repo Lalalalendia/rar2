@@ -313,6 +313,10 @@ def sbdc_r1_browser_own_pdf_raster(
         raise AssertionError("browser text-line geometry is not from same 144dpi R1")
     text_line_geometry = compare_actual_text_line_geometry(
         private_browser_geometry["lines"], pdf_text_rects)
+    from sbdc_r1_text_advance_census import census_private_browser_reader_advances
+    text_advance_census = census_private_browser_reader_advances(
+        private_browser_geometry["private_advance_checks"]
+    )
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
     from sbdc_r1_text_metrics_census import census_r1_text_metrics
     disagreement_census = census_r1_disagreement(
@@ -327,6 +331,7 @@ def sbdc_r1_browser_own_pdf_raster(
         "disagreement_census": disagreement_census,
         "text_line_geometry": text_line_geometry,
         "text_metrics_census": text_metrics_census,
+        "chromium_reader_text_advance_census": text_advance_census,
         "source_r1_exact": True,
         "render_dpi": 144,
         "browser_source": "real_https_temporary_editor_scene",
