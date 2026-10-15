@@ -51,6 +51,54 @@ struct SourcePdfLineStyleV1 {
     font_size_emu: Option<i64>,
 }
 
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SourceTypographyCensusV1 {
+    framed_current_runs: usize,
+    distinct_family_labels: usize,
+    direct_font_index_runs: usize,
+    bold_true_runs: usize,
+    bold_false_runs: usize,
+    bold_unknown_runs: usize,
+    italic_true_runs: usize,
+    italic_false_runs: usize,
+    italic_unknown_runs: usize,
+}
+
+/// Aggregate source declarations only, never font names, Story text, raw
+/// source offsets or a claim that a physical face is available in the PDF.
+fn source_typography_census_v1<'a>(
+    runs: impl Iterator<Item = &'a ViewerTypographyRun>,
+) -> SourceTypographyCensusV1 {
+    let mut census = SourceTypographyCensusV1::default();
+    let mut families = BTreeSet::<String>::new();
+    for run in runs {
+        if run.scalar_start >= run.scalar_end {
+            continue;
+        }
+        census.framed_current_runs += 1;
+        let family = run.source_font_name.trim();
+        if !family.is_empty() {
+            families.insert(family.to_lowercase());
+        }
+        if run.source_font_index.is_some() {
+            census.direct_font_index_runs += 1;
+        }
+        match run.bold.as_ref().map(|value| value.effective_value) {
+            Some(true) => census.bold_true_runs += 1,
+            Some(false) => census.bold_false_runs += 1,
+            None => census.bold_unknown_runs += 1,
+        }
+        match run.italic.as_ref().map(|value| value.effective_value) {
+            Some(true) => census.italic_true_runs += 1,
+            Some(false) => census.italic_false_runs += 1,
+            None => census.italic_unknown_runs += 1,
+        }
+    }
+    census.distinct_family_labels = families.len();
+    census
+}
+
 fn admitted_source_line_style_v1(
     runs: &[ViewerTypographyRun],
     story_id: StoryId,
@@ -295,6 +343,30 @@ fn render_current_fixed_pdf_with_sheet(
         pub_viewer::bounded_authoring_slice_from_resolved_pages(session.graph(), &pages)
             .map_err(|_| "edited_pdf_current_layout_unavailable")?;
     let projection = project_bounded(authoring);
+
+    // Evidence-only: compare unchanged framed Quill style declarations with
+    // the current PDF's existing single Ubuntu Light physical resource.
+    // This census is not a source-font admission or Publisher fidelity proof.
+    let framed_story_ids = projection
+        .story_frames
+        .iter()
+        .map(|frame| frame.story_origin)
+        .collect::<BTreeSet<_>>();
+    let source_typography_census = source_typography_census_v1(
+        bundle
+            .geometry
+            .typography_runs
+            .iter()
+            .filter(|run| framed_story_ids.contains(&run.story_id))
+            .filter(|run| {
+                session
+                    .graph()
+                    .stories
+                    .get(&run.story_id)
+                    .is_some_and(|story| run.applies_to_story_text(&story.text))
+            }),
+    );
+
 
     // The same pinned, license-disclosed fallback used by the Chaptera Reader.
     // Never discover or copy host/customer source fonts.
@@ -1079,6 +1151,15 @@ fn render_current_fixed_pdf_with_sheet(
             "source_sized_mixed_size_stories": mixed_size_accepted_stories,
             "source_sized_mixed_size_lines": mixed_size_accepted_lines,
             "source_sized_mixed_size_spans": mixed_size_accepted_spans,
+            "source_framed_style_runs": source_typography_census.framed_current_runs,
+            "source_framed_distinct_family_labels": source_typography_census.distinct_family_labels,
+            "source_framed_direct_font_index_runs": source_typography_census.direct_font_index_runs,
+            "source_framed_bold_true_runs": source_typography_census.bold_true_runs,
+            "source_framed_bold_false_runs": source_typography_census.bold_false_runs,
+            "source_framed_bold_unknown_runs": source_typography_census.bold_unknown_runs,
+            "source_framed_italic_true_runs": source_typography_census.italic_true_runs,
+            "source_framed_italic_false_runs": source_typography_census.italic_false_runs,
+            "source_framed_italic_unknown_runs": source_typography_census.italic_unknown_runs,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "authored_text_frames": authored_text_boxes.len(),
@@ -1197,6 +1278,49 @@ mod source_pdf_style_tests {
                 .and_then(|style| style.font_size_emu),
             None,
             "a span that straddles two source sizes cannot claim a uniform size"
+        );
+    }
+
+    #[test]
+    fn source_style_census_separates_known_bold_italic_and_unknown_without_names() {
+        let source = "Heading";
+        let mut inherited_bold =
+            typography((0, 3), Some([211, 8, 81]), 28 * 12_700, source);
+        inherited_bold.bold = Some(pub_viewer::ViewerTypographyBooleanV1 {
+            local_toggle: false,
+            inherited_value: true,
+            effective_value: true,
+        });
+        let mut suppressed_bold =
+            typography((3, 7), Some([211, 8, 81]), 28 * 12_700, source);
+        suppressed_bold.source_font_index = None;
+        suppressed_bold.source_font_name = "Other Family".into();
+        suppressed_bold.bold = Some(pub_viewer::ViewerTypographyBooleanV1 {
+            local_toggle: true,
+            inherited_value: true,
+            effective_value: false,
+        });
+        suppressed_bold.italic = Some(pub_viewer::ViewerTypographyBooleanV1 {
+            local_toggle: true,
+            inherited_value: false,
+            effective_value: true,
+        });
+        let empty = typography((7, 7), None, 0, source);
+        let result =
+            source_typography_census_v1([&inherited_bold, &suppressed_bold, &empty].into_iter());
+        assert_eq!(
+            result,
+            SourceTypographyCensusV1 {
+                framed_current_runs: 2,
+                distinct_family_labels: 2,
+                direct_font_index_runs: 1,
+                bold_true_runs: 1,
+                bold_false_runs: 1,
+                bold_unknown_runs: 0,
+                italic_true_runs: 1,
+                italic_false_runs: 0,
+                italic_unknown_runs: 1,
+            }
         );
     }
 

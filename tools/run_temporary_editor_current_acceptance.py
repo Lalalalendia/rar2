@@ -894,6 +894,7 @@ def main() -> int:
         unavailable_formats = []
         export_receipts = []
         sbdc_pdf_multiline_counts = None
+        sbdc_pdf_source_style_census = None
         sbdc_visual_pair = None
         # The exact SBDC034 visual proof only owns the current fixed PDF.
         # Imported picture objects need not be editable ODG/IDML frames.
@@ -983,6 +984,31 @@ def main() -> int:
                     "source_sized_mixed_size_spans": proof_counts.get("source_sized_mixed_size_spans", 0),
                     "total_shaped_lines": proof_counts["shaped_lines"],
                 }
+                style_keys = (
+                    "source_framed_style_runs",
+                    "source_framed_distinct_family_labels",
+                    "source_framed_direct_font_index_runs",
+                    "source_framed_bold_true_runs",
+                    "source_framed_bold_false_runs",
+                    "source_framed_bold_unknown_runs",
+                    "source_framed_italic_true_runs",
+                    "source_framed_italic_false_runs",
+                    "source_framed_italic_unknown_runs",
+                )
+                style_counts = {key: proof_counts[key] for key in style_keys}
+                if any(type(value) is not int or value < 0
+                       for value in style_counts.values()):
+                    raise AssertionError("SBDC source style census has invalid count")
+                if (sum(style_counts[f"source_framed_bold_{kind}_runs"]
+                        for kind in ("true", "false", "unknown"))
+                        != style_counts["source_framed_style_runs"]
+                    or sum(style_counts[f"source_framed_italic_{kind}_runs"]
+                           for kind in ("true", "false", "unknown"))
+                        != style_counts["source_framed_style_runs"]
+                    or style_counts["source_framed_direct_font_index_runs"]
+                        > style_counts["source_framed_style_runs"]):
+                    raise AssertionError("SBDC source style census does not partition runs")
+                sbdc_pdf_source_style_census = style_counts
                 sbdc_pdf_r1_uses = require_sbdc_fixed_pdf_image_uses(
                     artifact, sbdc_r1["star_resource_id"]
                 )
@@ -1364,6 +1390,7 @@ def main() -> int:
                 "fixed_pdf_star_paint_uses_r0": sbdc_pdf_r0_uses,
                 "fixed_pdf_star_paint_uses_r1": sbdc_pdf_r1_uses,
                 "pdf_source_sized_multiline": sbdc_pdf_multiline_counts,
+                "pdf_source_framed_typography": sbdc_pdf_source_style_census,
                 "unmodified_star_bounds_preserved_after_move": True,
                 "star_xobject_emitted_physically": True,
                 "source_bytes_or_picture_payload_reported": False,
