@@ -2384,10 +2384,14 @@ mod tests {
             &baseline_revision,
             &source_bytes,
             &crate::revision_materializer::cloud_revision_project(&session.project()),
-        ).expect("real PUB baseline Reader Scene");
-        let page_string = &baseline.pages.first().expect("source has Reader page").page_id;
-        let page_id: pub_editor::PageId =
-            serde_json::from_value(json!(page_string)).unwrap();
+        )
+        .expect("real PUB baseline Reader Scene");
+        let page_string = &baseline
+            .pages
+            .first()
+            .expect("source has Reader page")
+            .page_id;
+        let page_id: pub_editor::PageId = serde_json::from_value(json!(page_string)).unwrap();
         let page = session.graph().pages.get(&page_id).expect("source page");
         let width = page.size.width.get();
         let height = page.size.height.get();
@@ -2411,7 +2415,8 @@ mod tests {
             line_height_emu: LengthEmu::new(142_875),
         };
         assert!(matches!(
-            session.create_text_box(node_id, story_id, page_id, bounds, preset)
+            session
+                .create_text_box(node_id, story_id, page_id, bounds, preset)
                 .expect("canonical authored CreateTextBox"),
             EditOperation::CreateTextBox { .. }
         ));
@@ -2422,20 +2427,28 @@ mod tests {
             &baseline_revision,
             &source_bytes,
             &crate::revision_materializer::cloud_revision_project(&session.project()),
-        ).expect("new empty Story must have a Reader physical node");
-        let created = r1.nodes.iter().find(|n| n.node_id == node_string)
+        )
+        .expect("new empty Story must have a Reader physical node");
+        let created = r1
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_string)
             .expect("created TextFrame in source-neutral Reader Scene");
         assert_eq!(created.kind, "text_frame");
         assert_eq!(created.page_id, *page_string);
         assert_eq!(created.bounds.x, bounds.x.get());
         assert!(created.text.as_deref().unwrap_or("").is_empty());
         assert_eq!(r1.fidelity.state, "partial");
-        assert!(r1.stories.iter().any(|story| story.story_id == story_string
-            && story.text.is_empty()));
+        assert!(
+            r1.stories
+                .iter()
+                .any(|story| story.story_id == story_string && story.text.is_empty())
+        );
 
         let marker = "ChapteraNewTextBoxProof42";
         assert!(matches!(
-            session.replace_story_range(story_id, 0, 0, "", marker)
+            session
+                .replace_story_range(story_id, 0, 0, "", marker)
                 .expect("author-created empty Story accepts canonical text"),
             EditOperation::ReplaceStoryRange { .. }
         ));
@@ -2446,13 +2459,20 @@ mod tests {
             &baseline_revision,
             &source_bytes,
             &crate::revision_materializer::cloud_revision_project(&session.project()),
-        ).expect("edited authored Story must survive real PUB Reader projection");
-        let updated = r2.nodes.iter().find(|n| n.node_id == node_string)
+        )
+        .expect("edited authored Story must survive real PUB Reader projection");
+        let updated = r2
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_string)
             .expect("same canonical TextFrame persisted");
         assert_eq!(updated.text.as_deref(), Some(marker));
         assert_eq!(updated.page_id, *page_string);
-        assert!(r2.stories.iter().any(|story| story.story_id == story_string
-            && story.text == marker));
+        assert!(
+            r2.stories
+                .iter()
+                .any(|story| story.story_id == story_string && story.text == marker)
+        );
         assert_eq!(r2.stacking_fidelity, "unknown");
         assert_eq!(r2.fidelity.state, "partial");
         assert_eq!(session.graph().source.source_hash, source_digest);
