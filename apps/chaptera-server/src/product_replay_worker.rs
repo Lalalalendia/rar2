@@ -24,6 +24,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+pub use crate::exact_emu_move_nodes_intent_v1::IsolatedMoveNodesIntentV1;
+use crate::exact_emu_move_nodes_intent_v1::{
+    MoveNodesIntentErrorV1, derive_move_nodes_operation, validate_move_nodes_intent,
+};
+
 use rand::{RngCore, rngs::OsRng};
 use tokio::{fs as async_fs, io::AsyncWriteExt, process::Command, time::timeout};
 
@@ -50,6 +55,14 @@ pub struct IsolatedMoveNodeIntentV1 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IsolatedMoveNodeReceiptV1 {
+    pub operation: EditOperation,
+    pub resulting_project: EditorProject,
+    pub resulting_project_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolatedMoveNodesReceiptV1 {
     pub operation: EditOperation,
     pub resulting_project: EditorProject,
     pub resulting_project_sha256: String,
@@ -236,6 +249,7 @@ const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PROJECT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_STORY_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_RESIZE_INTENT_BYTES: u64 = 1024;
+const MAX_MOVE_NODES_INTENT_BYTES: u64 = 64 * 1024;
 const MAX_CREATE_SHAPE_INTENT_BYTES: u64 = 1024;
 const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EDITED_EXPORT_BYTES: usize = 16 * 1024 * 1024;
@@ -509,6 +523,8 @@ pub struct ProductReplayWorkerReceiptV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_node: Option<IsolatedMoveNodeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_nodes: Option<IsolatedMoveNodesReceiptV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resize_node: Option<IsolatedResizeNodeReceiptV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub create_shape: Option<IsolatedCreateShapeReceiptV1>,
@@ -581,6 +597,7 @@ fn take_exclusive_story_range_receipt(
 ) -> Result<(IsolatedStoryRangeReceiptV1, Value), ProductReplayWorkerError> {
     if receipt.baseline_project.is_some()
         || receipt.move_node.is_some()
+        || receipt.move_nodes.is_some()
         || receipt.resize_node.is_some()
         || receipt.create_shape.is_some()
         || receipt.reader_scene.is_some()
@@ -619,6 +636,23 @@ pub fn validate_product_replay_receipt(
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_identity_mismatch",
             "isolated projection receipt differs from authorized exact identity",
+        ));
+    }
+
+    // Every worker mode produces exactly one response family. Reject a
+    // forged mixed receipt regardless of which host API requested it.
+    let response_families = usize::from(receipt.baseline_project.is_some())
+        + usize::from(receipt.move_node.is_some())
+        + usize::from(receipt.move_nodes.is_some())
+        + usize::from(receipt.resize_node.is_some())
+        + usize::from(receipt.create_shape.is_some())
+        + usize::from(receipt.story_range.is_some())
+        + usize::from(receipt.reader_scene.is_some())
+        + usize::from(receipt.editable_export.is_some());
+    if response_families > 1 {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated worker returned mixed or conflicting response families",
         ));
     }
 
@@ -664,6 +698,22 @@ pub fn validate_product_replay_receipt(
         return Err(ProductReplayWorkerError::new(
             "product_replay_receipt_invalid",
             "isolated MoveNode receipt violates source and project identity",
+        ));
+    }
+    if let Some(batch) = &receipt.move_nodes
+        && (receipt.baseline_project.is_some()
+            || !matches!(batch.operation, EditOperation::MoveNodes { .. })
+            || batch.resulting_project.source_hash.to_string() != source_sha256
+            || project_sha256(&batch.resulting_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated MoveNodes project cannot be canonically hashed",
+                )
+            })? != batch.resulting_project_sha256)
+    {
+        return Err(ProductReplayWorkerError::new(
+            "product_replay_receipt_invalid",
+            "isolated MoveNodes receipt violates source or canonical project identity",
         ));
     }
     if let Some(created) = &receipt.create_shape
@@ -1070,6 +1120,7 @@ pub fn run_product_replay_worker(
     editable_export_target: Option<&str>,
     resize_intent_path: Option<&Path>,
     create_shape_intent_path: Option<&Path>,
+    move_nodes_intent_path: Option<&Path>,
 ) -> Result<(), ProductReplayWorkerError> {
     require_document_id(document_id)?;
     require_sha256(expected_source_sha256)?;
@@ -1088,11 +1139,18 @@ pub fn run_product_replay_worker(
         + usize::from(editable_export_target.is_some())
         + usize::from(resize_intent_path.is_some())
         + usize::from(create_shape_intent_path.is_some())
+        + usize::from(move_nodes_intent_path.is_some())
         > 1
     {
         return Err(ProductReplayWorkerError::new(
             "product_replay_identity_invalid",
             "isolated Product worker admits only one mutation or Scene command",
+        ));
+    }
+    if move_nodes_intent_path.is_some() && project_path.is_none() {
+        return Err(ProductReplayWorkerError::new(
+            "product_move_nodes_invalid",
+            "MoveNodes requires an authorized exact base project",
         ));
     }
     if create_shape_intent_path.is_some() && project_path.is_none() {
@@ -1136,6 +1194,7 @@ pub fn run_product_replay_worker(
     if let Some(scene) = &reader_scene_intent
         && (project_path.is_none()
             || move_node_intent.is_some()
+            || move_nodes_intent_path.is_some()
             || !valid_revision_id(&scene.revision_id)
             || !valid_revision_id(&scene.baseline_revision_id))
     {
@@ -1316,6 +1375,25 @@ pub fn run_product_replay_worker(
         None
     };
 
+    let move_nodes_intent = if let Some(path) = move_nodes_intent_path {
+        let bytes = read_bounded(path, MAX_MOVE_NODES_INTENT_BYTES)?;
+        let intent: IsolatedMoveNodesIntentV1 = serde_json::from_slice(&bytes).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes must be a typed bounded private JSON intent",
+            )
+        })?;
+        validate_move_nodes_intent(&intent).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes selection and mode are not admitted",
+            )
+        })?;
+        Some(intent)
+    } else {
+        None
+    };
+
     // No further filesystem operations are permitted after this point.
     // The outer harness also installs syscall network deny and hard limits.
     install_post_read_filesystem_default_deny().map_err(|_| {
@@ -1442,6 +1520,69 @@ pub fn run_product_replay_worker(
             )
         })?;
         Some(IsolatedMoveNodeReceiptV1 {
+            operation,
+            resulting_project,
+            resulting_project_sha256,
+        })
+    } else {
+        None
+    };
+
+    let move_nodes = if let Some(intent) = move_nodes_intent {
+        let operation = derive_move_nodes_operation(&session, &intent).map_err(|error| {
+            let code = if error == MoveNodesIntentErrorV1::NoChange {
+                "product_move_nodes_no_change"
+            } else {
+                "product_move_nodes_rejected"
+            };
+            ProductReplayWorkerError::new(
+                code,
+                "exact authored Rectangle MoveNodes intent was rejected",
+            )
+        })?;
+        let expected_project =
+            append_event_operation(project.clone(), operation.clone()).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_nodes_invalid",
+                    "MoveNodes cannot be appended to the exact canonical project",
+                )
+            })?;
+        // EditorSession::apply_project replays a complete project against a
+        // fresh source baseline; do not replay the old history twice.
+        let mut next_session =
+            open_mature_0x2c_editor(&source_bytes, source_hash).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_nodes_rejected",
+                    "isolated EditorSession could not reopen the unchanged source",
+                )
+            })?;
+        let mut local_expected = expected_project.clone();
+        if local_expected.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_expected.schema_version)
+        {
+            local_expected.identity = next_session.project().identity;
+        }
+        next_session.apply_project(&local_expected).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_nodes_rejected",
+                "canonical MoveNodes was rejected by full transactional replay",
+            )
+        })?;
+        let resulting_project = cloud_revision_project(&next_session.project());
+        if resulting_project != expected_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes replay disagrees with the exact source-bound event append",
+            ));
+        }
+        let resulting_project_sha256 = project_sha256(&resulting_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes resulting project cannot be canonically hashed",
+            )
+        })?;
+        session = next_session;
+        Some(IsolatedMoveNodesReceiptV1 {
             operation,
             resulting_project,
             resulting_project_sha256,
@@ -1851,6 +1992,7 @@ pub fn run_product_replay_worker(
         authoring_graph: graph,
         baseline_project: if baseline_mode { Some(project) } else { None },
         move_node,
+        move_nodes,
         resize_node,
         create_shape,
         story_range,
@@ -1968,6 +2110,7 @@ impl IsolatedProductReplayProducer {
         )?;
         if receipt.baseline_project.is_some()
             || receipt.move_node.is_some()
+            || receipt.move_nodes.is_some()
             || receipt.reader_scene.is_some()
             || receipt.story_range.is_some()
         {
@@ -2245,6 +2388,202 @@ impl IsolatedProductReplayProducer {
                 "product_replay_receipt_invalid",
                 "isolated MoveNode graph does not represent its claimed geometry",
             ));
+        }
+        Ok((mutation.operation, mutation.resulting_project))
+    }
+
+    /// Plan and verify exactly one canonical same-page authored MoveNodes
+    /// operation inside the existing per-PUB isolated replay boundary.
+    /// No untrusted caller-supplied geometry is accepted.
+    pub async fn move_nodes_to(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        base_project: &EditorProject,
+        expected_base_sha256: &str,
+        intent: &IsolatedMoveNodesIntentV1,
+    ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
+        let (expected_page, selected, mode) = validate_move_nodes_intent(intent).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes intent is not an admitted canonical selection",
+            )
+        })?;
+        let project_bytes = serde_json::to_vec(base_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical base project cannot be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(base_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "MoveNodes base hash cannot be computed",
+                )
+            })? != expected_base_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "MoveNodes base differs from the exact source-bound project",
+            ));
+        }
+        let receipt = self
+            .invoke_job_inner(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_base_sha256)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_base_sha256,
+        )?;
+        let mutation = receipt.move_nodes.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNodes worker returned no batch operation",
+            )
+        })?;
+        let EditOperation::MoveNodes { page_id, entries } = &mutation.operation else {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNodes response contains an unexpected operation",
+            ));
+        };
+        if *page_id != expected_page || entries.is_empty() || entries.len() > selected.len() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "isolated MoveNodes changed the page or exceeded admitted selection",
+            ));
+        }
+        let admitted = selected
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut previous = None;
+        for entry in entries {
+            if !admitted.contains(&entry.node_id)
+                || previous.is_some_and(|last| last >= entry.node_id)
+                || entry.before == entry.after
+                || entry.before.width != entry.after.width
+                || entry.before.height != entry.after.height
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "isolated MoveNodes entries are not canonical admitted translations",
+                ));
+            }
+            previous = Some(entry.node_id);
+        }
+        let expected_project =
+            append_event_operation(base_project.clone(), mutation.operation.clone()).map_err(
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "MoveNodes cannot form one canonical event transition",
+                    )
+                },
+            )?;
+        if expected_project != mutation.resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes receipt project differs from the exact event append",
+            ));
+        }
+        let graph = require_typed_graph(receipt.authoring_graph)?;
+        // The host does not parse source PUB. Reconstruct the source-neutral
+        // BEFORE geometry from the checked batch entries and the unchanged
+        // selected nodes in the exact AFTER graph; then recompute the same
+        // pure EMU law. A compromised worker must not choose arbitrary moves.
+        let mut source_members = Vec::with_capacity(admitted.len());
+        for node_id in &admitted {
+            let node = graph.nodes.get(node_id).ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt omits one of the selected nodes",
+                )
+            })?;
+            if node.header.parent_id != page_id.into_canonical() {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt contains a cross-page selected node",
+                ));
+            }
+            let before = entries
+                .iter()
+                .find(|entry| entry.node_id == *node_id)
+                .map(|entry| entry.before)
+                .unwrap_or(node.header.bounds);
+            source_members.push(crate::exact_emu_align_distribute_v1::Member {
+                node_id: node_id.as_canonical().to_string(),
+                bounds: crate::exact_emu_align_distribute_v1::RectEmu {
+                    x: before.x.get(),
+                    y: before.y.get(),
+                    width: before.width.get(),
+                    height: before.height.get(),
+                },
+            });
+        }
+        let planned_result = crate::exact_emu_align_distribute_v1::plan(source_members, mode);
+        let planned = planned_result.map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes receipt violates the exact source-neutral geometry law",
+            )
+        })?;
+        let required = crate::exact_emu_align_distribute_v1::changed_only(planned);
+        if required.len() != entries.len() {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes receipt changes an incomplete or extra object set",
+            ));
+        }
+        for (planned, entry) in required.iter().zip(entries) {
+            let before = &entry.before;
+            let after = &entry.after;
+            if planned.node_id != entry.node_id.as_canonical().to_string()
+                || planned.before.x != before.x.get()
+                || planned.before.y != before.y.get()
+                || planned.before.width != before.width.get()
+                || planned.before.height != before.height.get()
+                || planned.after.x != after.x.get()
+                || planned.after.y != after.y.get()
+                || planned.after.width != after.width.get()
+                || planned.after.height != after.height.get()
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt has noncanonical exact-EMU before/after positions",
+                ));
+            }
+        }
+        for entry in entries {
+            let after_node = graph.nodes.get(&entry.node_id).ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes receipt is missing an admitted shape",
+                )
+            })?;
+            if after_node.header.parent_id != page_id.into_canonical()
+                || after_node.header.bounds != entry.after
+            {
+                return Err(ProductReplayWorkerError::new(
+                    "product_replay_receipt_invalid",
+                    "MoveNodes projected geometry differs from the canonical operation",
+                ));
+            }
         }
         Ok((mutation.operation, mutation.resulting_project))
     }
@@ -2697,6 +3036,40 @@ impl IsolatedProductReplayProducer {
         resize_node: Option<&IsolatedResizeNodeIntentV1>,
         create_shape: Option<&IsolatedCreateShapeIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
+        self.invoke_job_inner(
+            document_id,
+            source_sha256,
+            source_bytes,
+            project,
+            move_node,
+            reader_scene,
+            story_range,
+            editable_export_target,
+            resize_node,
+            create_shape,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one extra isolated batch intent, all source and grant checks remain explicit"
+    )]
+    async fn invoke_job_inner(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        project: Option<(&[u8], &str)>,
+        move_node: Option<&IsolatedMoveNodeIntentV1>,
+        reader_scene: Option<&IsolatedReaderSceneIntentV1>,
+        story_range: Option<&IsolatedStoryRangeIntentV1>,
+        editable_export_target: Option<&str>,
+        resize_node: Option<&IsolatedResizeNodeIntentV1>,
+        create_shape: Option<&IsolatedCreateShapeIntentV1>,
+        move_nodes: Option<&IsolatedMoveNodesIntentV1>,
+    ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
         if source_bytes.is_empty()
@@ -2714,6 +3087,7 @@ impl IsolatedProductReplayProducer {
             + usize::from(editable_export_target.is_some())
             + usize::from(resize_node.is_some())
             + usize::from(create_shape.is_some())
+            + usize::from(move_nodes.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -2721,7 +3095,9 @@ impl IsolatedProductReplayProducer {
                 "Product worker must receive only one Scene or mutation command",
             ));
         }
-        if reader_scene.is_some() && (project.is_none() || move_node.is_some()) {
+        if reader_scene.is_some()
+            && (project.is_none() || move_node.is_some() || move_nodes.is_some())
+        {
             return Err(ProductReplayWorkerError::new(
                 "product_reader_scene_invalid",
                 "Reader scene request must have an exact project without a mutation",
@@ -2739,6 +3115,12 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
                 "unknown edited target",
+            ));
+        }
+        if move_nodes.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_move_nodes_invalid",
+                "MoveNodes requires a verified source-bound base project",
             ));
         }
         if create_shape.is_some() && project.is_none() {
@@ -2781,6 +3163,7 @@ impl IsolatedProductReplayProducer {
         let story_intent_path = temp.path.join("story-intent.json");
         let resize_intent_path = temp.path.join("resize-intent.json");
         let create_shape_intent_path = temp.path.join("create-shape-intent.json");
+        let move_nodes_intent_path = temp.path.join("move-nodes-intent.json");
         let result_dir = temp.path.join("worker-result");
         write_private_replay_input(&source_path, source_bytes).await?;
         if let Some((project_bytes, _)) = project {
@@ -2816,6 +3199,27 @@ impl IsolatedProductReplayProducer {
                 ));
             }
             write_private_replay_input(&resize_intent_path, &bytes).await?;
+        }
+        if let Some(intent) = move_nodes {
+            validate_move_nodes_intent(intent).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_nodes_invalid",
+                    "MoveNodes has an invalid canonical selection",
+                )
+            })?;
+            let bytes = serde_json::to_vec(intent).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_move_nodes_invalid",
+                    "MoveNodes intent cannot be serialized",
+                )
+            })?;
+            if bytes.len() as u64 > MAX_MOVE_NODES_INTENT_BYTES {
+                return Err(ProductReplayWorkerError::new(
+                    "product_move_nodes_invalid",
+                    "MoveNodes selection exceeds bounded private input",
+                ));
+            }
+            write_private_replay_input(&move_nodes_intent_path, &bytes).await?;
         }
         if let Some(intent) = story_range {
             let bytes = serde_json::to_vec(intent).map_err(|_| {
@@ -2887,6 +3291,11 @@ impl IsolatedProductReplayProducer {
             command
                 .arg("--create-shape-intent-json")
                 .arg(&create_shape_intent_path);
+        }
+        if move_nodes.is_some() {
+            command
+                .arg("--move-nodes-intent-json")
+                .arg(&move_nodes_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);
@@ -3066,6 +3475,7 @@ mod tests {
             authoring_graph: graph,
             baseline_project: None,
             move_node: None,
+            move_nodes: None,
             resize_node: None,
             create_shape: None,
             story_range: None,
@@ -3111,6 +3521,82 @@ mod tests {
         let mut object = serde_json::to_value(base).unwrap();
         object["unexpected"] = Value::Bool(true);
         assert!(serde_json::from_value::<IsolatedCreateShapeIntentV1>(object).is_err());
+    }
+
+    #[test]
+    fn isolated_move_nodes_receipt_requires_exact_one_canonical_family() {
+        let source_sha256 = "a".repeat(64);
+        let project = EditorProject {
+            schema_version: "pub-editor-v0.11".to_owned(),
+            source_hash: Sha256Digest::from_str(&source_sha256).unwrap(),
+            identity: None,
+            assets: Vec::new(),
+            table_grids: Vec::new(),
+            operations: Vec::new(),
+        };
+        let page_id: PageId = serde_json::from_value(Value::String(
+            "20000000-0000-4000-8000-000000000001".to_owned(),
+        ))
+        .unwrap();
+        let node_id: NodeId = serde_json::from_value(Value::String(
+            "30000000-0000-7000-8000-000000000001".to_owned(),
+        ))
+        .unwrap();
+        let before = RectEmu::new(
+            LengthEmu::new(1),
+            LengthEmu::new(0),
+            LengthEmu::new(20),
+            LengthEmu::new(10),
+        );
+        let after = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(0),
+            LengthEmu::new(20),
+            LengthEmu::new(10),
+        );
+        let mut valid = receipt();
+        valid.move_nodes = Some(IsolatedMoveNodesReceiptV1 {
+            operation: EditOperation::MoveNodes {
+                page_id,
+                entries: vec![pub_editor::MoveNodeBatchEntry {
+                    node_id,
+                    before,
+                    after,
+                }],
+            },
+            resulting_project_sha256: project_sha256(&project).unwrap(),
+            resulting_project: project.clone(),
+        });
+        validate_product_replay_receipt(&valid, "document-a", &source_sha256, 512, &"b".repeat(64))
+            .unwrap();
+        let mut mixed = valid.clone();
+        mixed.baseline_project = Some(project);
+        assert_eq!(
+            validate_product_replay_receipt(
+                &mixed,
+                "document-a",
+                &source_sha256,
+                512,
+                &"b".repeat(64),
+            )
+            .unwrap_err()
+            .code,
+            "product_replay_receipt_invalid"
+        );
+        let mut forged = valid;
+        forged.move_nodes.as_mut().unwrap().resulting_project_sha256 = "0".repeat(64);
+        assert_eq!(
+            validate_product_replay_receipt(
+                &forged,
+                "document-a",
+                &source_sha256,
+                512,
+                &"b".repeat(64),
+            )
+            .unwrap_err()
+            .code,
+            "product_replay_receipt_invalid"
+        );
     }
 
     #[test]
