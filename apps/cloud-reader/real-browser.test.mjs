@@ -675,7 +675,7 @@ try {
       });
       const hashed = measured
         .map((line) => {
-          const normalized = line.text.normalize("NFC").replace(/\\s+/gu, " ").trim();
+          const normalized = line.text.normalize("NFC").replace(/\s+/gu, " ").trim();
           if (!normalized) return null;
           const geometry = Object.fromEntries(["x", "y", "width", "height"]
             .map((key) => [key, line[key]]));
