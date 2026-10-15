@@ -22,11 +22,11 @@ class StoryConsumerContracts(unittest.TestCase):
         folder, archive = self._zip({
             "designmap.xml": b"<Document/>",
             "Stories/Story_u01.xml": (
-                b"<idPkg:Story xmlns:idPkg='urn:adobe:ns:'
-                b" packaging'><Story><ParagraphStyleRange>"
+                b"<idPkg:Story xmlns:idPkg='urn:adobe:ns:packaging'>"
+                b"<Story><ParagraphStyleRange>"
                 b"<CharacterStyleRange><Content>AuthoredProof42</Content>"
                 b"</CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>"
-            ).replace(b"ns: packaging", b"ns:packaging"),
+            ),
         })
         try:
             result = verify(archive, "idml", "AuthoredProof42")
