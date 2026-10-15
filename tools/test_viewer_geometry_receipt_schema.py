@@ -135,8 +135,13 @@ class ViewerGeometryReceiptSchemaTests(unittest.TestCase):
         receipt["paints"] = [{
             "node_id": node_id,
             "preset_shape": "horizontal_line",
+            "solid_line": {"rgb": [255, 0, 255], "width_emu": 101600},
         }]
         validate_schema(receipt)
+        forged_fill = copy.deepcopy(receipt)
+        forged_fill["paints"][0]["solid_fill_rgb"] = [255, 0, 255]
+        with self.assertRaises(AssertionError):
+            validate_schema(forged_fill)
         for invalid in ("vertical_line", "diagonal_line", "horizontal_line/private"):
             bad = copy.deepcopy(receipt)
             bad["paints"][0]["preset_shape"] = invalid
