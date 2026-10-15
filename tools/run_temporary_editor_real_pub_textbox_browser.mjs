@@ -38,6 +38,7 @@ const page = await browser.newPage({
 const observed = { current:[],scenes:[],accepted:[],storyAccepted:[],reports:[],requests:[],responses:[] };
 const pending = [],errors=[],safeSceneFailureCodes=[];
 let phase = "ui_open";
+let storyConsumerFailure = null;
 page.on("pageerror",error => errors.push(error.name || "PageError"));
 page.on("request",request => {
   if (!request.url().startsWith(origin)) return;
@@ -90,13 +91,39 @@ function path(action,id) {
   return "/v1/editor/temporary-sessions/" + id + "/" + action;
 }
 
+const SAFE_STORY_CONSUMER_CODES = new Set([
+  "zip_header_or_size", "zip_member_limits", "zip_path_traversal", "zip_crc",
+  "idml_story_parts_missing", "odg_parts_missing", "odg_mimetype",
+  "story_text_not_in_package", "native_apps_unavailable",
+  "scribus_importer_missing", "scribus_import_timeout",
+  "scribus_reimport_failed", "scribus_story_missing",
+  "libreoffice_import_timeout", "libreoffice_reimport_failed",
+  "libreoffice_story_missing", "native_story_unconfirmed",
+  "consumer_assertion_other", "malformed_export_xml_or_zip",
+  "consumer_unexpected_error",
+]);
+function safeStoryConsumerFailure(output) {
+  // Parse the *allowlisted* error code only. No raw Python/Scribus stderr can
+  // leave the private GitHub worker, even when an application importer fails.
+  try {
+    const data = JSON.parse(String(output).trim().split("\\n").at(-1));
+    if (data.schema === "chaptera.tempedit-source-neutral-story-consumer-failure.v1" &&
+        data.status === "FAIL" && SAFE_STORY_CONSUMER_CODES.has(data.failure_code)) {
+      return data.failure_code;
+    }
+  } catch {}
+  return "consumer_unclassified";
+}
 function classifiedCreateReopenFailure() {
   // Only safe contract booleans are returned. Never persist raw response
   // objects, Story text, capability, source paths, IDs or request URLs.
   const ack=observed.accepted.at(-1);
-  const current=observed.current.at(-1);
   if (!ack) return "create_ack_missing";
-  if (!current) return "reopened_current_missing";
+  // Later StoryRange edits advance the revision and the latest operation
+  // legitimately becomes replace_story_range. Classify against the exact
+  // CreateTextBox revision, not whichever revision failed downstream.
+  const current=observed.current.find(item=>item.revision_id===ack.revision_id);
+  if (!current) return "reopened_create_revision_missing";
   const op=ack.canonical_operation,latest=current.project?.operations?.at(-1);
   if (!op || !latest) return "canonical_operation_missing";
   if (latest.kind!=="create_text_box" || op.kind!=="create_text_box") {
@@ -300,9 +327,10 @@ try {
     "--expected-text",textMarker,
     "--real-application-consumer",
   ],{encoding:"utf-8",timeout:230000});
-  assert.equal(consumerCheck.status,0,
-    "independent " +target+" TextFrame geometry/native reader failed: "+
-    (consumerCheck.stderr||consumerCheck.stdout).slice(-1400));
+  if (consumerCheck.status !== 0) {
+    storyConsumerFailure = safeStoryConsumerFailure(consumerCheck.stderr);
+    throw new Error("source-neutral independent Story consumer failed");
+  }
   const consumer=JSON.parse(consumerCheck.stdout.trim().split("\n").at(-1));
   assert.equal(consumer.schema,"chaptera.tempedit-independent-story-xml-consumer.v1");
   assert.equal(consumer.status,"PASS");
@@ -440,6 +468,7 @@ try {
     failure_class: error?.name === "AssertionError" ? "assertion"
       : error?.name === "TimeoutError" ? "timeout" : "other",
     create_reopen_contract: classifiedCreateReopenFailure(),
+    story_consumer_failure_code: storyConsumerFailure,
     browser_page_error_count: Math.min(100, errors.length),
     current_success_replies: observed.current.length,
     scene_success_replies: observed.scenes.length,
