@@ -315,7 +315,7 @@ fn render_current_fixed_pdf_with_sheet(
                 };
                 let (font_size_emu, line_height_emu) = (*font_size_emu, *line_height_emu);
                 if font_resource_id.as_str() != fallback.resource_id
-                    || font_fingerprint_sha256.as_str() != fingerprint
+                    || font_fingerprint_sha256.as_str() != fingerprint.as_str()
                     || font_size_emu == font_size.get()
                     || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&font_size_emu)
                     || line_height_emu <= 0
