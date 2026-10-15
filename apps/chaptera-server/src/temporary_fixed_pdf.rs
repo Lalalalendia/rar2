@@ -989,19 +989,20 @@ fn render_current_fixed_pdf_with_sheet(
     // Text program in its source-neutral paint trace for every nonempty new
     // Story. The Chromium PDF consumer separately verifies readable glyphs.
     for (node_id, story_id) in &authored_text_boxes {
-        let story = session.graph().stories.get(story_id)
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
             .ok_or("edited_pdf_authored_story_missing")?;
         if story.text.is_empty() {
             continue;
         }
         if !rendered.report.nodes.iter().any(|node| {
-            node.origin == *node_id
-                && node.disposition == PdfRenderDisposition::Painted
+            node.origin == *node_id && node.disposition == PdfRenderDisposition::Painted
         }) || !rendered.paint_trace.iter().any(|event| {
             event.node_origin == *node_id
                 && event.kind == pub_pdf::PdfPaintTraceKindV1::Text
-                && event.unwrapped_program_byte_range[1]
-                    > event.unwrapped_program_byte_range[0]
+                && event.unwrapped_program_byte_range[1] > event.unwrapped_program_byte_range[0]
         }) {
             return Err("edited_pdf_authored_text_not_physically_painted");
         }
