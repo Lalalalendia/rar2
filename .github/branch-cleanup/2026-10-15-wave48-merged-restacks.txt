@@ -1,0 +1,13 @@
+# RAR2 guarded branch cleanup wave 48 — 2026-10-15
+# Execution-only manifest. DO NOT MERGE.
+# Four temporary restack refs have no open/closed PR head association.
+# PR successors #1184, #2311, #1368 have all merged into main.
+# Their changed file sets match the accepted successor file sets.
+# #1184's two experiment files are byte-identical in main; the third has only a rustfmt-style import change.
+# #2311's imported paragraph alignment is byte-identical in main; desktop runtime was subsequently expanded.
+# #1368 temporary A/B file sets are included in merged #1368, current main has the successors.
+# Require exact SHA, no open PR head/base, and preserve commit/PR history via the existing GC workflow.
+tmp/restack-1184-current-main-01 7c2bcf0d4c86fe5c100046026cc43071a59d1343 # #1184 FALSE-OMISSION experiment + reader binary merged; branch has older rustfmt imports
+tmp/restack-2311-current-main-01 5a5023a1282861e1d197f04a91aa1bf97d27c4d1 # #2311 paragraph alignment batching merged; main runtime has newer added modules
+tmp/restack-1368-20261005-a cd10d0eca86c24530d8043e9ecd22265251bae7c # #1368 measurement subset workflow/tests merged; temporary donor A
+tmp/restack-1368-20261005-b dc8edce220f30ebe46de66f4a5a4699006989e29 # #1368 measurement subset workflow/tests merged; temporary donor B
