@@ -113,6 +113,16 @@ pub enum Command {
             conflicts_with_all = ["move_node_id", "story_intent_json", "resize_intent_json", "scene_revision_id", "editable_export_target"]
         )]
         create_shape_intent_json: Option<PathBuf>,
+        /// A bounded private same-page authored Rectangle align/distribute intent.
+        #[arg(
+            long,
+            requires = "project_json",
+            conflicts_with_all = [
+                "move_node_id", "scene_revision_id", "story_intent_json",
+                "resize_intent_json", "create_shape_intent_json", "editable_export_target"
+            ]
+        )]
+        move_nodes_intent_json: Option<PathBuf>,
         /// An authorized RevisionStream head, not an arbitrary client path.
         #[arg(
             long,
@@ -196,6 +206,34 @@ mod tests {
             "rev",
         ]);
         assert!(Cli::try_parse_from(admitted).is_err());
+    }
+
+    #[test]
+    fn move_nodes_requires_exact_project_and_disallows_mixed_worker_modes() {
+        let base = [
+            "chaptera", "product-isolated-replay",
+            "--document-id", "tempedit:0123456789abcdef0123456789abcdef",
+            "--expected-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--expected-byte-len", "42",
+        ];
+        let mut invalid = base.to_vec();
+        invalid.extend(["--move-nodes-intent-json", "/tmp/batch.json"]);
+        assert!(Cli::try_parse_from(invalid).is_err());
+        let mut good = base.to_vec();
+        good.extend([
+            "--project-json", "/tmp/current.json",
+            "--expected-project-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--move-nodes-intent-json", "/tmp/batch.json",
+        ]);
+        assert!(matches!(
+            Cli::try_parse_from(good.clone()).unwrap().command,
+            Command::ProductIsolatedReplay { move_nodes_intent_json: Some(_), .. }
+        ));
+        good.extend(["--move-node-id", "30000000-0000-7000-8000-000000000001",
+            "--move-x-emu", "10", "--move-y-emu", "10"]);
+        assert!(Cli::try_parse_from(good).is_err());
     }
 
     #[test]
