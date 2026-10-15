@@ -922,6 +922,9 @@ def main() -> int:
                 sbdc_pdf_multiline_counts = {
                     "source_sized_multiline_stories": proof_counts.get("source_sized_multiline_stories", 0),
                     "source_sized_multiline_lines": proof_counts.get("source_sized_multiline_lines", 0),
+                    "source_sized_mixed_size_stories": proof_counts.get("source_sized_mixed_size_stories", 0),
+                    "source_sized_mixed_size_lines": proof_counts.get("source_sized_mixed_size_lines", 0),
+                    "source_sized_mixed_size_spans": proof_counts.get("source_sized_mixed_size_spans", 0),
                     "total_shaped_lines": proof_counts["shaped_lines"],
                 }
                 sbdc_pdf_r1_uses = require_sbdc_fixed_pdf_image_uses(
