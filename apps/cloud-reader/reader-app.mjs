@@ -151,6 +151,7 @@ function clearReader() {
   clearCompatibilityReport();
   scene = null;
   pages = [];
+  pageIndex = 0;
   preparedScene = null;
   pageOffsets = [];
   mountedPageIds = "";
