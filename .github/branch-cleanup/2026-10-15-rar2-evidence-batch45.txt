@@ -1,0 +1,27 @@
+# RAR2 guarded branch cleanup batch45 2026-10-15
+# Execution-only SHA-pinned branch refs; do not merge this manifest.
+# 20 live refs: main ancestor, byte-identical implementation copies, superseded PRs, negative/terminal evidence.
+# All were unprotected and absent from 26 open PR head/base refs on verification.
+# Clean up pointers only; preserve PR links, commit identities and receipt artifacts.
+# Format: branch exact_sha # evidenced terminal rationale
+
+ops/branch-gc-20261015-evidence-batch44-compact15 6dbf58110c8124c703b9d903334eb397cc51105c # closed execution carrier PR2797; wave44 Actions 38717039881 deleted 15/15
+cloud/perf-visible-page-window-01-20261011 4dff2cb94d51e9a3c44e806786f10d297736d8ba # ancestor of main, ahead 0 and file delta empty
+web/blob-raw-source-clean-base-20261011 706187e0b3e28d414df17d56d4e8a49938a7668e # sole changed path blob_store.rs matches current main content exactly
+web/blob-raw-source-rebase-20261011 e1defd05ec40cd0c27f9cd549050707b2389568a # sole changed path blob_store.rs matches current main content exactly
+viewer/sparse-textbox-fill-color-01 2d1f1faee82030cedcc56d7f2645c3167798377e # closed PR674 falsified Virginia TextBox fill hypothesis, no merge
+cloud/image-inline-budget-10m-01 c9de9ebd4c3596916e2a4b9b4291d14212e6b321 # closed PR585 superseded by merged safer source-size Scene budget PR586
+local-web-editor/grouped-image-adapter-01 ae768a753e7a78f66dd4b1b3e7e4d904502fdaf9 # closed PR511 research-only grouped image receipt, superseded by merged PR519
+cloud/cloud-reader-display-parity-01e-current-main 408f0c5e79e259531c749d2971b4279784b2a35b # closed PR417 superseded by merged current-main display acceptance PR448
+reader/wmf-stretchdib-image-01 f9f71cd7ff76bebd3d89f84dea6c0bf603e1a204 # closed PR390 byte-identical WMF consumer to merged PR387
+authoring/delete-node-runtime-clean 91d3da7a38f482f234a4172efcd6c78d66665170 # closed PR925 superseded by merged canonical DeleteNode PR930
+fix/export-vocab-884 a6f83895239a57bf52fcc0d5d7f42cda770af863 # closed PR1153 superseded by merged fresh-main vocabulary PR1160
+recover/pub-output-font-plan-01 eefddbcaad5ef5d24be162eddfaeac2fc5c52772 # closed PR1161 predecessor via PR1186 to merged font plan PR1209
+recover/pub-docx-text-first-01 7b5f88ba3dabd292ef824f174383dafead696bc8 # closed PR1163 predecessor via PR1190 PR1210 to merged DOCX PR1215
+recover/pub-docx-text-first-02 c226b151816d6891ba7bc1c0d38d9ffa41265f88 # closed PR1190 predecessor via PR1210 to merged DOCX PR1215
+conversion/editable-typography-scoped-preserved-02 2b7d7068a3791913485512001e86df836cd56da8 # closed PR1098 predecessor via PR1102 to merged scoped typography PR1117
+validate/text-format-property-base-01 6ae09490d6aed34573312b2e16e452d069c6e749 # closed PR1404 proof-only, 4/4 property tests passed Actions 37248089579
+tooling/ephemeral-861-private-witness 161a5b0945ccb1e1aec202f24fc3e38693f9f6f1 # closed PR865 temporary private-witness artifact; final comment confirms obsolete
+ops/quill-scheme-color-portable-1405 fc05a0a2d9d2bf9158de529420447eae4deb8f9c # closed PR1407 ephemeral hosted builder GREEN, artifact11320285376 retained
+diagnostic/win-update-rename-context-01 779210b56b8f8186dcec60e7feeef27e7be86f23 # closed PR1288 diagnostic only; path diagnostics and retry merged in PR1296
+conversion/effective-paragraph-align-04 64f693b0ca78818ead493dd4a2a2fd3ecfacea3f # closed PR1430 via PR1446 PR1451 to merged effective alignment PR1459
