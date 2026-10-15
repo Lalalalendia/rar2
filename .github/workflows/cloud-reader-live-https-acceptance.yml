@@ -31,6 +31,8 @@ on:
       - "tools/run_temporary_editor_real_pub_story_browser.mjs"
       - "tools/run_temporary_editor_real_pub_create_browser.mjs"
       - "tools/run_temporary_editor_real_pub_textbox_browser.mjs"
+      - "tools/verify_temporary_guest_story_pdf_export.py"
+      - "tools/test_verify_temporary_guest_story_pdf_export.py"
       - "tools/verify_temporary_guest_created_shape_export.py"
       - "tools/ci/verify_authored_rectangle_export.py"
       - "tools/verify_temporary_guest_story_export.py"
@@ -72,7 +74,7 @@ jobs:
       - name: Verify acceptance host dependencies
         run: |
           set -euo pipefail
-          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_resize_export.py
+          python -m py_compile tools/run_cloud_reader_live_acceptance.py tools/run_temporary_editor_current_acceptance.py tools/run_temporary_editor_real_pub_browser_acceptance.py tools/migration_pdf_worker_isolation.py tools/verify_temporary_guest_pdf_geometry.py tools/verify_temporary_guest_story_export.py tools/verify_temporary_guest_story_pdf_export.py tools/test_verify_temporary_guest_story_pdf_export.py tools/verify_temporary_guest_resize_export.py
           python -m unittest discover -s tools -p 'test_temporary_browser_log_safety.py'
           node --check tools/run_temporary_editor_real_pub_browser.mjs
           node --check tools/run_temporary_editor_real_pub_story_browser.mjs
@@ -243,9 +245,13 @@ jobs:
       # Physical vertical slice: browser creates an empty TextFrame and Story,
       # then uses the existing StoryRange mutation. Two native application
       # consumers must recover exactly the authored text, not just geometry.
-      - name: Prove real PUB Chromium CreateTextBox + Story and IDML/ODG consumers
+      - name: Prove real PUB Chromium CreateTextBox + Story and IDML/ODG/PDF consumers
         run: |
           set -euo pipefail
+          # Only the pinned exact-revision PDF witness needs the independent
+          # PDF text consumer. Its synthetic fail-closed tests run first.
+          python3 -m pip install --disable-pip-version-check --no-input --no-cache-dir "PyMuPDF==1.26.7"
+          python3 -m unittest discover -v -s tools -p test_verify_temporary_guest_story_pdf_export.py
           for target in idml odg; do
             python tools/run_temporary_editor_real_pub_browser_acceptance.py \
               --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera" \
