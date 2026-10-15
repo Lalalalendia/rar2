@@ -108,6 +108,9 @@ test("real temporary browser client drives same-origin upload and uses existing 
     assert.equal(options.cache, "no-store");
     assert.ok(!url.includes(bearer));
     assert.match(options.headers["x-csrf-token"], /^[0-9a-f]{32}$/);
+    assert.equal(options.headers["x-chaptera-trace-version"], "chaptera.trace-context.v1");
+    assert.equal(options.headers["x-chaptera-operation-class"], "open");
+    assert.match(options.headers["x-chaptera-trace-id"], /^trace:[0-9a-f]{32}$/);
   }
   assert.equal(renders.length, 1);
   assert.equal(renders[0].host, nodes["temporary-pages"]);

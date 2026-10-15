@@ -64,6 +64,29 @@ function newCsrfToken(cryptoObject) {
   return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+// The existing public Reader serves /observability-v1.mjs. Local Node
+// tests resolve the same trace contract from the working-tree module.
+// Missing telemetry must never prevent opening/editing a document.
+async function optionalTemporaryGuestTracing(cryptoObject) {
+  try {
+    const modulePath = import.meta.url.startsWith("file:")
+      ? "./observability-v1.mjs" : "/observability-v1.mjs";
+    const { BrowserObservabilityV1, traceHeadersV1 } = await import(modulePath);
+    return {
+      recorder: new BrowserObservabilityV1({
+        sessionIncarnation: "tab:" + newCsrfToken(cryptoObject),
+        browserFamily: "unknown",
+        maxSpans: 256,
+        idFactory: prefix => prefix + ":" + newCsrfToken(cryptoObject),
+      }),
+      headersFor: traceHeadersV1,
+      interactionId: "interaction:" + newCsrfToken(cryptoObject),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 const TEMPORARY_NUDGE_STEP_EMU = 12_700; // One point, not screen pixels.
 
@@ -226,8 +249,9 @@ export async function bootTemporaryEditorPreview({
   const storyDiscard = documentObject?.getElementById("temporary-story-discard");
   const storyEnabled = !!(editorEnabled && storyPanel && storySelect && storyText && storyApply);
   const csrfToken = newCsrfToken(cryptoObject);
+  const trace = await optionalTemporaryGuestTracing(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
-    csrfToken, storage, fetchImpl,
+    csrfToken, storage, fetchImpl, trace,
   });
 
   let busy = false;
@@ -551,7 +575,7 @@ export async function bootTemporaryEditorPreview({
     if (description.renderable && ["supported", "partial"].includes(view.classification) && editorEnabled) {
       try {
         moveClient = TemporaryGuestMoveClientV1.fromTab({
-          storage, csrfToken, fetchImpl, cryptoObject,
+          storage, csrfToken, fetchImpl, cryptoObject, trace,
         });
         canonicalCurrent = await moveClient.refresh();
         effectiveScene = await moveClient.readerScene();
