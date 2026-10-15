@@ -167,28 +167,51 @@ fn render_current_fixed_pdf_with_sheet(
             }
             EditOperation::ReplaceStoryRange { .. } => edited_stories += 1,
             EditOperation::CreateTextBox {
-                node_id, story_id, page_id, bounds, text_preset,
+                node_id,
+                story_id,
+                page_id,
+                bounds,
+                text_preset,
             } => {
                 if authored_text_boxes.len() >= MAX_AUTHORED_TEXT_BOXES_PDF
-                    || authored_text_boxes.iter().any(|(id, sid)| {
-                        id == node_id || sid == story_id
-                    })
-                    || !bundle.geometry.document.pages.iter().any(|page| page.id == *page_id)
-                    || bundle.geometry.scene.nodes.iter().any(|node| node.origin == *node_id)
+                    || authored_text_boxes
+                        .iter()
+                        .any(|(id, sid)| id == node_id || sid == story_id)
+                    || !bundle
+                        .geometry
+                        .document
+                        .pages
+                        .iter()
+                        .any(|page| page.id == *page_id)
+                    || bundle
+                        .geometry
+                        .scene
+                        .nodes
+                        .iter()
+                        .any(|node| node.origin == *node_id)
                 {
                     return Err("edited_pdf_authored_text_frame_identity_invalid");
                 }
                 // EditorSession proves the user-created UUIDv7 identities,
                 // unique StoryFrame owner, source-free Story and default font.
-                let proof = session.prove_author_created_story_v1(*story_id)
+                let proof = session
+                    .prove_author_created_story_v1(*story_id)
                     .map_err(|_| "edited_pdf_authored_story_unproven")?
                     .ok_or("edited_pdf_authored_story_unproven")?;
-                let node = session.graph().nodes.get(node_id)
+                let node = session
+                    .graph()
+                    .nodes
+                    .get(node_id)
                     .ok_or("edited_pdf_authored_text_frame_missing")?;
-                let story = session.graph().stories.get(story_id)
+                let story = session
+                    .graph()
+                    .stories
+                    .get(story_id)
                     .ok_or("edited_pdf_authored_story_missing")?;
-                if proof.frame_id != *node_id || proof.story_id != *story_id
-                    || proof.page_id != *page_id || proof.text_preset != *text_preset
+                if proof.frame_id != *node_id
+                    || proof.story_id != *story_id
+                    || proof.page_id != *page_id
+                    || proof.text_preset != *text_preset
                     || node.header.id != *node_id
                     || node.header.parent_id != page_id.into_canonical()
                     || node.header.bounds != *bounds
@@ -303,9 +326,14 @@ fn render_current_fixed_pdf_with_sheet(
     // exact canonical Story to survive the bounded shaping consumer, with no
     // absent glyph or detached frame, before a PDF can be offered as current.
     for (node_id, story_id) in &authored_text_boxes {
-        let story = session.graph().stories.get(story_id)
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
             .ok_or("edited_pdf_authored_story_missing")?;
-        let authored_lines = flow.lines.iter()
+        let authored_lines = flow
+            .lines
+            .iter()
             .filter(|line| line.story_origin == *story_id)
             .collect::<Vec<_>>();
         if story.text.is_empty() {
@@ -316,11 +344,13 @@ fn render_current_fixed_pdf_with_sheet(
         }
         if authored_lines.is_empty()
             || authored_lines.iter().any(|line| {
-                line.frame_origin != *node_id
-                    || line.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
+                line.frame_origin != *node_id || line.glyphs.iter().any(|glyph| glyph.glyph_id == 0)
             })
-            || authored_lines.iter().map(|line| line.text.as_str())
-                .collect::<String>() != story.text
+            || authored_lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>()
+                != story.text
         {
             return Err("edited_pdf_authored_story_not_fully_shaped");
         }
@@ -817,9 +847,13 @@ fn render_current_fixed_pdf_with_sheet(
     }
 
     for (node_id, story_id) in &authored_text_boxes {
-        let story = session.graph().stories.get(story_id)
+        let story = session
+            .graph()
+            .stories
+            .get(story_id)
             .ok_or("edited_pdf_authored_story_missing")?;
-        let current_text = text_runs.iter()
+        let current_text = text_runs
+            .iter()
             .filter(|run| run.node_id == *node_id)
             .map(|run| run.logical_text.as_str())
             .collect::<String>();
