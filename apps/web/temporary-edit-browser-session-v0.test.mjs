@@ -1,4 +1,5 @@
 import test from "node:test";
+import { BrowserObservabilityV1, traceHeadersV1 } from "./observability-v1.mjs";
 import assert from "node:assert/strict";
 import {
   TemporaryEditBrowserSessionV0,
@@ -37,6 +38,19 @@ const response = (body, status = 200) =>
     status, headers: { "content-type": "application/json" },
   });
 
+function traceFixture() {
+  let counter = 0;
+  const recorder = new BrowserObservabilityV1({
+    sessionIncarnation: "tab:guest-fixture-12345678",
+    browserFamily: "chromium",
+    idFactory: prefix => prefix + ":" + String(++counter).padStart(8, "0"),
+  });
+  return {
+    recorder, headersFor: traceHeadersV1,
+    interactionId: "interaction:guest-flow-12345678",
+  };
+}
+
 function storage() {
   const map = new Map();
   return {
@@ -54,6 +68,31 @@ function flow({ issued = issue, uploaded = stored, open = opened } = {}) {
   };
   return { calls, fetchImpl };
 }
+
+test("anonymous upload and open reuse canonical trace headers without leaking source", async () => {
+  const store = storage(), trace = traceFixture();
+  const {fetchImpl, calls} = flow();
+  const client = new TemporaryEditBrowserSessionV0({
+    storage: store, fetchImpl, csrfToken, trace,
+  });
+  await client.start(file);
+  assert.equal(calls.length, 3);
+  const ids = new Set(calls.map(call => call.opts.headers["x-chaptera-trace-id"]));
+  assert.equal(ids.size, 1);
+  for (const {url, opts} of calls) {
+    assert.equal(opts.headers["x-chaptera-trace-version"], "chaptera.trace-context.v1");
+    assert.equal(opts.headers["x-chaptera-operation-class"], "open");
+    assert.equal(opts.headers["x-chaptera-interaction-id"], trace.interactionId);
+    assert.equal(opts.headers["x-chaptera-reader-session"] === token,
+      url !== "/v1/editor/temporary-sessions");
+  }
+  const receipt = trace.recorder.receipt([...ids][0]);
+  assert.equal(receipt.span_count, 3);
+  assert.equal(receipt.contains_document_payload, false);
+  assert.equal(receipt.semantic_authority, false);
+  assert.ok(!JSON.stringify(receipt).includes(token));
+  assert.ok(!JSON.stringify(receipt).includes(sha));
+});
 
 test("temporary upload uses only same-origin paths, private header and no credentials", async () => {
   const store = storage();

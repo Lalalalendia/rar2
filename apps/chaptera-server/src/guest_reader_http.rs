@@ -8,11 +8,12 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, MatchedPath, Path, Query, Request, State},
     http::{
-        HeaderMap, HeaderValue, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode,
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -494,7 +495,59 @@ pub fn temporary_editor_router(state: GuestReaderHttpState) -> Router {
             "/v1/editor/temporary-sessions/{session_id}/exports/{target}",
             get(temporary_editor_edited_export),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            trace_temporary_editor_request,
+        ))
         .with_state(state)
+}
+
+
+fn temporary_editor_trace_stage(method: &Method, matched_path: &str) -> Option<&'static str> {
+    // The matched Axum route is a static template: never log the session
+    // identifier, URL query, private bearer, source hash or document content.
+    match (method.as_str(), matched_path) {
+        ("POST", "/v1/editor/temporary-sessions") => Some("temporary.session_create"),
+        ("DELETE", "/v1/editor/temporary-sessions/{session_id}") => Some("temporary.delete"),
+        ("GET", "/v1/editor/temporary-sessions/{session_id}/current") => Some("temporary.current"),
+        ("GET", "/v1/editor/temporary-sessions/{session_id}/scene") => Some("temporary.scene"),
+        ("GET", "/v1/editor/temporary-sessions/{session_id}/exports/{target}") => {
+            Some("temporary.export")
+        }
+        ("POST", "/v1/editor/temporary-sessions/{session_id}/move-node")
+        | ("POST", "/v1/editor/temporary-sessions/{session_id}/resize-node")
+        | ("POST", "/v1/editor/temporary-sessions/{session_id}/story-range")
+        | ("POST", "/v1/editor/temporary-sessions/{session_id}/create-shape") => {
+            Some("temporary.commit")
+        }
+        _ => None,
+    }
+}
+
+async fn trace_temporary_editor_request(
+    State(state): State<GuestReaderHttpState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let stage = request.extensions().get::<MatchedPath>().and_then(|path| {
+        temporary_editor_trace_stage(request.method(), path.as_str())
+    });
+    let context = ReaderObservabilityV1::context_from_headers(request.headers());
+    let started = Instant::now();
+    let response = next.run(request).await;
+    let outcome = if response.status().is_success() {
+        "success"
+    } else if response.status().is_client_error() {
+        "rejected"
+    } else if response.status().is_server_error() {
+        "error"
+    } else {
+        "unknown"
+    };
+    if let Some(stage) = stage {
+        state.observability.record(stage, context.as_ref(), outcome, started.elapsed());
+    }
+    response
 }
 
 /// Explicit anonymous owner revocation. The SQLite state transition denies
@@ -4345,6 +4398,45 @@ mod tests {
             expires_at_ms: now_ms + 60_000,
             quarantine_deleted_at_ms: None,
         }
+    }
+
+    #[test]
+    fn temporary_trace_matches_only_exact_guest_routes_and_methods() {
+        let prefix = "/v1/editor/temporary-sessions/{session_id}";
+        assert_eq!(
+            temporary_editor_trace_stage(&Method::POST, "/v1/editor/temporary-sessions"),
+            Some("temporary.session_create")
+        );
+        for endpoint in ["move-node", "resize-node", "story-range", "create-shape"] {
+            assert_eq!(
+                temporary_editor_trace_stage(&Method::POST, &format!("{prefix}/{endpoint}")),
+                Some("temporary.commit")
+            );
+        }
+        for endpoint in ["current", "scene"] {
+            assert!(temporary_editor_trace_stage(
+                &Method::GET, &format!("{prefix}/{endpoint}"),
+            ).is_some());
+        }
+        assert_eq!(
+            temporary_editor_trace_stage(&Method::GET, &format!("{prefix}/exports/{{target}}")),
+            Some("temporary.export")
+        );
+        assert_eq!(temporary_editor_trace_stage(&Method::DELETE, prefix), Some("temporary.delete"));
+        assert_eq!(
+            temporary_editor_trace_stage(&Method::POST, &format!("{prefix}/exports/{{target}}")),
+            None
+        );
+        assert_eq!(
+            temporary_editor_trace_stage(&Method::GET, "/v1/editor/product/workspaces"),
+            None
+        );
+        assert_eq!(
+            temporary_editor_trace_stage(
+                &Method::GET,
+                "/v1/editor/temporary-sessions/tempedit:private-session-id/current",
+            ), None
+        );
     }
 
     #[test]

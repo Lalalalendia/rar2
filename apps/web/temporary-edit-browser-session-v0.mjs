@@ -14,6 +14,30 @@ const SAFE_SERVER_ERRORS = new Set([
   "guest_source_scan_failed", "guest_scene_worker_failed", "guest_upload_admission_failed",
 ]);
 
+
+function optionalGuestTraceContext(trace, operationClass) {
+  try {
+    return trace?.recorder?.createContext({
+      operationClass, interactionId: trace.interactionId,
+    }) ?? null;
+  } catch { return null; } // Diagnostics are never semantic authority.
+}
+function optionalGuestTraceHeaders(trace, context) {
+  try { return context ? (trace?.headersFor?.(context) ?? {}) : {}; }
+  catch { return {}; }
+}
+function guestTraceTimeMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+function markGuestHttpTrace(trace, context, started, outcome) {
+  if (!context) return;
+  try {
+    trace?.recorder?.mark("browser.guest_http", context, {
+      outcome, durationMs: Math.max(0, guestTraceTimeMs() - started),
+    });
+  } catch { /* Telemetry never gates the upload or deletion. */ }
+}
+
 function fail(code, status) {
   const error = new Error(code);
   error.code = code;
@@ -98,8 +122,9 @@ function snapshot(reply) {
 export class TemporaryEditBrowserSessionV0 {
   #record = null;
   #busy = false;
+  #trace = null;
 
-  constructor({ fetchImpl = globalThis.fetch, storage = null, csrfToken } = {}) {
+  constructor({ fetchImpl = globalThis.fetch, storage = null, csrfToken, trace = null } = {}) {
     if (typeof fetchImpl !== "function" || typeof csrfToken !== "string"
         || !/^[0-9a-f]{32}$/.test(csrfToken)) {
       throw fail("temporary_client_config_invalid");
@@ -107,6 +132,23 @@ export class TemporaryEditBrowserSessionV0 {
     this.fetchImpl = fetchImpl;
     this.storage = storage;
     this.csrfToken = csrfToken;
+    this.#trace = trace;
+  }
+
+  async #fetchTraced(path, options, context) {
+    const started = guestTraceTimeMs();
+    let outcome = "unknown";
+    try {
+      const response = await this.fetchImpl.call(globalThis, path, options);
+      outcome = response?.ok ? "success" :
+        response?.status >= 500 ? "error" : "rejected";
+      return response;
+    } catch (error) {
+      outcome = "error";
+      throw error;
+    } finally {
+      markGuestHttpTrace(this.#trace, context, started, outcome);
+    }
   }
 
   #save(record) {
@@ -148,18 +190,20 @@ export class TemporaryEditBrowserSessionV0 {
     return this.#restore() !== null;
   }
 
-  async #request(path, { method = "GET", body, token, contentType, signal } = {}) {
+  async #request(path, { method = "GET", body, token, contentType, signal,
+    traceContext = null } = {}) {
     const headers = {
       "accept": "application/json",
       "x-csrf-token": this.csrfToken,
+      ...optionalGuestTraceHeaders(this.#trace, traceContext),
     };
     if (token) headers["x-chaptera-reader-session"] = token;
     if (contentType) headers["content-type"] = contentType;
-    const response = await this.fetchImpl.call(globalThis, path, {
+    const response = await this.#fetchTraced(path, {
       method, headers, body, signal,
       credentials: "omit", cache: "no-store", redirect: "error",
       referrerPolicy: "no-referrer",
-    });
+    }, traceContext);
     return readJson(response);
   }
 
@@ -169,11 +213,12 @@ export class TemporaryEditBrowserSessionV0 {
       throw fail("temporary_file_invalid");
     }
     this.#busy = true;
+    const traceContext = optionalGuestTraceContext(this.#trace, "open");
     let uploaded = false;
     try {
       this.clear();
       const issued = await this.#request("/v1/editor/temporary-sessions", {
-        method: "POST", signal, contentType: "application/json",
+        method: "POST", signal, traceContext, contentType: "application/json",
         body: JSON.stringify({ expected_byte_len: file.size }),
       });
       if (issued.protocol_version !== TEMPORARY_EDIT_PROTOCOL
@@ -198,7 +243,7 @@ export class TemporaryEditBrowserSessionV0 {
       this.#save(session);
       const stored = await this.#request(pathFor(session.session_id, "content"), {
         method: "PUT", body: file, token: session.access_token,
-        contentType: "application/octet-stream", signal,
+        contentType: "application/octet-stream", signal, traceContext,
       });
       checkBinding(stored, session.session_id);
       if (stored.state !== "stored") throw fail("temporary_upload_state_invalid");
@@ -209,7 +254,7 @@ export class TemporaryEditBrowserSessionV0 {
       try {
         opened = await this.#request(pathFor(session.session_id, "open"), {
           method: "POST", body: "{}", contentType: "application/json",
-          token: session.access_token, signal,
+          token: session.access_token, signal, traceContext,
         });
       } catch (error) {
         // /open may have completed its authoritative transition and returned
@@ -221,7 +266,7 @@ export class TemporaryEditBrowserSessionV0 {
           throw error;
         }
         opened = await this.#request(pathFor(session.session_id, "scene"), {
-          token: session.access_token, signal,
+          token: session.access_token, signal, traceContext,
         });
       }
       checkBinding(opened, session.session_id);
@@ -245,9 +290,9 @@ export class TemporaryEditBrowserSessionV0 {
     const session = this.#restore();
     if (!session) throw fail("temporary_session_missing");
     this.#busy = true;
+    const traceContext = optionalGuestTraceContext(this.#trace, "other");
     try {
-      const response = await this.fetchImpl.call(
-        globalThis,
+      const response = await this.#fetchTraced(
         "/v1/editor/temporary-sessions/" + session.session_id,
         {
           method: "DELETE",
@@ -255,11 +300,13 @@ export class TemporaryEditBrowserSessionV0 {
             "x-chaptera-reader-session": session.access_token,
             "x-csrf-token": this.csrfToken,
             "accept": "application/json",
+            ...optionalGuestTraceHeaders(this.#trace, traceContext),
           },
           signal,
           credentials: "omit", cache: "no-store", redirect: "error",
           referrerPolicy: "no-referrer",
         },
+        traceContext,
       );
       if (response?.status !== 204 || !response.ok) {
         throw fail("temporary_delete_not_confirmed", response?.status);
@@ -276,6 +323,7 @@ export class TemporaryEditBrowserSessionV0 {
     const session = this.#restore();
     if (!session) return { kind: "missing" };
     this.#busy = true;
+    const traceContext = optionalGuestTraceContext(this.#trace, "reconnect");
     try {
       // GET does not renew TTL. If upload was already accepted but the
       // scanner/open handshake was interrupted, retry only that exact open.
@@ -283,13 +331,13 @@ export class TemporaryEditBrowserSessionV0 {
       let reply;
       try {
         reply = await this.#request(pathFor(session.session_id, "scene"), {
-          token: session.access_token, signal,
+          token: session.access_token, signal, traceContext,
         });
       } catch (error) {
         if (error?.status !== 409 || error?.code !== "guest_scene_not_ready") throw error;
         reply = await this.#request(pathFor(session.session_id, "open"), {
           method: "POST", body: "{}", contentType: "application/json",
-          token: session.access_token, signal,
+          token: session.access_token, signal, traceContext,
         });
       }
       checkBinding(reply, session.session_id);

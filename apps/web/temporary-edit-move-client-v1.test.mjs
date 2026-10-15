@@ -1,4 +1,5 @@
 import test from "node:test";
+import { BrowserObservabilityV1, traceHeadersV1 } from "./observability-v1.mjs";
 import assert from "node:assert/strict";
 import {
   TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates,
@@ -45,7 +46,7 @@ function reply(body, code = 200, extraHeaders = {}) {
     status: code, headers: { "content-type": "application/json", ...extraHeaders },
   });
 }
-function harness(responses, { sleepImpl } = {}) {
+function harness(responses, { sleepImpl, trace = null } = {}) {
   const requests = [];
   const feed = [...responses];
   const fetchImpl = async (url, options) => {
@@ -57,7 +58,7 @@ function harness(responses, { sleepImpl } = {}) {
   };
   const client = new TemporaryGuestMoveClientV1({
     sessionId: session, accessToken: bearer, sourceHash: source, csrfToken: csrf,
-    fetchImpl, operationIdFactory: () => "test-move-1", sleepImpl,
+    fetchImpl, operationIdFactory: () => "test-move-1", sleepImpl, trace,
   });
   return { client, requests };
 }
@@ -75,6 +76,51 @@ const validScene = {
     document_id: session, source_hash: source, revision_id: beforeRev,
     pages: [], nodes: [] },
 };
+
+test("trace correlates accepted MoveNode, canonical Current, Scene and export report", async () => {
+  let counter = 0;
+  const recorder = new BrowserObservabilityV1({
+    sessionIncarnation: "tab:guest-fixture-87654321",
+    browserFamily: "chromium",
+    idFactory: prefix => prefix + ":" + String(++counter).padStart(8, "0"),
+  });
+  const trace = {
+    recorder, headersFor: traceHeadersV1,
+    interactionId: "interaction:guest-editor-12345678",
+  };
+  const revisedScene = {
+    ...validScene, revision_id: afterRev, expires_at_ms: newExpiry,
+    scene: {...validScene.scene, revision_id: afterRev},
+  };
+  const exportReport = {
+    protocol_version: "chaptera.temporary-edited-export-report.v1",
+    target: "pdf", source_hash: source, revision_id: afterRev,
+    canonical_authoring_revision_id: afterCanon,
+    artifact_sha256: "a".repeat(64), loss_report: {},
+  };
+  const {client, requests} = harness(
+    [before, accepted(), after, revisedScene, exportReport], {trace},
+  );
+  await client.refresh();
+  await client.moveNode(move);
+  await client.readerScene();
+  await client.exportEdited("pdf", {reportOnly: true});
+  assert.equal(requests.length, 5);
+  const headers = requests.map(request => request.options.headers);
+  assert.equal(headers[0]["x-chaptera-operation-class"], "scene_read");
+  assert.equal(headers[1]["x-chaptera-operation-class"], "commit");
+  assert.equal(headers[1]["x-chaptera-trace-id"], headers[2]["x-chaptera-trace-id"]);
+  assert.equal(headers[1]["x-chaptera-trace-id"], headers[3]["x-chaptera-trace-id"]);
+  assert.equal(headers[4]["x-chaptera-operation-class"], "export");
+  assert.notEqual(headers[4]["x-chaptera-trace-id"], headers[1]["x-chaptera-trace-id"]);
+  assert(headers.every(h => h["x-chaptera-interaction-id"] === trace.interactionId));
+  const receipt = recorder.receipt(headers[1]["x-chaptera-trace-id"]);
+  assert.equal(receipt.span_count, 3);
+  assert.equal(receipt.contains_document_payload, false);
+  assert.equal(receipt.semantic_authority, false);
+  assert.ok(!JSON.stringify(receipt).includes(bearer));
+  assert.ok(!JSON.stringify(receipt).includes(source));
+});
 
 test("private current GET honors server Retry-After once, preserving exact bearer", async () => {
   const waits = [];
