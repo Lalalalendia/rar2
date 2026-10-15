@@ -51,7 +51,6 @@ struct SourcePdfLineStyleV1 {
     font_size_emu: Option<i64>,
 }
 
-
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SourceTypographyCensusV1 {
     framed_current_runs: usize,
@@ -366,7 +365,6 @@ fn render_current_fixed_pdf_with_sheet(
                     .is_some_and(|story| run.applies_to_story_text(&story.text))
             }),
     );
-
 
     // The same pinned, license-disclosed fallback used by the Chaptera Reader.
     // Never discover or copy host/customer source fonts.
@@ -1284,15 +1282,13 @@ mod source_pdf_style_tests {
     #[test]
     fn source_style_census_separates_known_bold_italic_and_unknown_without_names() {
         let source = "Heading";
-        let mut inherited_bold =
-            typography((0, 3), Some([211, 8, 81]), 28 * 12_700, source);
+        let mut inherited_bold = typography((0, 3), Some([211, 8, 81]), 28 * 12_700, source);
         inherited_bold.bold = Some(pub_viewer::ViewerTypographyBooleanV1 {
             local_toggle: false,
             inherited_value: true,
             effective_value: true,
         });
-        let mut suppressed_bold =
-            typography((3, 7), Some([211, 8, 81]), 28 * 12_700, source);
+        let mut suppressed_bold = typography((3, 7), Some([211, 8, 81]), 28 * 12_700, source);
         suppressed_bold.source_font_index = None;
         suppressed_bold.source_font_name = "Other Family".into();
         suppressed_bold.bold = Some(pub_viewer::ViewerTypographyBooleanV1 {
