@@ -42,6 +42,36 @@ class PacketContract(unittest.TestCase):
         ):
             self.assertIn(filename, direct)
 
+    def test_native_environment_handoff_is_same_process_and_revalidated(self):
+        # prepare_native_run.ps1 exports these variables to its *process*.
+        # Separate pwsh commands lose the fixture / Publisher executable
+        # bindings, allowing native execution to fail or depend on ambient env.
+        direct = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn(
+            "& (Join-Path $repo 'tools/research-runner/prepare_native_run.ps1')",
+            direct,
+        )
+        self.assertIn("& $operationPath -PacketPath $packetPath", direct)
+        self.assertIn(
+            "& (Join-Path $repo 'tools/research-runner/finalize_native_run.ps1')",
+            direct,
+        )
+        self.assertNotIn(
+            "InvokeTool 'pwsh' @('-NoProfile','-File','tools/research-runner/prepare_native_run.ps1'",
+            direct,
+        )
+        for name in ("PUB_RESEARCH_FIXTURE", "PUB_RESEARCH_PUBLISHER_EXE"):
+            self.assertIn(f"Remove-Item Env:{name}", direct)
+            self.assertIn(f"$env:{name}", direct)
+        self.assertIn(
+            "Prepared fixture binding missing or changed after native preflight",
+            direct,
+        )
+        self.assertIn(
+            "Prepared Publisher executable binding missing or changed after native preflight",
+            direct,
+        )
+
     def test_no_ambient_source_downloads(self):
         for path in (SCRIPT, LAUNCHER):
             script = path.read_text(encoding="utf-8").lower()
