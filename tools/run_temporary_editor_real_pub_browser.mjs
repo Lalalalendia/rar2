@@ -384,6 +384,37 @@ try {
   }
 
   const target = exportTarget;
+  // The read-only verified PDF preview is part of the real user journey.
+  // Use the SAME accepted canonical revision and independently check the
+  // browser download's physical SHA later. No extra authoring operation.
+  let currentPdfPreviewDigest = null;
+  if (target === "pdf") {
+    const postsBefore = observed.requests.filter(request =>
+      request.method === "POST" && /\/(move-node|resize-node|story-range|create-shape)$/.test(request.path)).length;
+    const preview = page.locator("#temporary-preview-pdf");
+    await preview.waitFor({state:"visible"});
+    assert.equal(await preview.isEnabled(), true);
+    await preview.click();
+    await page.waitForFunction(() =>
+      document.querySelector("#temporary-pdf-preview")?.hidden === false,
+      null, {timeout: 120000});
+    const frameUrl = await page.locator("#temporary-pdf-frame").getAttribute("src");
+    assert.match(frameUrl ?? "", /^blob:/, "real preview is not a private verified blob");
+    const previewReport = observed.reports.at(-1);
+    assert.equal(previewReport?.revision_id, accepted.revision_id);
+    assert.equal(previewReport?.canonical_authoring_revision_id,
+      accepted.canonical_authoring_revision_id);
+    assert.equal(previewReport?.source_hash, fixtureHash);
+    assert.equal(previewReport?.target, "pdf");
+    currentPdfPreviewDigest = previewReport.artifact_sha256;
+    assert.match(await page.locator("#temporary-pdf-preview-info").textContent(),
+      /PDF сохранённой ревизии/);
+    assert.equal(observed.requests.filter(request =>
+      request.method === "POST" && /\/(move-node|resize-node|story-range|create-shape)$/.test(request.path)).length,
+      postsBefore, "opening the PDF preview must not mutate the revision or TTL");
+    // Bounded anonymous GET admission bucket refills without a TTL renewal.
+    await page.waitForTimeout(5200);
+  }
   await page.locator("#temporary-download-" + target).waitFor({state:"visible"});
   const downloadPromise = page.waitForEvent("download", { timeout: 90000 });
   await page.locator("#temporary-download-" + target).click();
@@ -402,6 +433,10 @@ try {
   assert.equal(report?.source_hash, fixtureHash);
   assert.equal(report?.target, target);
   assert.equal(sha256(artifact), report.artifact_sha256);
+  if (target === "pdf") {
+    assert.equal(sha256(artifact), currentPdfPreviewDigest,
+      "inline exact-revision PDF and downloaded edited PDF bytes differ");
+  }
   assert.ok(report.loss_report?.can_serialize === true);
   assert.equal(report.loss_report?.counts?.blocking,0);
   if (target === "pdf") {
