@@ -201,6 +201,13 @@ export async function bootTemporaryEditorPreview({
   const sheetFrame = documentObject?.getElementById("temporary-sheet-pdf-frame");
   const sheetPreviewEnabled = !!(sheetPreviewButton && sheetPreview && sheetFrame);
   const editorEnabled = !!(actions && idmlButton && odgButton);
+  const pdfPreviewButton = documentObject?.getElementById("temporary-preview-pdf");
+  const pdfPreviewCloseButton = documentObject?.getElementById("temporary-close-pdf-preview");
+  const pdfPreview = documentObject?.getElementById("temporary-pdf-preview");
+  const pdfPreviewFrame = documentObject?.getElementById("temporary-pdf-frame");
+  const pdfPreviewInfo = documentObject?.getElementById("temporary-pdf-preview-info");
+  const pdfPreviewEnabled = !!(editorEnabled && pdfPreviewButton && pdfPreviewCloseButton &&
+    pdfPreview && pdfPreviewFrame && pdfPreviewInfo);
   const drawEnabled = editorEnabled && !!drawButton;
   const viewButtons = {
     prev: documentObject?.getElementById("temporary-page-prev"),
@@ -241,6 +248,7 @@ export async function bootTemporaryEditorPreview({
   let selectedResizePageId = null;
   let resizeHandleElements = [];
   let sheetPreviewUrl = null;
+  let pdfPreviewUrl = null;
   let viewportZoom = {mode:"fit",percent:100};
   let activeViewportPageIndex = 0;
   const buttons = [startButton,resumeButton,forgetButton,deleteButton].filter(Boolean);
@@ -322,6 +330,10 @@ export async function bootTemporaryEditorPreview({
         pdfButton.disabled = !canExport;
         pdfButton.textContent = canDownloadEdited ? "Скачать изменённый PDF" : "Скачать PDF";
       }
+      if (pdfPreviewEnabled) {
+        pdfPreviewButton.disabled = !canExport;
+        pdfPreviewCloseButton.disabled = busy || editBusy || pdfPreview.hidden;
+      }
       if (pdf9upButton || sheetPreviewEnabled) {
         const validCard = interaction?.pages?.length === 1 &&
           interaction.pages[0]?.width_emu === 3060000 &&
@@ -349,6 +361,17 @@ export async function bootTemporaryEditorPreview({
   }
 
   function clearSheetPreview() {
+    // Invalidate both local PDF blobs on every changed/unknown revision and
+    // session lifecycle transition. A blob URL must never outlive its source.
+    if (pdfPreviewEnabled) {
+      pdfPreviewFrame.src = "";
+      pdfPreview.hidden = true;
+      pdfPreviewInfo.textContent = "";
+      if (pdfPreviewUrl !== null) {
+        URL.revokeObjectURL(pdfPreviewUrl);
+        pdfPreviewUrl = null;
+      }
+    }
     if (!sheetPreviewEnabled) return;
     sheetFrame.src = "";
     sheetPreview.hidden = true;
@@ -987,6 +1010,49 @@ export async function bootTemporaryEditorPreview({
     }
   }
 
+  async function previewCurrentPdf() {
+    if (storyDraftDirty() || composingStory) {
+      clearSheetPreview();
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед предпросмотром PDF.";
+      return;
+    }
+    if (!pdfPreviewEnabled || !moveClient || !canonicalCurrent ||
+        pdfPreviewButton.disabled || busy || editBusy) return;
+    editBusy = true;
+    clearSheetPreview();
+    controls();
+    status.textContent = "Готовится PDF последней сохранённой ревизии…";
+    try {
+      const report = await moveClient.exportEdited("pdf", {reportOnly: true});
+      if (report.loss_report?.can_serialize === false) {
+        throw new Error("temporary_pdf_preview_serialization_refused");
+      }
+      const result = await moveClient.exportEdited("pdf", {
+        expectedSha256: report.artifact_sha256,
+      });
+      if (result.revision_id !== canonicalCurrent.revision_id) {
+        throw new Error("temporary_pdf_preview_revision_mismatch");
+      }
+      // Only the already SHA-verified, revision-bound bytes get a local blob:
+      // no bearer or PDF bytes are placed in the iframe URL or persistent cache.
+      pdfPreviewUrl = URL.createObjectURL(result.blob);
+      pdfPreviewFrame.src = pdfPreviewUrl;
+      pdfPreview.hidden = false;
+      const counts = report.loss_report?.counts;
+      pdfPreviewInfo.textContent = "PDF сохранённой ревизии. Потери/ограничения: " +
+        (counts && typeof counts === "object" ? JSON.stringify(counts) : "не указаны") +
+        ". " + (partialFidelity ? "Needs review / Partial — проверьте результат." :
+          "Предпросмотр не гарантирует идентичность Microsoft Publisher.");
+      status.textContent = "PDF текущей сохранённой ревизии проверен по идентичности и SHA-256.";
+    } catch {
+      clearSheetPreview();
+      status.textContent = "Предпросмотр PDF не подтверждён. Проверьте сессию и текущую ревизию.";
+    } finally {
+      editBusy = false;
+      controls();
+    }
+  }
+
   async function previewNineUp() {
     if (storyDraftDirty() || composingStory) {
       status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед предпросмотром.";
@@ -1076,7 +1142,10 @@ export async function bootTemporaryEditorPreview({
   deleteButton?.addEventListener("click", () => deleteServer());
   if (storyEnabled) {
     storySelect.addEventListener("change", () => activateStory(storySelect.value));
-    storyText.addEventListener("input", controls);
+    storyText.addEventListener("input", () => {
+      if (storyDraftDirty()) clearSheetPreview();
+      controls();
+    });
     storyDiscard?.addEventListener("click", () => {
       if (composingStory || busy || editBusy || !activeStoryId) return;
       const selected = storyCandidates.find(entry => entry.story_id === activeStoryId);
@@ -1087,6 +1156,7 @@ export async function bootTemporaryEditorPreview({
     });
     storyText.addEventListener("compositionstart", () => {
       composingStory = true;
+      clearSheetPreview();
       controls();
     });
     storyText.addEventListener("compositionend", () => {
@@ -1120,6 +1190,15 @@ export async function bootTemporaryEditorPreview({
     idmlButton.addEventListener("click", () => download("idml"));
     odgButton.addEventListener("click", () => download("odg"));
     pdfButton?.addEventListener("click", () => download("pdf"));
+    if (pdfPreviewEnabled) {
+      pdfPreviewButton.addEventListener("click", () => previewCurrentPdf());
+      pdfPreviewCloseButton.addEventListener("click", () => {
+        if (busy || editBusy) return;
+        clearSheetPreview();
+        status.textContent = "Локальный предпросмотр PDF закрыт.";
+        controls();
+      });
+    }
     pdf9upButton?.addEventListener("click", () => download("pdf9up"));
     if (sheetPreviewEnabled) sheetPreviewButton.addEventListener("click", () => previewNineUp());
   }

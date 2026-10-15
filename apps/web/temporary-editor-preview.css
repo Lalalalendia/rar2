@@ -313,6 +313,11 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 }
 .sheet-preview h3 { margin: 0 0 7px; font-size: 12px; }
 .sheet-preview iframe { display: block; width: min(100%, 920px); aspect-ratio: 297 / 210; margin-top: 12px; border: 1px solid #3b4b60; background: #fff; }
+#temporary-pdf-preview { max-height: min(75vh, 900px); }
+.pdf-preview-header { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
+.pdf-preview-header h3 { margin: 0; }
+#temporary-pdf-frame { aspect-ratio: auto; height: min(62vh, 760px); min-height: 290px; }
+#temporary-pdf-preview-info { margin-top: 12px; overflow-wrap: anywhere; }
 :focus-visible { outline: 2px solid #79aeff; outline-offset: 3px; }
 
 @media (max-width: 860px) {
