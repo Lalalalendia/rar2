@@ -50,13 +50,16 @@
     <h2 id="story-heading">Изменить текст</h2>
     <details class="story-help">
       <summary>Ограничения редактирования текста</summary>
-      <p class="secondary">Поддерживается простой текст одной несвязанной рамки. Существующие окончания строк сохраняются; новые абзацы и сложное оформление не поддерживаются. Все изменения подтверждает сервер.</p>
+      <p class="secondary">Поддерживается простой текст одной несвязанной рамки. Выберите рамку прямо на странице или в списке. Несохранённый ввод нужно применить либо сбросить перед переключением. Существующие окончания строк сохраняются; новые абзацы и сложное оформление не поддерживаются. Все изменения подтверждает сервер.</p>
     </details>
     <label for="temporary-story-select">Текстовая рамка</label>
     <select id="temporary-story-select"></select>
     <label for="temporary-story-text">Текст</label>
     <textarea id="temporary-story-text" rows="4" spellcheck="false"></textarea>
-    <div class="actions"><button id="temporary-story-apply" type="button" disabled>Сохранить текст</button></div>
+    <div class="actions">
+      <button id="temporary-story-apply" type="button" disabled>Сохранить текст</button>
+      <button id="temporary-story-discard" type="button" disabled>Сбросить черновик</button>
+    </div>
   </section>
   <section class="panel" aria-labelledby="pages-heading">
     <h2 id="pages-heading">Страницы <span class="canvas-hint">Выберите объект или включите инструмент прямоугольника и протяните по странице</span></h2>

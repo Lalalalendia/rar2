@@ -212,6 +212,8 @@ def main() -> int:
                     receipt.get("real_chromium") is not True or
                     receipt.get("browser_story_commits") != 1 or
                     receipt.get("guest_story_ui_commit") is not True or
+                    receipt.get("canvas_story_pick_proven") is not True or
+                    receipt.get("canvas_pick_no_mutation") is not True or
                     receipt.get("export_target") != target or
                     receipt.get("target_consumer_text_recovered") is not True or
                     receipt.get("physical_target_xml_consumer") is not True or

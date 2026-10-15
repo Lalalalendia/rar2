@@ -151,6 +151,18 @@ export function temporaryRectangleDragBounds(start, end, page) {
   return {x, y, width, height};
 }
 
+// Canvas is only a selection surface; ownership and edit eligibility come from
+// the authoritative authoring graph and the existing plain-Story gate.
+export function temporaryCanvasStoryId(graph, candidates, nodeId, pageId) {
+  if (!graph?.nodes || !graph?.pages ||
+      !Object.prototype.hasOwnProperty.call(graph.pages, pageId)) return null;
+  const node = graph.nodes[nodeId];
+  if (!node || node.header?.parent_id !== pageId) return null;
+  const storyId = node.payload?.story_frame?.story_id;
+  if (typeof storyId !== "string" || !Array.isArray(candidates)) return null;
+  return candidates.some(candidate => candidate.story_id === storyId) ? storyId : null;
+}
+
 export async function bootTemporaryEditorPreview({
   documentObject = globalThis.document,
   cryptoObject = globalThis.crypto,
@@ -204,6 +216,7 @@ export async function bootTemporaryEditorPreview({
   const storySelect = documentObject?.getElementById("temporary-story-select");
   const storyText = documentObject?.getElementById("temporary-story-text");
   const storyApply = documentObject?.getElementById("temporary-story-apply");
+  const storyDiscard = documentObject?.getElementById("temporary-story-discard");
   const storyEnabled = !!(editorEnabled && storyPanel && storySelect && storyText && storyApply);
   const csrfToken = newCsrfToken(cryptoObject);
   const client = new TemporaryEditBrowserSessionV0({
@@ -218,6 +231,7 @@ export async function bootTemporaryEditorPreview({
   let partialFidelity = false;
   let storyCandidates = [];
   let composingStory = false;
+  let activeStoryId = null;
   let gesture = null;
   let gesturePage = null;
   let gestureOverlay = null;
@@ -294,7 +308,8 @@ export async function bootTemporaryEditorPreview({
       actions.hidden = !moveClient;
       const canExport = !busy && !editBusy && moveClient &&
         !moveClient.status.pending_reconciliation &&
-        !moveClient.status.refresh_required && canonicalCurrent !== null;
+        !moveClient.status.refresh_required && canonicalCurrent !== null &&
+        !storyDraftDirty() && !composingStory;
       const canDownloadEdited = canExport && canonicalCurrent.revision_cursor > 0;
       if (drawEnabled) {
         drawButton.disabled = !canExport || !interaction?.pages?.length;
@@ -328,6 +343,7 @@ export async function bootTemporaryEditorPreview({
       storySelect.disabled = locked;
       storyText.disabled = locked;
       storyApply.disabled = locked || composingStory || storyCandidates.length === 0;
+      if (storyDiscard) storyDiscard.disabled = locked || composingStory || !storyDraftDirty();
     }
     refreshViewportControls();
   }
@@ -340,6 +356,34 @@ export async function bootTemporaryEditorPreview({
       URL.revokeObjectURL(sheetPreviewUrl);
       sheetPreviewUrl = null;
     }
+  }
+
+  function storyDraftDirty() {
+    if (!storyEnabled || !activeStoryId) return false;
+    const current = storyCandidates.find(entry => entry.story_id === activeStoryId);
+    return !!current && storyText.value !== temporaryStoryTextForTextarea(current.text);
+  }
+
+  function activateStory(storyId) {
+    if (!storyEnabled) return false;
+    const selected = storyCandidates.find(entry => entry.story_id === storyId);
+    if (!selected) {
+      storySelect.value = activeStoryId ?? "";
+      return false;
+    }
+    if (composingStory || (storyDraftDirty() && storyId !== activeStoryId)) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед выбором другой рамки.";
+      storySelect.value = activeStoryId ?? "";
+      return false;
+    }
+    // Clicking the current Story must not wipe an unsaved in-progress draft.
+    if (storyId !== activeStoryId) {
+      storySelect.value = storyId;
+      storyText.value = temporaryStoryTextForTextarea(selected.text);
+      activeStoryId = storyId;
+    }
+    controls();
+    return true;
   }
 
   function refreshStoryEditor(preferredStoryId = null) {
@@ -358,6 +402,7 @@ export async function bootTemporaryEditorPreview({
       storyCandidates[0];
     storySelect.value = selected?.story_id ?? "";
     storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
+    activeStoryId = selected?.story_id ?? null;
     storyPanel.hidden = !moveClient || !selected;
   }
 
@@ -454,6 +499,7 @@ export async function bootTemporaryEditorPreview({
     interaction = null;
     storyCandidates = [];
     composingStory = false;
+    activeStoryId = null;
     refreshStoryEditor();
   }
 
@@ -522,6 +568,10 @@ export async function bootTemporaryEditorPreview({
 
   async function guarded(operation) {
     if (busy || editBusy) return;
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед открытием другой сессии.";
+      return;
+    }
     busy = true;
     clearSheetPreview();
     controls();
@@ -573,6 +623,10 @@ export async function bootTemporaryEditorPreview({
 
   async function deleteServer() {
     if (busy || editBusy || !deleteButton || !client.hasSavedSession()) return;
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед удалением сессии.";
+      return;
+    }
     if (typeof confirmDelete !== "function" ||
         !confirmDelete("Удалить временный PUB и все изменения с сервера? Отменить удаление нельзя.")) {
       return;
@@ -603,6 +657,10 @@ export async function bootTemporaryEditorPreview({
 
   function forget() {
     if (busy || editBusy) return;
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед удалением ключа вкладки.";
+      return;
+    }
     client.clear();
     clearEditor();
     pages.replaceChildren();
@@ -619,6 +677,10 @@ export async function bootTemporaryEditorPreview({
   }
 
   function pointerDown(event) {
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед работой с холстом.";
+      return;
+    }
     if (event.button !== 0 || !moveClient || busy || editBusy || gesture || rectangleDraft ||
         moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
     const svg = pageFromEvent(event);
@@ -648,8 +710,25 @@ export async function bootTemporaryEditorPreview({
         gesture = new ResizeTransactionV1(nodeId, candidate.bounds, handle, point);
       } else {
         const visualId = event.target?.closest?.("[data-node-id]")?.getAttribute?.("data-node-id");
-        const hit = hitTestSnapshot(interaction, svg.getAttribute("data-page-id"), point);
-        if (hit.kind !== "hit" || (visualId && hit.node_id !== visualId)) return;
+        const pageId = svg.getAttribute("data-page-id");
+        const hit = hitTestSnapshot(interaction, pageId, point);
+        const selectedNodeId = hit.kind === "hit" &&
+          (!visualId || hit.node_id === visualId) ? hit.node_id
+          : hit.kind === "ambiguous" && visualId && hit.node_ids.includes(visualId)
+            ? visualId : null;
+        if (!selectedNodeId) return;
+        const selectedStoryId = temporaryCanvasStoryId(
+          canonicalCurrent?.authoring_graph, storyCandidates, selectedNodeId, pageId);
+        if (selectedStoryId && activateStory(selectedStoryId)) {
+          status.textContent = "Текстовая рамка выбрана на странице. Измените текст в панели и сохраните правку.";
+        }
+        // Visual SVG identity is enough for a non-mutating Story pick even
+        // when stacking is ambiguous. It is never enough to authorize MoveNode.
+        if (hit.kind !== "hit") {
+          clearResizeHandles({forget: true});
+          event.preventDefault?.();
+          return;
+        }
         gesture = new MoveGestureV1(interaction, hit.node_id, point);
         drawResizeHandles(svg, hit.node_id);
         // Keyboard authoring belongs to the canvas, not the Story textarea.
@@ -813,8 +892,8 @@ export async function bootTemporaryEditorPreview({
       ArrowUp: [0, -TEMPORARY_NUDGE_STEP_EMU],
       ArrowDown: [0, TEMPORARY_NUDGE_STEP_EMU],
     }[event.key];
-    if (!delta || event.target !== pages || event.defaultPrevented ||
-        event.isComposing || composingStory || event.altKey || event.ctrlKey ||
+    if (!delta || storyDraftDirty() || composingStory || event.target !== pages || event.defaultPrevented ||
+        event.isComposing || event.altKey || event.ctrlKey ||
         event.metaKey || event.shiftKey || gesture || busy || editBusy ||
         !moveClient || !canonicalCurrent || !interaction ||
         moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
@@ -870,7 +949,7 @@ export async function bootTemporaryEditorPreview({
   async function applyStoryEdit() {
     if (!storyEnabled || busy || editBusy || composingStory || !moveClient ||
         moveClient.status.pending_reconciliation || moveClient.status.refresh_required) return;
-    const storyId = storySelect.value;
+    const storyId = activeStoryId;
     const candidate = storyCandidates.find(entry => entry.story_id === storyId);
     const replacement = storyText.value;
     try {
@@ -909,6 +988,10 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function previewNineUp() {
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед предпросмотром.";
+      return;
+    }
     if (!sheetPreviewEnabled || !moveClient || !canonicalCurrent ||
         sheetPreviewButton.disabled || busy || editBusy) return;
     editBusy = true;
@@ -935,6 +1018,10 @@ export async function bootTemporaryEditorPreview({
   }
 
   async function download(target) {
+    if (storyDraftDirty() || composingStory) {
+      status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед скачиванием файла.";
+      return;
+    }
     if (!moveClient || !canonicalCurrent || busy || editBusy) return;
     editBusy = true;
     controls();
@@ -988,9 +1075,15 @@ export async function bootTemporaryEditorPreview({
   forgetButton.addEventListener("click", forget);
   deleteButton?.addEventListener("click", () => deleteServer());
   if (storyEnabled) {
-    storySelect.addEventListener("change", () => {
-      const selected = storyCandidates.find(entry => entry.story_id === storySelect.value);
-      storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
+    storySelect.addEventListener("change", () => activateStory(storySelect.value));
+    storyText.addEventListener("input", controls);
+    storyDiscard?.addEventListener("click", () => {
+      if (composingStory || busy || editBusy || !activeStoryId) return;
+      const selected = storyCandidates.find(entry => entry.story_id === activeStoryId);
+      if (!selected) return;
+      storyText.value = temporaryStoryTextForTextarea(selected.text);
+      status.textContent = "Локальный черновик сброшен; сохранённая ревизия не менялась.";
+      controls();
     });
     storyText.addEventListener("compositionstart", () => {
       composingStory = true;
@@ -1004,6 +1097,10 @@ export async function bootTemporaryEditorPreview({
   }
   if (editorEnabled) {
     if (drawEnabled) drawButton.addEventListener("click", () => {
+      if (storyDraftDirty() || composingStory) {
+        status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед сменой инструмента.";
+        return;
+      }
       if (busy || editBusy || !moveClient ||
           moveClient.status.pending_reconciliation ||
           moveClient.status.refresh_required) return;
