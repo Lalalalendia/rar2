@@ -2139,6 +2139,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2181,6 +2182,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                            None,
             )
             .await?;
         if receipt.move_node.is_some()
@@ -2272,6 +2274,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2357,6 +2360,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2483,6 +2487,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 Some(intent),
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2607,6 +2612,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 Some(intent),
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2653,6 +2659,103 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_replay_receipt_invalid",
                 "CreateShape project differs from canonical replay",
+            ));
+        }
+        let _ = require_typed_graph(receipt.authoring_graph)?;
+        Ok((created.operation, created.resulting_project))
+    }
+
+    /// Source-backed, bounded plain Story text. The isolated EditorSession
+    /// derives expected_before and owns eligibility; the host verifies the
+    /// complete canonical event before any authorized RevisionStream commit.
+    pub async fn create_textbox(
+        &self,
+        document_id: &str,
+        source_sha256: &str,
+        source_bytes: &[u8],
+        base_project: &EditorProject,
+        expected_base_sha256: &str,
+        intent: &IsolatedCreateTextBoxIntentV1,
+    ) -> Result<(EditOperation, EditorProject), ProductReplayWorkerError> {
+        let expected = exact_create_textbox_operation(intent)?;
+        let project_bytes = serde_json::to_vec(base_project).map_err(|_| {
+            ProductReplayWorkerError::new(
+                "product_replay_project_invalid",
+                "canonical CreateTextBox base project could not be serialized",
+            )
+        })?;
+        if project_bytes.len() as u64 > MAX_PROJECT_BYTES
+            || project_sha256(base_project).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_replay_project_invalid",
+                    "CreateTextBox base identity cannot be derived",
+                )
+            })? != expected_base_sha256
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_project_hash_mismatch",
+                "CreateTextBox must target the exact current source-bound project",
+            ));
+        }
+        let receipt = self
+            .invoke_job(
+                document_id,
+                source_sha256,
+                source_bytes,
+                Some((&project_bytes, expected_base_sha256)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(intent),
+            )
+            .await?;
+        validate_product_replay_receipt(
+            &receipt,
+            document_id,
+            source_sha256,
+            source_bytes.len() as u64,
+            expected_base_sha256,
+        )?;
+        if receipt.baseline_project.is_some()
+            || receipt.move_node.is_some()
+            || receipt.resize_node.is_some()
+            || receipt.story_range.is_some()
+            || receipt.reader_scene.is_some()
+            || receipt.editable_export.is_some()
+        {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateTextBox worker returned unrelated authority",
+            ));
+        }
+        let created = receipt.create_textbox.ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateTextBox worker did not produce a mutation",
+            )
+        })?;
+        if created.operation != expected {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateTextBox operation differs from authorized intent",
+            ));
+        }
+        let expected_project =
+            append_event_operation(base_project.clone(), created.operation.clone()).map_err(
+                |_| {
+                    ProductReplayWorkerError::new(
+                        "product_replay_receipt_invalid",
+                        "CreateTextBox cannot form an exact event append",
+                    )
+                },
+            )?;
+        if expected_project != created.resulting_project {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "CreateTextBox project differs from canonical replay",
             ));
         }
         let _ = require_typed_graph(receipt.authoring_graph)?;
@@ -2711,6 +2814,7 @@ impl IsolatedProductReplayProducer {
                 None,
                 None,
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2822,6 +2926,7 @@ impl IsolatedProductReplayProducer {
                 Some(target),
                 None,
                 None,
+                            None,
             )
             .await?;
         validate_product_replay_receipt(
@@ -2878,6 +2983,7 @@ impl IsolatedProductReplayProducer {
         editable_export_target: Option<&str>,
         resize_node: Option<&IsolatedResizeNodeIntentV1>,
         create_shape: Option<&IsolatedCreateShapeIntentV1>,
+        create_textbox: Option<&IsolatedCreateTextBoxIntentV1>,
     ) -> Result<ProductReplayWorkerReceiptV1, ProductReplayWorkerError> {
         require_document_id(document_id)?;
         require_sha256(source_sha256)?;
@@ -2896,6 +3002,7 @@ impl IsolatedProductReplayProducer {
             + usize::from(editable_export_target.is_some())
             + usize::from(resize_node.is_some())
             + usize::from(create_shape.is_some())
+            + usize::from(create_textbox.is_some())
             > 1
         {
             return Err(ProductReplayWorkerError::new(
@@ -2921,6 +3028,11 @@ impl IsolatedProductReplayProducer {
             return Err(ProductReplayWorkerError::new(
                 "product_edited_export_invalid",
                 "unknown edited target",
+            ));
+        }
+        if create_textbox.is_some() && project.is_none() {
+            return Err(ProductReplayWorkerError::new(
+                "product_create_textbox_invalid", "CreateTextBox needs a verified project",
             ));
         }
         if create_shape.is_some() && project.is_none() {
@@ -2963,6 +3075,7 @@ impl IsolatedProductReplayProducer {
         let story_intent_path = temp.path.join("story-intent.json");
         let resize_intent_path = temp.path.join("resize-intent.json");
         let create_shape_intent_path = temp.path.join("create-shape-intent.json");
+        let create_textbox_intent_path = temp.path.join("create-textbox-intent.json");
         let result_dir = temp.path.join("worker-result");
         write_private_replay_input(&source_path, source_bytes).await?;
         if let Some((project_bytes, _)) = project {
@@ -2983,6 +3096,20 @@ impl IsolatedProductReplayProducer {
                 ));
             }
             write_private_replay_input(&create_shape_intent_path, &bytes).await?;
+        }
+        if let Some(intent) = create_textbox {
+            validate_create_textbox_intent(intent)?;
+            let bytes = serde_json::to_vec(intent).map_err(|_| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid", "private TextFrame intent cannot be serialized",
+                )
+            })?;
+            if bytes.len() as u64 > MAX_CREATE_TEXTBOX_INTENT_BYTES {
+                return Err(ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid", "private TextFrame intent too large",
+                ));
+            }
+            write_private_replay_input(&create_textbox_intent_path, &bytes).await?;
         }
         if let Some(intent) = resize_node {
             let bytes = serde_json::to_vec(intent).map_err(|_| {
@@ -3069,6 +3196,9 @@ impl IsolatedProductReplayProducer {
             command
                 .arg("--create-shape-intent-json")
                 .arg(&create_shape_intent_path);
+        }
+        if create_textbox.is_some() {
+            command.arg("--create-textbox-intent-json").arg(&create_textbox_intent_path);
         }
         if let Some(target) = editable_export_target {
             command.arg("--editable-export-target").arg(target);
