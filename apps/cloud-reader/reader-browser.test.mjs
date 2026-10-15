@@ -748,6 +748,26 @@ try {
     assert.equal(await page.locator("#pages > svg.page[data-page-id='p500']").count(), 1);
     assert.ok(await page.locator("#pages > svg.page").count() <= 6);
   });
+  await check("short pages keep explicit last-page selection and replacement starts on page one", async () => {
+    const small = fixture("Short pages");
+    small.pages = Array.from({ length: 6 }, (_, i) => ({
+      page_id: "p" + (i + 1), order: i, width_emu: emu(500), height_emu: emu(120)
+    }));
+    await open(page, { open: { scene: small } }, "short-pages.pub");
+    await status(page, /Opened with display limitations/);
+    assert.equal(await page.locator("#page-select").inputValue(), "0");
+    await page.locator("#page-select").selectOption("5");
+    await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p6"]') !== null);
+    await page.waitForTimeout(75);
+    assert.equal(await page.locator("#page-select").inputValue(), "5",
+      "scrollTop clamping may not override a manual jump to the last short page");
+    await open(page, { open: { scene: fixture("Replacement of six-page document") } }, "replacement.pub");
+    await status(page, /Opened with display limitations/);
+    assert.equal(await page.locator("#page-select option").count(), 2);
+    assert.equal(await page.locator("#page-select").inputValue(), "0",
+      "replacement PUB must not inherit the old page index");
+    assert.equal(await page.locator("#pages > svg.page[data-page-id='p1']").count(), 1);
+  });
   assert.deepEqual(unexpectedRequests, []);
   assert.deepEqual(browserErrors, []);
   const receipt = {
