@@ -677,6 +677,58 @@ try {
     assert.equal(saved.headers["x-chaptera-reader-contribution"], undefined);
     assert.ok(!requests.some((request) => /\/commit|\/v1\/projects|\/v1\/uploads/.test(request.path)));
   });
+  await check("500-page Reader mounts only nearby SVGs and preserves distant page navigation", async () => {
+    const big = fixture("Large synthetic viewport document");
+    big.pages = Array.from({ length: 500 }, (_, i) => ({
+      page_id: "p" + (i + 1), order: i, width_emu: emu(600), height_emu: emu(760)
+    }));
+    // Deliberately interleaved input: filter indexes follow legacy page-major
+    // paint order, not array order or the currently mounted window.
+    big.nodes = [
+      { node_id: "n500", page_id: "p500", kind: "picture_frame",
+        bounds: { x: emu(20), y: emu(20), width: emu(40), height: emu(40) },
+        resource_id: "r1", image_recolor: { target_rgb: [255, 0, 0], preserve_grays: false } },
+      { node_id: "n1", page_id: "p1", kind: "picture_frame",
+        bounds: { x: emu(20), y: emu(20), width: emu(40), height: emu(40) },
+        resource_id: "r1", image_recolor: { target_rgb: [0, 255, 0], preserve_grays: false } },
+      { node_id: "n400", page_id: "p400", kind: "picture_frame",
+        bounds: { x: emu(20), y: emu(20), width: emu(40), height: emu(40) },
+        resource_id: "r1", image_recolor: { target_rgb: [0, 0, 255], preserve_grays: false } }
+    ];
+    await open(page, { open: { scene: big } }, "500-page-synthetic.pub");
+    await status(page, /Opened with display limitations/);
+    assert.equal(await page.locator("#page-select option").count(), 500);
+    assert.ok(await page.locator("#pages > svg.page").count() <= 6,
+      "initial Reader window must not materialize all 500 SVGs");
+    await page.locator("#page-select").selectOption("399");
+    await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p400"]') !== null);
+    assert.equal(await page.locator("#page-select").inputValue(), "399");
+    assert.ok(await page.locator("#pages > svg.page").count() <= 6,
+      "distant jump must keep a bounded number of mounted SVG pages");
+    assert.equal(await page.locator("#pages > svg.page[data-page-id='p1']").count(), 0);
+    const target = page.locator("#pages > svg.page[data-page-id='p400']");
+    assert.equal(await target.getAttribute("aria-label"), "Page 400 of 500");
+    assert.equal(await target.locator("[data-node-id='n400']").count(), 1);
+    assert.equal(await target.locator("image[data-resource-id='r1']").getAttribute("filter"),
+      "url(#chaptera-reader-image-1-recolor)",
+      "recolor filter ordinal must be identical to full legacy rendering");
+    assert.equal(await target.locator("#chaptera-reader-image-1-recolor").count(), 1);
+    await page.locator("#page-select").selectOption("19");
+    await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p20"]') !== null);
+    assert.equal(await page.locator("#page-select").inputValue(), "19");
+    assert.equal(await page.locator("#pages > svg.page[data-page-id='p400']").count(), 0);
+    await page.locator("#zoom-select").selectOption("1.5");
+    assert.equal(await page.locator("#page-select").inputValue(), "19");
+    assert.equal(await page.locator("#pages > svg.page[data-page-id='p20']").count(), 1);
+    assert.ok(await page.locator("#pages > svg.page").count() <= 6);
+    await page.locator("#zoom-select").selectOption("fit");
+    assert.equal(await page.locator("#page-select").inputValue(), "19");
+    await page.locator("#page-select").selectOption("499");
+    await page.waitForFunction(() => document.querySelector('#pages > svg.page[data-page-id="p500"]') !== null);
+    assert.equal(await page.locator("#page-select").inputValue(), "499");
+    assert.equal(await page.locator("#pages > svg.page[data-page-id='p500']").count(), 1);
+    assert.ok(await page.locator("#pages > svg.page").count() <= 6);
+  });
   assert.deepEqual(unexpectedRequests, []);
   assert.deepEqual(browserErrors, []);
   const receipt = {
