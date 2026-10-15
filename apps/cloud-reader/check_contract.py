@@ -25,7 +25,7 @@ required = [
     "chaptera-intake-retention-v1",
     "x-chaptera-reader-contribution",
     "contributionEligible",
-    'renderReaderScene',
+    'prepareReaderScene',
     './render-v1.mjs',
 ]
 for needle in required:
