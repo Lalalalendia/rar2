@@ -1,4 +1,4 @@
-// Real Publisher/CreateTextBox acceptance: Chromium pointer -> Caddy TLS ->
+// Real Publisher/CreateTextBox acceptance: Chromium pointer -> trusted HTTPS ->
 // Chaptera Guest HTTP -> isolated Rust EditorSession -> physical IDML/ODG.
 // Independent native consumers read the exact bytes downloaded by Chromium.
 // No synthetic backend, no browser-minted NodeId, no native .pub writer.
@@ -15,11 +15,20 @@ function arg(name) {
   return process.argv[i+1];
 }
 const origin = arg("origin");
+// The trusted production endpoint is opt-in; local Caddy is the default.
+// Never downgrade production TLS verification or accept a caller-chosen host.
+const publicOrigin = process.argv.includes("--public-origin");
 const fixture = resolve(arg("fixture"));
 const expectedSourceHash = arg("fixture-sha256");
 const receiptPath = resolve(arg("out"));
 const target = arg("target");
-assert.match(origin, /^https:\/\/reader\.chaptera\.test:\d+$/);
+if (publicOrigin) {
+  assert.equal(origin,"https://reader.chaptera.online",
+    "public acceptance must use the canonical trusted HTTPS origin");
+} else {
+  assert.match(origin,/^https:\/\/reader\.chaptera\.test:\d+$/,
+    "local acceptance must use the Caddy test hostname");
+}
 assert.match(expectedSourceHash,/^[0-9a-f]{64}$/);
 assert.ok(["idml","odg"].includes(target));
 const sha256 = x => createHash("sha256").update(x).digest("hex");
@@ -27,13 +36,14 @@ const original = await readFile(fixture);
 assert.equal(original.length, 291840, "pinned real Publisher source byte length changed");
 assert.equal(sha256(original),expectedSourceHash,"real PUB input source SHA differs");
 const browser = await chromium.launch({
-  headless:true, args:[
+  headless:true, args:publicOrigin ? [] : [
     "--no-proxy-server",
     "--host-resolver-rules=MAP reader.chaptera.test 127.0.0.1",
   ],
 });
 const page = await browser.newPage({
-  viewport:{width:1280,height:900}, acceptDownloads:true, ignoreHTTPSErrors:true,
+  viewport:{width:1280,height:900}, acceptDownloads:true,
+  ignoreHTTPSErrors:!publicOrigin,
 });
 const observed = { current:[],scenes:[],accepted:[],storyAccepted:[],reports:[],requests:[],responses:[] };
 const pending = [],errors=[],safeSceneFailureCodes=[];
@@ -435,7 +445,9 @@ try {
   const receipt={
     schema:"chaptera.tempedit-real-pub-create-textbox-chromium-https.v1",
     status:"PASS",source_sha256:expectedSourceHash,source_byte_len:original.length,
-    real_pub:true,real_chromium:true,local_tls_caddy:true,
+    real_pub:true,real_chromium:true,local_tls_caddy:!publicOrigin,
+    public_trusted_tls:publicOrigin,
+    deployment_mode:publicOrigin ? "public_trusted_origin" : "local_caddy",
     real_isolated_rust_guest:true,browser_pointer_create_commits:writes.length,
     exact_current_reopened:true,exact_reader_scene_created_node:true,
     authoring_node_uuidv7:true,authoring_story_uuidv7:true,
@@ -465,6 +477,7 @@ try {
     status: "FAIL",
     phase,
     export_target: target,
+    deployment_mode:publicOrigin ? "public_trusted_origin" : "local_caddy",
     failure_class: error?.name === "AssertionError" ? "assertion"
       : error?.name === "TimeoutError" ? "timeout" : "other",
     create_reopen_contract: classifiedCreateReopenFailure(),
