@@ -129,6 +129,20 @@ class ViewerGeometryReceiptSchemaTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_schema(bad)
 
+    def test_source_backed_horizontal_line_is_only_new_typed_preset(self):
+        receipt = minimal_receipt()
+        node_id = receipt["scene"]["nodes"][0]["origin"]
+        receipt["paints"] = [{
+            "node_id": node_id,
+            "preset_shape": "horizontal_line",
+        }]
+        validate_schema(receipt)
+        for invalid in ("vertical_line", "diagonal_line", "horizontal_line/private"):
+            bad = copy.deepcopy(receipt)
+            bad["paints"][0]["preset_shape"] = invalid
+            with self.subTest(invalid_preset=invalid), self.assertRaises(AssertionError):
+                validate_schema(bad)
+
     def test_unreviewed_fetch_handle_is_forbidden_in_v0_1_receipt(self):
         receipt = minimal_receipt()
         receipt["images"][0]["fetch_handle"] = "file:///private/cache/image.png"
