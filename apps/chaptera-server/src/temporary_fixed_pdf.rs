@@ -379,7 +379,7 @@ fn render_current_fixed_pdf_with_sheet(
         // Source size is only portable with our pinned fallback for complete,
         // one-line Stories whose independently re-shaped glyphs fit their exact
         // current frame. This must not silently reflow arbitrary paragraphs.
-        if !source_reflowed
+        if !*source_reflowed
             && let (Some(style), Some(story)) = (source_style, current_story)
             && let Some(source_size) = style.font_size_emu
             && (6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&source_size)
