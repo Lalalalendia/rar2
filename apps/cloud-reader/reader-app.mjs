@@ -154,6 +154,7 @@ function clearReader() {
   preparedScene = null;
   pageOffsets = [];
   mountedPageIds = "";
+  pagesHost.style.width = "";
   pagesHost.replaceChildren();
   $("#reader").hidden = true;
   document.body.classList.remove("reader-open");
@@ -215,9 +216,14 @@ function pageHeight(index) {
 function recomputeOffsets() {
   pageOffsets = new Array(pages.length + 1);
   pageOffsets[0] = 0;
+  let maxPageWidth = 0;
   for (let i = 0; i < pages.length; i++) {
     pageOffsets[i + 1] = pageOffsets[i] + pageHeight(i) + (i + 1 < pages.length ? PAGE_GAP : 0);
+    maxPageWidth = Math.max(maxPageWidth, pages[i].width_emu / EMU_PER_CSS_PX * pageScale(pages[i]));
   }
+  // A virtual window can omit the widest page. Keep horizontal centering
+  // and scroll extent stable regardless of which SVGs are mounted.
+  pagesHost.style.width = maxPageWidth + "px";
 }
 
 // The upper/lower spacers have the exact omitted heights (including gaps).
