@@ -148,6 +148,38 @@ def verify_target_application(artifact: pathlib.Path, target: str, expected: str
             "reopened_sha256": hashlib.sha256(reopened).hexdigest(),
         }
 
+# Only closed, hard-coded failure reasons can cross from the private consumer
+# process into CI logs. Never serialize exception messages, source paths or
+# text extracted from an unknown document.
+SAFE_CONSUMER_FAILURE_CODES = {
+    "physical Story artifact is not a bounded ZIP package": "zip_header_or_size",
+    "physical Story archive exceeds bounded consumer limits": "zip_member_limits",
+    "physical Story archive has unsafe member names": "zip_path_traversal",
+    "physical Story archive has a corrupt CRC": "zip_crc",
+    "exported IDML lacks package and imported Story XML": "idml_story_parts_missing",
+    "exported ODG lacks OpenDocument content and mimetype": "odg_parts_missing",
+    "exported ODG declares a different mimetype": "odg_mimetype",
+    "current-revision Story marker absent from real editable content": "story_text_not_in_package",
+    "independent target consumer applications unavailable": "native_apps_unavailable",
+    "pinned Scribus IDML importer script unavailable": "scribus_importer_missing",
+    "Scribus IDML import exceeded bounded timeout": "scribus_import_timeout",
+    "Scribus failed to reopen browser-downloaded IDML": "scribus_reimport_failed",
+    "Scribus SLA reimport lost the edited canonical Story": "scribus_story_missing",
+    "LibreOffice ODG import exceeded bounded timeout": "libreoffice_import_timeout",
+    "LibreOffice Draw failed to reopen browser-downloaded ODG": "libreoffice_reimport_failed",
+    "LibreOffice Draw FODG reimport lost the edited Story": "libreoffice_story_missing",
+    "target application did not retain the edited Story": "native_story_unconfirmed",
+}
+
+
+def safe_failure_code(error: BaseException) -> str:
+    if isinstance(error, AssertionError):
+        return SAFE_CONSUMER_FAILURE_CODES.get(str(error), "consumer_assertion_other")
+    if isinstance(error, (ET.ParseError, zipfile.BadZipFile)):
+        return "malformed_export_xml_or_zip"
+    return "consumer_unexpected_error"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifact", required=True, type=pathlib.Path)
@@ -158,12 +190,22 @@ def main() -> int:
     if not args.expected_text or len(args.expected_text) > 8192 or \
             any(ord(char) < 32 or ord(char) == 127 for char in args.expected_text):
         raise AssertionError("expected Story text is outside the source-neutral proof contract")
-    result = verify(args.artifact, args.target, args.expected_text)
-    if args.real_application_consumer:
-        application = verify_target_application(args.artifact, args.target, args.expected_text)
-        if not application["reopened"] or not application["story_marker_retained"]:
-            raise AssertionError("target application did not retain the edited Story")
-        result["target_application_consumer"] = application
+    try:
+        result = verify(args.artifact, args.target, args.expected_text)
+        if args.real_application_consumer:
+            application = verify_target_application(args.artifact, args.target, args.expected_text)
+            if not application["reopened"] or not application["story_marker_retained"]:
+                raise AssertionError("target application did not retain the edited Story")
+            result["target_application_consumer"] = application
+    except Exception as exc:
+        # Never print a traceback or source-bearing exception message from an
+        # untrusted document or a third-party native publishing application.
+        print(json.dumps({
+            "schema": "chaptera.tempedit-source-neutral-story-consumer-failure.v1",
+            "status": "FAIL",
+            "failure_code": safe_failure_code(exc),
+        }, sort_keys=True), file=sys.stderr)
+        return 1
     print(json.dumps(result, sort_keys=True))
     return 0
 
