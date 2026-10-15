@@ -3,10 +3,12 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from run_temporary_editor_real_pub_browser_acceptance import (
     _cgroup_memory_events,
     _redact_caddy_log,
+    _wait_tls_source_safe,
 )
 
 
@@ -59,6 +61,16 @@ class TestBrowserLogSafety(unittest.TestCase):
             self.assertEqual(clean_request["referer"], "[redacted]")
             self.assertEqual(json.loads(result.splitlines()[0])
                              ["request"]["headers"]["X-Chaptera-Reader-Session"], "[redacted]")
+
+    def test_failed_caddy_tls_never_echoes_raw_proxy_log_excerpt(self):
+        with patch(
+            "run_temporary_editor_real_pub_browser_acceptance.live.wait_tls",
+            side_effect=RuntimeError("Caddy raw bearer: SECRET-BROWSER-TOKEN"),
+        ):
+            with self.assertRaises(RuntimeError) as result:
+                _wait_tls_source_safe(443, None, pathlib.Path("caddy.log"))
+        self.assertNotIn("SECRET-BROWSER-TOKEN", str(result.exception))
+        self.assertIn("sanitized diagnostic artifact", str(result.exception))
 
     def test_only_numeric_oom_counters_are_exposed(self):
         with tempfile.TemporaryDirectory() as directory:
