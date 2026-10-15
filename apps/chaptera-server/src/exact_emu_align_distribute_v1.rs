@@ -301,15 +301,30 @@ mod tests {
         let selected = vec![
             Member {
                 node_id: "a".into(),
-                bounds: RectEmu { x: 0, y: 0, width: 2, height: 2 },
+                bounds: RectEmu {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                },
             },
             Member {
                 node_id: "b".into(),
-                bounds: RectEmu { x: 9, y: 9, width: 2, height: 2 },
+                bounds: RectEmu {
+                    x: 9,
+                    y: 9,
+                    width: 2,
+                    height: 2,
+                },
             },
             Member {
                 node_id: "odd".into(),
-                bounds: RectEmu { x: 3, y: 4, width: 3, height: 3 },
+                bounds: RectEmu {
+                    x: 3,
+                    y: 4,
+                    width: 3,
+                    height: 3,
+                },
             },
         ];
         let h = plan(selected.clone(), Mode::AlignHorizontalCenter).unwrap();
@@ -343,19 +358,39 @@ mod tests {
         let selected = vec![
             Member {
                 node_id: "b".into(),
-                bounds: RectEmu { x: 0, y: 20, width: 10, height: 10 },
+                bounds: RectEmu {
+                    x: 0,
+                    y: 20,
+                    width: 10,
+                    height: 10,
+                },
             },
             Member {
                 node_id: "a".into(),
-                bounds: RectEmu { x: 20, y: 20, width: 10, height: 10 },
+                bounds: RectEmu {
+                    x: 20,
+                    y: 20,
+                    width: 10,
+                    height: 10,
+                },
             },
             Member {
                 node_id: "first".into(),
-                bounds: RectEmu { x: 0, y: 0, width: 10, height: 10 },
+                bounds: RectEmu {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
             },
             Member {
                 node_id: "last".into(),
-                bounds: RectEmu { x: 0, y: 60, width: 10, height: 10 },
+                bounds: RectEmu {
+                    x: 0,
+                    y: 60,
+                    width: 10,
+                    height: 10,
+                },
             },
         ];
         let result = plan(selected, Mode::DistributeVertical).unwrap();
