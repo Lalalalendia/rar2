@@ -667,11 +667,34 @@ try {
             const sources = spans.length ? spans : [line];
             const advanceChecks = sources
               .filter((element) => (element.textContent ?? "").replaceAll(String.fromCharCode(0x200b), "").trim())
-              .map((element) => ({
-                cohort: spans.length ? "mixed_span" : "uniform_line",
-                reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
-                chromium_width_emu: element.getComputedTextLength() * 9525
-              }));
+              .map((element) => {
+                const text = element.textContent ?? "";
+                const style = window.getComputedStyle(element);
+                const faceCheck = document.fonts?.check(
+                  style.fontSize + " " + style.fontFamily
+                ) === true;
+                // These fixed booleans stay in the ephemeral private CI file.
+                // The source text, font family and per-line widths are never
+                // exposed through the acceptance receipt.
+                return {
+                  cohort: spans.length ? "mixed_span" : "uniform_line",
+                  reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
+                  chromium_width_emu: element.getComputedTextLength() * 9525,
+                  private_flags: {
+                    has_any_whitespace: /\s/u.test(text),
+                    has_leading_whitespace: /^\s/u.test(text),
+                    has_trailing_whitespace: /\s$/u.test(text),
+                    has_repeated_whitespace: /\s{2}/u.test(text),
+                    has_tab: text.includes(String.fromCharCode(9)),
+                    has_nbsp: text.includes(String.fromCharCode(0xa0)),
+                    has_zero_width_or_format: /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(text),
+                    has_non_ascii: /[^\x00-\x7f]/u.test(text),
+                    svg_css_preserves_whitespace: ["pre", "pre-wrap", "break-spaces"]
+                      .includes(style.whiteSpace),
+                    chromium_font_set_check_true: faceCheck
+                  }
+                };
+              });
             return {
               text: line.textContent ?? "",
               x: bounds.x - pageBounds.x,
@@ -696,7 +719,17 @@ try {
         return { text_sha256: sha256(Buffer.from(normalized, "utf8")), ...geometry };
       }).filter(Boolean);
       assert.ok(hashed.length > 0, "R1 source shared text has no measurable browser lines");
-      const privateAdvanceChecks = measured.flatMap((line) => line.advance_checks);
+      const privateAdvanceChecks = measured.flatMap((line) =>
+        line.advance_checks.map(({ private_flags, ...width }) => width));
+      const privateOutlierChecks = measured.flatMap((line) =>
+        line.advance_checks.map((entry) => ({
+          cohort: entry.cohort,
+          reader_width_emu: entry.reader_width_emu,
+          chromium_width_emu: entry.chromium_width_emu,
+          flags: entry.private_flags
+        })));
+      assert.equal(privateOutlierChecks.length, privateAdvanceChecks.length,
+        "outlier sample must match measured source widths");
       assert.ok(privateAdvanceChecks.length > 0,
         "no physical Chromium text advances in accepted R1");
       for (const record of privateAdvanceChecks) {
@@ -708,7 +741,8 @@ try {
       await writeFile(ephemeralTextGeometryPath, JSON.stringify({
         schema: "chaptera.private-r1-chromium-text-line-geometry.v1",
         dpi: referenceRasterDpi, lines: hashed,
-        private_advance_checks: privateAdvanceChecks
+        private_advance_checks: privateAdvanceChecks,
+        private_advance_outlier_checks: privateOutlierChecks
       }));
     }
     const nonempty = painted.filter((line) => line.text.trim());
