@@ -286,17 +286,13 @@ fn render_current_fixed_pdf_with_sheet(
         && bundle.geometry.document.pages.len() <= MAX_SHARED_PAGES
     {
         for page_index in 0..bundle.geometry.document.pages.len() {
-            let Ok(page_plan) = build_page_render_plan_with_text_layout_v1(
-                &bundle.geometry,
-                page_index,
-                &fallback,
-            ) else {
+            let Ok(page_plan) =
+                build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &fallback)
+            else {
                 continue;
             };
             for node in page_plan.nodes {
-                if !scene_ids.contains(&node.node_id)
-                    || resized.contains(&node.node_id)
-                {
+                if !scene_ids.contains(&node.node_id) || resized.contains(&node.node_id) {
                     continue;
                 }
                 let Some(fragment) = node.text else {
@@ -313,7 +309,8 @@ fn render_current_fixed_pdf_with_sheet(
                     font_fingerprint_sha256,
                     font_size_emu,
                     line_height_emu,
-                } = layout.disposition else {
+                } = layout.disposition
+                else {
                     continue;
                 };
                 if font_resource_id != fallback.resource_id
@@ -411,9 +408,9 @@ fn render_current_fixed_pdf_with_sheet(
                         || line.scalar_end < consumed
                         || line.consumed_scalar_end < line.scalar_end
                         || line.consumed_scalar_end > scalar_len
-                        || source_scalars.get(start..end).is_none_or(|slice| {
-                            slice.iter().collect::<String>() != line.text
-                        })
+                        || source_scalars
+                            .get(start..end)
+                            .is_none_or(|slice| slice.iter().collect::<String>() != line.text)
                         || !line.spans.is_empty()
                         || line.measured_width_emu < 0
                         || line.x_offset_emu < 0
@@ -433,7 +430,8 @@ fn render_current_fixed_pdf_with_sheet(
                         break;
                     };
                     if next_y > content_bounds.height.get()
-                        || line.x_offset_emu
+                        || line
+                            .x_offset_emu
                             .checked_add(line.measured_width_emu)
                             .is_none_or(|width| width > content_bounds.width.get())
                     {
@@ -477,10 +475,7 @@ fn render_current_fixed_pdf_with_sheet(
                     consumed = line.consumed_scalar_end;
                     cursor_y = next_y;
                 }
-                let counted = shared_multiline
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>();
+                let counted = shared_multiline.values().map(Vec::len).sum::<usize>();
                 if valid
                     && consumed == scalar_len
                     && admitted.len() > 1
