@@ -42,6 +42,35 @@ def idml_xml(rect=RECT, node_id=NODE_ID):
 '''
 
 
+def idml_image_xml(rect=RECT, node_id=NODE_ID, *, embedded_id=None, content_type="GraphicType"):
+    """The bounded IDML image writer emits a uif Rectangle around a ui Image."""
+    if embedded_id is None:
+        embedded_id = node_id
+    anchors = expected_idml_anchors(rect)
+    points = "\n".join(
+        f'<PathPointType Anchor="{anchor}" LeftDirection="{anchor}" RightDirection="{anchor}"/>'
+        for anchor in anchors
+    )
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="usp_image_test">
+    <Rectangle Self="uif{canonical_node_hex(node_id)}" ContentType="{content_type}">
+      <Properties>
+        <PathGeometry>
+          <GeometryPathType PathOpen="false">
+            <PathPointArray>
+              {points}
+            </PathPointArray>
+          </GeometryPathType>
+        </PathGeometry>
+      </Properties>
+      <Image Self="ui{canonical_node_hex(embedded_id)}"/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>
+'''
+
+
 def odg_xml(rect=RECT, node_id=NODE_ID):
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content
@@ -78,6 +107,57 @@ class EditableExportGeometryVerifierTests(unittest.TestCase):
         self.assertEqual(expected_idml_anchors(RECT), receipt["observed"]["anchors_pt"])
         self.assertNotIn("artifact_path", receipt)
         self.assertRegex(receipt["artifact_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_idml_image_binds_exact_frame_and_embedded_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = pathlib.Path(tmp) / "image.idml"
+            with zipfile.ZipFile(artifact, "w") as zf:
+                zf.writestr("Spreads/Spread_image.xml", idml_image_xml())
+            receipt = verify_export(artifact, "idml", NODE_ID, RECT)
+
+        self.assertTrue(receipt["geometry_matches_edit"])
+        self.assertEqual("uif" + canonical_node_hex(NODE_ID), receipt["identity_binding"])
+        self.assertEqual("image_frame", receipt["object_kind"])
+        self.assertEqual("idml_image_path_geometry", receipt["geometry_form"])
+        self.assertEqual(expected_idml_anchors(RECT), receipt["observed"]["anchors_pt"])
+        self.assertNotIn("artifact_path", receipt)
+
+    def test_idml_image_rejects_forged_embedded_identity(self):
+        other_node_id = "31111111-1111-4111-8111-111111111111"
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = pathlib.Path(tmp) / "wrong-image.idml"
+            with zipfile.ZipFile(artifact, "w") as zf:
+                zf.writestr(
+                    "Spreads/Spread_image.xml",
+                    idml_image_xml(embedded_id=other_node_id),
+                )
+            with self.assertRaisesRegex(AssertionError, "embedded Image identity"):
+                verify_export(artifact, "idml", NODE_ID, RECT)
+
+    def test_idml_image_rejects_wrong_geometry_and_content_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = pathlib.Path(tmp) / "wrong-image.idml"
+            with zipfile.ZipFile(artifact, "w") as zf:
+                zf.writestr("Spreads/Spread_image.xml", idml_image_xml())
+            wrong = RectEmu(RECT.x + 1, RECT.y, RECT.width, RECT.height)
+            with self.assertRaisesRegex(AssertionError, "IDML geometry mismatch"):
+                verify_export(artifact, "idml", NODE_ID, wrong)
+            with zipfile.ZipFile(artifact, "w") as zf:
+                zf.writestr(
+                    "Spreads/Spread_image.xml",
+                    idml_image_xml(content_type="TextType"),
+                )
+            with self.assertRaisesRegex(AssertionError, "GraphicType"):
+                verify_export(artifact, "idml", NODE_ID, RECT)
+
+    def test_idml_image_rejects_ambiguous_node_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = pathlib.Path(tmp) / "ambiguous.idml"
+            with zipfile.ZipFile(artifact, "w") as zf:
+                zf.writestr("Spreads/Spread_text.xml", idml_xml())
+                zf.writestr("Spreads/Spread_image.xml", idml_image_xml())
+            with self.assertRaisesRegex(AssertionError, "exactly one IDML canonical frame"):
+                verify_export(artifact, "idml", NODE_ID, RECT)
 
     def test_odg_binds_node_identity_and_exact_rect(self):
         with tempfile.TemporaryDirectory() as tmp:
