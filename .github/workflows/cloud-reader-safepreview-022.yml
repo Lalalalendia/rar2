@@ -8,6 +8,7 @@ on:
       - "tools/run_cloud_reader_live_acceptance.py"
       - "tools/run_reader_sbdc034_host_acceptance.py"
       - "tools/run_temporary_editor_current_acceptance.py"
+      - "tools/run_temporary_editor_sbdc034_r1_browser.mjs"
       - "tools/sbdc_r1_raster_disagreement_census.py"
       - "tools/test_sbdc_r1_raster_disagreement_census.py"
       - "tools/sbdc_r1_text_metrics_census.py"
@@ -793,6 +794,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir "PyMuPDF==1.26.4"
+          node --check tools/run_temporary_editor_sbdc034_r1_browser.mjs
           python -m py_compile tools/run_temporary_editor_current_acceptance.py tools/sbdc_r1_raster_disagreement_census.py tools/test_sbdc_r1_raster_disagreement_census.py tools/sbdc_r1_text_metrics_census.py tools/test_sbdc_r1_text_metrics_census.py tools/sbdc_r1_text_line_geometry.py tools/test_sbdc_r1_text_line_geometry.py
           python tools/test_sbdc_r1_raster_disagreement_census.py
           python tools/test_sbdc_r1_text_metrics_census.py
@@ -812,6 +814,11 @@ jobs:
           proof = full["sbdc_picture_proof"]
           assert proof["source_star_picture_nodes_r0"] == proof["source_star_picture_nodes_r1"] == 4
           assert proof["fixed_pdf_star_paint_uses_r0"] == proof["fixed_pdf_star_paint_uses_r1"] == 4
+          assert proof["r1_editor_chromium_revision_bound"] is True
+          assert proof["r1_editor_chromium_logo_painted"] is True
+          counts = proof["r1_editor_chromium_star_pixel_counts"]
+          assert len(counts) == 4 and all(isinstance(v, int) and v >= 8 for v in counts)
+          assert proof["r1_editor_chromium_private_images_uploaded"] is False
           out = Path("target/safe-preview-022-visual/sbdc034-r1-fixedpdf.json")
           out.parent.mkdir(parents=True, exist_ok=True)
           out.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")

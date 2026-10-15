@@ -98,14 +98,11 @@ const acceptedEditorScenePath = process.env.READER_ACCEPTED_EDITOR_SCENE_JSON
 assert.ok(!(acceptedScenePath && acceptedEditorScenePath),
   "Guest and Editor scene modes are mutually exclusive");
 const acceptedAnyScenePath = acceptedScenePath ?? acceptedEditorScenePath;
-// Optional private per-line pixel geometry is emitted only for the verified
-// exact-R1 Editor Scene. The file never enters a public CI artifact.
+// Private line geometry for an exact accepted R1 only. Never ship hashes or private boxes.
 const ephemeralTextGeometryPath = process.env.READER_EPHEMERAL_TEXT_GEOMETRY_JSON
-  ? resolve(process.env.READER_EPHEMERAL_TEXT_GEOMETRY_JSON)
-  : null;
+  ? resolve(process.env.READER_EPHEMERAL_TEXT_GEOMETRY_JSON) : null;
 assert.ok(!ephemeralTextGeometryPath || acceptedEditorScenePath,
   "text geometry witness requires a real accepted Editor R1");
-
 const sceneOrigin = acceptedEditorScenePath ? "accepted_https_temp_editor_service"
   : acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct";
 if (acceptedAnyScenePath) {
@@ -673,26 +670,23 @@ try {
             };
           });
       });
-      const hashed = measured
-        .map((line) => {
-          const normalized = line.text.replaceAll("\u200B", "").normalize("NFC").replace(/\s+/gu, " ").trim();
-          if (!normalized) return null;
-          const geometry = Object.fromEntries(["x", "y", "width", "height"]
-            .map((key) => [key, line[key]]));
-          for (const [key, value] of Object.entries(geometry)) {
-            assert.ok(Number.isFinite(value) && value >= (key === "width" || key === "height" ? 0 : -10000),
-              "painted text box has non-finite geometry");
-          }
-          return {
-            text_sha256: sha256(Buffer.from(normalized, "utf8")),
-            ...geometry
-          };
-        }).filter(Boolean);
+      const hashed = measured.map((line) => {
+        const normalized = line.text.replaceAll("\u200B", "").normalize("NFC")
+          .replace(/\s+/gu, " ").trim();
+        if (!normalized) return null;
+        const geometry = Object.fromEntries(["x", "y", "width", "height"]
+          .map((key) => [key, line[key]]));
+        for (const [key, value] of Object.entries(geometry)) {
+          assert.ok(Number.isFinite(value) &&
+            value >= (key === "width" || key === "height" ? 0 : -10000),
+            "painted text box has non-finite geometry");
+        }
+        return { text_sha256: sha256(Buffer.from(normalized, "utf8")), ...geometry };
+      }).filter(Boolean);
       assert.ok(hashed.length > 0, "R1 source shared text has no measurable browser lines");
       await writeFile(ephemeralTextGeometryPath, JSON.stringify({
         schema: "chaptera.private-r1-chromium-text-line-geometry.v1",
-        dpi: referenceRasterDpi,
-        lines: hashed
+        dpi: referenceRasterDpi, lines: hashed
       }));
     }
     const nonempty = painted.filter((line) => line.text.trim());
