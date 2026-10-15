@@ -80,6 +80,41 @@ class RasterCensusTests(unittest.TestCase):
         self.assertEqual(data["text_source_node_counts"]["fallback_frame_nodes"], 1)
         self.assertEqual(data["text_source_node_counts"]["shared_resolved_plan_nodes"], 0)
 
+    def test_exact_single_reader_line_has_bounded_text_only_roi(self):
+        # One source-resolved line with explicit vertical/text offsets stays in
+        # the text ROI; unrelated page changes are not charged to text.
+        resolved = _node(
+            "text_frame",
+            {"x": 300, "y": 300, "width": 2000, "height": 2000},
+            text="LINE",
+            layout={
+                "disposition": "shared_resolved",
+                "vertical_offset_emu": 300,
+                "lines": [{
+                    "line_index": 0, "line_height_emu": 300,
+                    "measured_width_emu": 600, "x_offset_emu": 100,
+                    "text": "LINE",
+                }],
+            },
+        )
+        reference = Image.new("RGB", (30, 30), "white")
+        candidate = reference.copy()
+        candidate.putpixel((5, 7), (0, 0, 0))
+        candidate.putpixel((26, 26), (0, 0, 0))
+        proof = census_r1_disagreement(
+            candidate, reference, _scene([resolved]), 2
+        )
+        self.assertEqual(
+            proof["zones_exclusive"]["text_only"]["significant_pixels"], 1
+        )
+        self.assertEqual(
+            proof["zones_exclusive"]["outside_text_and_pictures"]["significant_pixels"], 1
+        )
+        self.assertEqual(
+            proof["text_source_node_counts"]["shared_resolved_plan_nodes"], 1
+        )
+        self.assertFalse(proof["source_text_pixels_pdf_and_coordinates_exported"])
+
     def test_total_guard_does_not_accept_fabricated_improvement(self):
         reference = Image.new("RGB", (30, 30), "white")
         with self.assertRaisesRegex(AssertionError, "independent"):
