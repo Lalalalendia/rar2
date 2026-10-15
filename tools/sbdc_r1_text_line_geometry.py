@@ -16,7 +16,7 @@ import unicodedata
 
 
 def normalized_text_hash(text: str) -> str | None:
-    value = re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip()
+    value = re.sub(r"\s+", " ", unicodedata.normalize("NFC", text.replace("\u200b", ""))).strip()
     return hashlib.sha256(value.encode("utf-8")).hexdigest() if value else None
 
 
