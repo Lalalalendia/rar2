@@ -3380,6 +3380,7 @@ mod tests {
             move_node: None,
             resize_node: None,
             create_shape: None,
+            create_textbox: None,
             story_range: None,
             reader_scene: None,
             editable_export: None,
