@@ -114,6 +114,19 @@ def _redact_caddy_log(path: pathlib.Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _wait_tls_source_safe(port: int, process: subprocess.Popen[str], log_path: pathlib.Path) -> str:
+    """Keep raw reverse-proxy startup diagnostics out of public traceback.
+
+    The shared TLS readiness helper includes raw Caddy log tails on failure;
+    those tails could contain private headers. The guarded finally block will
+    sanitize the file before any CI artifact upload.
+    """
+    try:
+        return live.wait_tls(port, process, log_path)
+    except Exception:
+        raise RuntimeError("Caddy TLS readiness failed; inspect sanitized diagnostic artifact") from None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     for key in ("chaptera", "caddy", "fixture", "out"):
@@ -228,7 +241,7 @@ def main() -> int:
              "--adapter", "caddyfile"], env=caddy_env, cwd=work,
             text=True, stdout=caddy_stream, stderr=subprocess.STDOUT,
         )
-        certificate_hash = live.wait_tls(httpsport, proxy, caddy_log)
+        certificate_hash = _wait_tls_source_safe(httpsport, proxy, caddy_log)
         if not certificate_hash or len(certificate_hash) != 64:
             raise AssertionError("guest public TLS listener not established")
         origin = f"https://{live.EDGE_HOST}:{httpsport}"
