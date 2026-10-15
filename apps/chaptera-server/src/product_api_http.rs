@@ -2368,7 +2368,9 @@ mod tests {
 
     #[test]
     fn authored_reader_textbox_requires_real_viewer_projection_and_partial_fidelity() {
-        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1, ReaderStoryV1};
+        use crate::reader_scene_v1::{
+            READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1, ReaderStoryV1,
+        };
         fn empty_scene() -> ReaderSceneV1 {
             ReaderSceneV1 {
                 protocol_version: READER_SCENE_V1,
