@@ -661,12 +661,24 @@ try {
         return [...svg.querySelectorAll('text[data-text-authority="server-shared-resolved"]')]
           .map((line) => {
             const bounds = line.getBoundingClientRect();
+            // SVG advance is in the local text viewport CSS user units.
+            // Do not publish per-span widths, text, node IDs or positions.
+            const spans = [...line.querySelectorAll("tspan[data-measured-width-emu]")];
+            const sources = spans.length ? spans : [line];
+            const advanceChecks = sources
+              .filter((element) => (element.textContent ?? "").replaceAll(String.fromCharCode(0x200b), "").trim())
+              .map((element) => ({
+                cohort: spans.length ? "mixed_span" : "uniform_line",
+                reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
+                chromium_width_emu: element.getComputedTextLength() * 9525
+              }));
             return {
               text: line.textContent ?? "",
               x: bounds.x - pageBounds.x,
               y: bounds.y - pageBounds.y,
               width: bounds.width,
-              height: bounds.height
+              height: bounds.height,
+              advance_checks: advanceChecks
             };
           });
       });
@@ -684,9 +696,19 @@ try {
         return { text_sha256: sha256(Buffer.from(normalized, "utf8")), ...geometry };
       }).filter(Boolean);
       assert.ok(hashed.length > 0, "R1 source shared text has no measurable browser lines");
+      const privateAdvanceChecks = measured.flatMap((line) => line.advance_checks);
+      assert.ok(privateAdvanceChecks.length > 0,
+        "no physical Chromium text advances in accepted R1");
+      for (const record of privateAdvanceChecks) {
+        assert.ok((record.cohort === "uniform_line" || record.cohort === "mixed_span") &&
+          Number.isSafeInteger(record.reader_width_emu) && record.reader_width_emu >= 0 &&
+          Number.isFinite(record.chromium_width_emu) && record.chromium_width_emu >= 0,
+        "invalid R1 source/Chromium text advances");
+      }
       await writeFile(ephemeralTextGeometryPath, JSON.stringify({
         schema: "chaptera.private-r1-chromium-text-line-geometry.v1",
-        dpi: referenceRasterDpi, lines: hashed
+        dpi: referenceRasterDpi, lines: hashed,
+        private_advance_checks: privateAdvanceChecks
       }));
     }
     const nonempty = painted.filter((line) => line.text.trim());
