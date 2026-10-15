@@ -416,7 +416,7 @@ export async function bootTemporaryEditorPreview({
   function storyDraftDirty() {
     if (!storyEnabled || !activeStoryId) return false;
     const current = storyCandidates.find(entry => entry.story_id === activeStoryId);
-    return !!current && storyText.value !== temporaryStoryTextForTextarea(current.text);
+    return !!current && storyText.value !== temporaryStoryTextForTextarea(current.text, {allowEmpty:current.authored_empty === true});
   }
 
   function activateStory(storyId) {
@@ -434,7 +434,7 @@ export async function bootTemporaryEditorPreview({
     // Clicking the current Story must not wipe an unsaved in-progress draft.
     if (storyId !== activeStoryId) {
       storySelect.value = storyId;
-      storyText.value = temporaryStoryTextForTextarea(selected.text);
+      storyText.value = temporaryStoryTextForTextarea(selected.text, {allowEmpty:selected.authored_empty === true});
       activeStoryId = storyId;
     }
     controls();
@@ -445,7 +445,7 @@ export async function bootTemporaryEditorPreview({
     if (!storyEnabled) return;
     const previous = preferredStoryId ?? storySelect.value;
     storyCandidates = moveClient
-      ? temporaryPlainStoryCandidates(canonicalCurrent?.authoring_graph) : [];
+      ? temporaryPlainStoryCandidates(canonicalCurrent?.authoring_graph, canonicalCurrent?.project) : [];
     storySelect.replaceChildren();
     for (const [index, entry] of storyCandidates.entries()) {
       const option = documentObject.createElement("option");
@@ -456,7 +456,7 @@ export async function bootTemporaryEditorPreview({
     const selected = storyCandidates.find(entry => entry.story_id === previous) ??
       storyCandidates[0];
     storySelect.value = selected?.story_id ?? "";
-    storyText.value = selected ? temporaryStoryTextForTextarea(selected.text) : "";
+    storyText.value = selected ? temporaryStoryTextForTextarea(selected.text, {allowEmpty:selected.authored_empty === true}) : "";
     activeStoryId = selected?.story_id ?? null;
     storyPanel.hidden = !moveClient || !selected;
   }
@@ -1027,7 +1027,7 @@ export async function bootTemporaryEditorPreview({
     const replacement = storyText.value;
     try {
       if (!candidate) throw new Error("Story candidate unavailable");
-      temporaryStoryObservedToCanonicalStory(candidate.text, replacement);
+      temporaryStoryObservedToCanonicalStory(candidate.text, replacement, {allowEmpty:candidate.authored_empty === true});
     } catch {
       status.textContent = "Поддерживается правка обычной текстовой рамки с сохранением существующих границ абзацев; новые разрывы и управляющие символы запрещены (до 8192 байт).";
       return;
@@ -1200,7 +1200,7 @@ export async function bootTemporaryEditorPreview({
       if (composingStory || busy || editBusy || !activeStoryId) return;
       const selected = storyCandidates.find(entry => entry.story_id === activeStoryId);
       if (!selected) return;
-      storyText.value = temporaryStoryTextForTextarea(selected.text);
+      storyText.value = temporaryStoryTextForTextarea(selected.text, {allowEmpty:selected.authored_empty === true});
       status.textContent = "Локальный черновик сброшен; сохранённая ревизия не менялась.";
       controls();
     });

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TemporaryGuestMoveClientV1 } from "./temporary-edit-move-client-v1.mjs";
+import {
+  TemporaryGuestMoveClientV1, temporaryPlainStoryCandidates,
+  temporaryStoryTextForTextarea, temporaryStoryObservedToCanonicalStory,
+} from "./temporary-edit-move-client-v1.mjs";
 
 const session = "tempedit:" + "a".repeat(32);
 const source = "b".repeat(64);
@@ -43,7 +46,7 @@ const after = {
   canonical_authoring_revision_id: newCanonical, expires_at_ms: newExpiry,
   project: { operations: [operation] },
   authoring_graph: {...current.authoring_graph,
-    nodes: {[authored]: {payload: {story_frame: {story_id: story}}}},
+    nodes: {[authored]: {header: {parent_id: page}, payload: {story_frame: {story_id: story}}}},
     stories: {[story]: {text: ""}},
   },
 };
@@ -73,6 +76,38 @@ function harness(replies) {
   return {client, calls};
 }
 const create = client => client.createTextBox({pageId: page, bounds});
+
+
+test("server-minted empty Story is editable only with matching CreateTextBox history", () => {
+  assert.deepEqual(temporaryPlainStoryCandidates(after.authoring_graph), [],
+    "blank Publisher text is not implicitly admitted by its UUID");
+  const candidates = temporaryPlainStoryCandidates(after.authoring_graph, after.project);
+  assert.deepEqual(candidates, [{story_id:story, text:"", authored_empty:true}]);
+  assert.equal(temporaryStoryTextForTextarea("", {allowEmpty:true}), "");
+  const edit = temporaryStoryObservedToCanonicalStory("", "New authored text", {allowEmpty:true});
+  assert.equal(edit.canonicalText, "New authored text");
+  assert.deepEqual(edit.range, {
+    start_scalar:0, end_scalar:0, replacement_text:"New authored text",
+  });
+  assert.throws(() => temporaryStoryObservedToCanonicalStory("", "New authored text"),
+    /temporary_story_intent_invalid/);
+  assert.throws(() => temporaryStoryObservedToCanonicalStory("", "new\nparagraph", {allowEmpty:true}),
+    /temporary_story_intent_invalid/);
+});
+
+test("forged or unbound empty Story never becomes editable", () => {
+  const forgedId = {...after, project:{operations:[{...operation, story_id:
+    "019a2d80-1112-7001-8001-aabbccddee99"}]}};
+  const forgedParent = {...after, authoring_graph:{...after.authoring_graph,
+    nodes:{[authored]:{header:{parent_id:"01234567-89ab-4def-8abc-123456789000"},
+      payload:{story_frame:{story_id:story}}}}}};
+  const forgedFont = {...after, project:{operations:[{...operation,text_preset:{
+    ...operation.text_preset,font_size_emu:1}}]}};
+  const sourceOnly = {...after, project:{operations:[]}};
+  for(const data of [forgedId,forgedParent,forgedFont,sourceOnly]) {
+    assert.deepEqual(temporaryPlainStoryCandidates(data.authoring_graph, data.project), []);
+  }
+});
 
 test("CreateTextBox private POST reopens exact authored TextFrame and never supplies NodeId", async () => {
   const {client, calls} = harness([current, accepted, after]);

@@ -178,22 +178,22 @@ function newOperationId(cryptoObject) {
 // canonical textarea bridge; the browser cannot add/remove paragraph breaks.
 const HAS_CONTROL = /\p{Cc}/u;
 const UTF8 = new TextEncoder();
-function checkedTextareaProfile(canonicalText) {
+function checkedTextareaProfile(canonicalText, {allowEmpty = false} = {}) {
   if (typeof canonicalText !== "string") throw failure("temporary_story_intent_invalid");
   const profile = prepareStoryTextForTextarea(canonicalText);
-  if (!profile.value.length || UTF8.encode(canonicalText).length > 8192 ||
+  if ((!allowEmpty && !profile.value.length) || UTF8.encode(canonicalText).length > 8192 ||
       [...profile.value].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
     throw failure("temporary_story_intent_invalid");
   }
   return profile;
 }
 
-export function temporaryStoryTextForTextarea(canonicalText) {
-  return checkedTextareaProfile(canonicalText).value;
+export function temporaryStoryTextForTextarea(canonicalText, options = {}) {
+  return checkedTextareaProfile(canonicalText, options).value;
 }
 
-export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText) {
-  const profile = checkedTextareaProfile(canonicalText);
+export function temporaryStoryObservedToCanonicalStory(canonicalText, observedText, options = {}) {
+  const profile = checkedTextareaProfile(canonicalText, options);
   if (typeof observedText !== "string" || !observedText.length ||
       observedText.includes("\r") ||
       [...observedText].some(ch => ch !== "\n" && HAS_CONTROL.test(ch))) {
@@ -219,8 +219,35 @@ export function temporaryStoryObservedToCanonicalStory(canonicalText, observedTe
   return {canonicalText: desired, range};
 }
 
-export function temporaryPlainStoryCandidates(graph) {
+function serverCreatedBlankStoryIds(graph, project) {
+  // Only canonical, confirmed CreateTextBox revision history authorizes an
+  // originally empty Story. A source-owned empty Story or an unbound UUIDv7
+  // is never promoted to a browser text-edit capability.
+  const admitted = new Set();
+  if (!Array.isArray(project?.operations)) return admitted;
+  for (const operation of project.operations) {
+    if (!object(operation) || operation.kind !== "create_text_box" ||
+        !AUTHORED_UUID_V7.test(operation.node_id ?? "") ||
+        !AUTHORED_UUID_V7.test(operation.story_id ?? "") ||
+        operation.node_id === operation.story_id ||
+        !object(graph.pages?.[operation.page_id])) continue;
+    const node = graph.nodes?.[operation.node_id];
+    if (!object(node) || node.header?.parent_id !== operation.page_id ||
+        node.payload?.story_frame?.story_id !== operation.story_id) continue;
+    const bounds = operation.bounds;
+    if (!canonicalCreatedTextboxMatches(operation, {
+      page_id:operation.page_id,
+      x_emu:bounds?.x, y_emu:bounds?.y,
+      width_emu:bounds?.width, height_emu:bounds?.height,
+    })) continue;
+    admitted.add(operation.story_id);
+  }
+  return admitted;
+}
+
+export function temporaryPlainStoryCandidates(graph, project = null) {
   if (!object(graph?.nodes) || !object(graph?.stories)) return [];
+  const serverCreatedBlank = serverCreatedBlankStoryIds(graph, project);
   const frames = new Map();
   const tables = new Set();
   for (const node of Object.values(graph.nodes)) {
@@ -234,11 +261,15 @@ export function temporaryPlainStoryCandidates(graph) {
     typeof id === "string" && id.length > 0 && id.length <= 128 &&
     (frames.get(id) ?? 0) === 1 && !tables.has(id) &&
     typeof story?.text === "string" && (() => {
-      try { checkedTextareaProfile(story.text); return true; } catch { return false; }
+      const allowEmpty = story.text === "" && serverCreatedBlank.has(id);
+      try { checkedTextareaProfile(story.text, {allowEmpty}); return true; }
+      catch { return false; }
     })() &&
     ["runs", "paragraphs", "fields", "hyperlinks"].every(part =>
       !Array.isArray(story[part]) || story[part].length === 0)
-  ).map(([story_id, story]) => ({story_id, text: story.text}))
+  ).map(([story_id, story]) =>
+    story.text === "" ? {story_id, text:"", authored_empty:true}
+      : {story_id, text:story.text})
     .sort((a,b) => a.story_id.localeCompare(b.story_id));
 }
 
@@ -867,11 +898,13 @@ export class TemporaryGuestMoveClientV1 {
     if (this.#busy) throw failure("temporary_move_busy");
     if (this.#pending) throw failure("temporary_move_reconciliation_required");
     if (this.#refreshRequired || !this.#current) throw failure("temporary_move_current_required");
-    const eligible = temporaryPlainStoryCandidates(this.#current.authoring_graph)
+    const eligible = temporaryPlainStoryCandidates(
+      this.#current.authoring_graph, this.#current.project)
       .find(story => story.story_id === storyId);
     if (!eligible) throw failure("temporary_story_intent_invalid");
     const {canonicalText, range} =
-      temporaryStoryObservedToCanonicalStory(eligible.text, newText);
+      temporaryStoryObservedToCanonicalStory(
+        eligible.text, newText, {allowEmpty:eligible.authored_empty === true});
     const clientOperationId = this.#operationIdFactory();
     if (typeof clientOperationId !== "string" ||
         !/^[a-zA-Z0-9._:-]{1,160}$/.test(clientOperationId)) {
