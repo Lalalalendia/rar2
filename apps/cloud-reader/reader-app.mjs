@@ -226,12 +226,11 @@ function updateWindow() {
   if (!preparedScene || !pages.length || !pageOffsets.length) return;
   const t = Math.max(0, viewer.scrollTop);
   const bottom = t + viewer.clientHeight;
-  let first = 0;
-  let last = pages.length - 1;
-  while (first + 1 < pages.length && pageOffsets[first + 1] <= t) first++;
-  while (last > first && pageOffsets[last] >= bottom) last--;
-  first = Math.max(0, first - WINDOW_OVERSCAN_PAGES);
-  last = Math.min(pages.length - 1, last + WINDOW_OVERSCAN_PAGES);
+  // Binary-search the complete page geometry rather than scanning all
+  // pages on each scroll; only the selected window is materialized as SVG.
+  const first = Math.max(0, pageAtScroll(t) - WINDOW_OVERSCAN_PAGES);
+  const last = Math.min(pages.length - 1,
+    Math.max(first, pageAtScroll(Math.max(t, bottom - 1)) + WINDOW_OVERSCAN_PAGES));
   const ids = pages.slice(first, last + 1).map(p => p.page_id);
   const key = ids.join("\u0000");
   if (key === mountedPageIds) return;
