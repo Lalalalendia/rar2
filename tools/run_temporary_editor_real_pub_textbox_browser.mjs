@@ -106,7 +106,7 @@ function safeStoryConsumerFailure(output) {
   // Parse the *allowlisted* error code only. No raw Python/Scribus stderr can
   // leave the private GitHub worker, even when an application importer fails.
   try {
-    const data = JSON.parse(String(output).trim().split("\\n").at(-1));
+    const data = JSON.parse(String(output).trim().split("\n").at(-1));
     if (data.schema === "chaptera.tempedit-source-neutral-story-consumer-failure.v1" &&
         data.status === "FAIL" && SAFE_STORY_CONSUMER_CODES.has(data.failure_code)) {
       return data.failure_code;
