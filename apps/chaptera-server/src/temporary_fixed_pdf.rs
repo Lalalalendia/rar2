@@ -301,7 +301,7 @@ fn render_current_fixed_pdf_with_sheet(
                 if shared_multiline.contains_key(&fragment.story_id) {
                     continue;
                 }
-                let Some(layout) = fragment.layout else {
+                let Some(layout) = fragment.layout.as_ref() else {
                     continue;
                 };
                 let RenderTextLayoutDispositionV1::SharedResolved {
@@ -309,11 +309,12 @@ fn render_current_fixed_pdf_with_sheet(
                     font_fingerprint_sha256,
                     font_size_emu,
                     line_height_emu,
-                } = layout.disposition
+                } = &layout.disposition
                 else {
                     continue;
                 };
-                if font_resource_id != fallback.resource_id
+                let (font_size_emu, line_height_emu) = (*font_size_emu, *line_height_emu);
+                if font_resource_id.as_str() != fallback.resource_id
                     || font_fingerprint_sha256 != fingerprint
                     || font_size_emu == font_size.get()
                     || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&font_size_emu)
