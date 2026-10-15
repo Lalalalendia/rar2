@@ -71,9 +71,10 @@ jobs:
           from pathlib import Path
           p = Path(".web-v0/resolved-graph.json")
           digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          expected = "f85927cde6e2569b9ea7a6a5f634e303d83b1956e0e498d6211cf44cd669ab07"
+          expected = "12c594f1be824c0272cf28ebbc03f949a437a4d49db1b508fe2d73f66ff1c12f"
           print({"resolved_graph_sha256": digest, "bytes": p.stat().st_size})
           assert digest == expected, (digest, expected)
+          assert p.stat().st_size == 301962, p.stat().st_size
           PY
 
       - name: Materialize bounded source page paint order
@@ -136,7 +137,7 @@ jobs:
                 --resolved-graph .web-v0/resolved-graph.json \
                 --viewer-receipt .web-v0/viewer-geometry.json \
                 --source-page-paint-orders .web-v0/source-page-paint-orders.json \
-                --expected-resolved-graph-sha256 f85927cde6e2569b9ea7a6a5f634e303d83b1956e0e498d6211cf44cd669ab07 \
+                --expected-resolved-graph-sha256 12c594f1be824c0272cf28ebbc03f949a437a4d49db1b508fe2d73f66ff1c12f \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
                 --after-x-emu 653710 \
