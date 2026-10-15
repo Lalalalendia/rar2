@@ -4,7 +4,15 @@
 //! under filesystem/network seccomp deny. We combine the *current* EditorSession
 //! with the existing Viewer resolved resources and the source-neutral pub-pdf
 //! renderer. The original PUB remains immutable.
-use std::{collections::BTreeSet, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
+
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
+    build_page_render_plan_with_text_layout_v1, uniform_text_color_rgb_v1,
+};
 
 use pub_editor::{EditOperation, EditorSession, LengthEmu, NodeId, Sha256Digest, StoryId};
 use pub_layout::{
@@ -244,6 +252,20 @@ fn render_current_fixed_pdf_with_sheet(
     )
     .map_err(|_| "edited_pdf_current_text_layout_unavailable")?;
 
+    // The Reader already shapes source-verified multi-line frames with the
+    // pinned fallback font at their admitted typography size, including exact
+    // line breaks, alignment offsets and frame-local vertical placement.
+    // Consume that shared RenderPlan directly instead of independently breaking
+    // an unchanged Story a second time at a different size/font policy.
+    //
+    // This deliberately only admits complete, one-frame, source-hash-current
+    // Stories. Unresolved/mixed fonts, edited Story text, resized frames,
+    // overset, missing glyphs, or unsupported resources keep the legacy path.
+    // No source font is discovered or copied from the host/customer.
+    const MAX_SHARED_STORIES: usize = 32;
+    const MAX_SHARED_PAGES: usize = 8;
+    const MAX_SHARED_LINES: usize = 512;
+    const MAX_SHARED_SCALARS_PER_STORY: usize = 16_384;
     let scene_ids = bundle
         .geometry
         .scene
@@ -251,13 +273,230 @@ fn render_current_fixed_pdf_with_sheet(
         .iter()
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
+    let mut shared_multiline = BTreeMap::<StoryId, Vec<FixedTextRun>>::new();
+    let fallback = ExplicitRenderTextFontResourceV1 {
+        resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+        expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+        face_index: 0,
+        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+        default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+        bytes: font,
+    };
+    if projection.stories.len() <= MAX_SHARED_STORIES
+        && bundle.geometry.document.pages.len() <= MAX_SHARED_PAGES
+    {
+        for page_index in 0..bundle.geometry.document.pages.len() {
+            let Ok(page_plan) =
+                build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &fallback)
+            else {
+                continue;
+            };
+            for node in page_plan.nodes {
+                if !scene_ids.contains(&node.node_id) || resized.contains(&node.node_id) {
+                    continue;
+                }
+                let Some(fragment) = node.text else {
+                    continue;
+                };
+                if shared_multiline.contains_key(&fragment.story_id) {
+                    continue;
+                }
+                let Some(layout) = fragment.layout.as_ref() else {
+                    continue;
+                };
+                let RenderTextLayoutDispositionV1::SharedResolved {
+                    font_resource_id,
+                    font_fingerprint_sha256,
+                    font_size_emu,
+                    line_height_emu,
+                } = &layout.disposition
+                else {
+                    continue;
+                };
+                let (font_size_emu, line_height_emu) = (*font_size_emu, *line_height_emu);
+                if font_resource_id.as_str() != fallback.resource_id
+                    || font_fingerprint_sha256.as_str() != fingerprint.as_str()
+                    || font_size_emu == font_size.get()
+                    || !(6 * EMU_PER_POINT..=72 * EMU_PER_POINT).contains(&font_size_emu)
+                    || line_height_emu <= 0
+                    || !(2..=MAX_SHARED_LINES).contains(&layout.lines.len())
+                {
+                    continue;
+                }
+                let Some(story) = projection
+                    .stories
+                    .iter()
+                    .find(|story| story.origin == fragment.story_id)
+                else {
+                    continue;
+                };
+                let source_scalars = story.text.chars().collect::<Vec<_>>();
+                let Ok(scalar_len) = u32::try_from(source_scalars.len()) else {
+                    continue;
+                };
+                if source_scalars.len() > MAX_SHARED_SCALARS_PER_STORY
+                    || fragment.scalar_start != 0
+                    || fragment.scalar_end != scalar_len
+                    || fragment.text != story.text
+                    || session
+                        .graph()
+                        .stories
+                        .get(&story.origin)
+                        .is_none_or(|current| current.text != story.text)
+                {
+                    continue;
+                }
+                // A detached prefix or multiple linked frames cannot inherit
+                // the single-frame Reader viewport geometry by coincidence.
+                let frames = projection
+                    .story_frames
+                    .iter()
+                    .filter(|frame| frame.story_origin == story.origin)
+                    .collect::<Vec<_>>();
+                if frames.len() != 1 || frames[0].frame_origin != node.node_id {
+                    continue;
+                }
+                let Some(source_style) = admitted_source_line_style_v1(
+                    &bundle.geometry.typography_runs,
+                    story.origin,
+                    &story.text,
+                    0,
+                    scalar_len,
+                ) else {
+                    continue;
+                };
+                if source_style.font_size_emu != Some(font_size_emu) {
+                    continue;
+                }
+
+                let content_bounds = node.text_bounds.as_ref().unwrap_or(&node.bounds);
+                let Some(origin_x) = content_bounds.x.get().checked_sub(node.bounds.x.get()) else {
+                    continue;
+                };
+                let Some(origin_y) = content_bounds.y.get().checked_sub(node.bounds.y.get()) else {
+                    continue;
+                };
+                if origin_x < 0
+                    || origin_y < 0
+                    || content_bounds.width.get() <= 0
+                    || content_bounds.height.get() <= 0
+                    || layout.vertical_offset_emu < 0
+                {
+                    continue;
+                }
+                let fill_rgb = uniform_text_color_rgb_v1(&fragment)
+                    .or(source_style.color_rgb)
+                    .unwrap_or([0, 0, 0]);
+                let mut admitted = Vec::<FixedTextRun>::new();
+                let mut consumed = 0_u32;
+                let mut cursor_y = layout.vertical_offset_emu;
+                let mut valid = true;
+                for (index, line) in layout.lines.iter().enumerate() {
+                    let Ok(index) = u32::try_from(index) else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(start) = usize::try_from(line.scalar_start).ok() else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(end) = usize::try_from(line.scalar_end).ok() else {
+                        valid = false;
+                        break;
+                    };
+                    if line.line_index != index
+                        || line.scalar_start != consumed
+                        || line.scalar_end < consumed
+                        || line.consumed_scalar_end < line.scalar_end
+                        || line.consumed_scalar_end > scalar_len
+                        || source_scalars
+                            .get(start..end)
+                            .is_none_or(|slice| slice.iter().collect::<String>() != line.text)
+                        || !line.spans.is_empty()
+                        || line.measured_width_emu < 0
+                        || line.x_offset_emu < 0
+                        || line.line_height_emu != line_height_emu
+                    {
+                        valid = false;
+                        break;
+                    }
+                    let (Some(next_y), Some(local_x), Some(local_y)) = (
+                        cursor_y.checked_add(line.line_height_emu),
+                        origin_x.checked_add(line.x_offset_emu),
+                        origin_y
+                            .checked_add(cursor_y)
+                            .and_then(|y| y.checked_add(font_size_emu)),
+                    ) else {
+                        valid = false;
+                        break;
+                    };
+                    if next_y > content_bounds.height.get()
+                        || line
+                            .x_offset_emu
+                            .checked_add(line.measured_width_emu)
+                            .is_none_or(|width| width > content_bounds.width.get())
+                    {
+                        valid = false;
+                        break;
+                    }
+                    if !line.text.is_empty() {
+                        let Some(shaping) = line.shaping.as_ref() else {
+                            valid = false;
+                            break;
+                        };
+                        if shaping.units_per_em == 0
+                            || shaping.environment.face_index != fallback.face_index
+                            || shaping.environment.font_size_emu.get() != font_size_emu
+                            || shaping.environment.layout.font_set_fingerprint != fingerprint
+                            || shaping.glyphs.is_empty()
+                            || shaping.glyphs.iter().any(|glyph| {
+                                glyph.glyph_id == 0
+                                    || glyph.cluster < line.scalar_start
+                                    || glyph.cluster >= line.scalar_end
+                            })
+                        {
+                            valid = false;
+                            break;
+                        }
+                        admitted.push(FixedTextRun {
+                            node_id: node.node_id,
+                            scalar_base: line.scalar_start,
+                            logical_text: line.text.clone(),
+                            shaped: BoundedShapedText {
+                                environment: shaping.environment.clone(),
+                                units_per_em: shaping.units_per_em,
+                                glyphs: shaping.glyphs.clone(),
+                                total_x_advance: LengthEmu::new(line.measured_width_emu),
+                            },
+                            baseline_x: LengthEmu::new(local_x),
+                            baseline_y: LengthEmu::new(local_y),
+                            fill_rgb,
+                        });
+                    }
+                    consumed = line.consumed_scalar_end;
+                    cursor_y = next_y;
+                }
+                let counted = shared_multiline.values().map(Vec::len).sum::<usize>();
+                if valid
+                    && consumed == scalar_len
+                    && admitted.len() > 1
+                    && counted + admitted.len() <= MAX_SHARED_LINES
+                {
+                    shared_multiline.insert(story.origin, admitted);
+                }
+            }
+        }
+    }
+    let source_sized_multiline_stories = shared_multiline.len();
+    let source_sized_multiline_lines = shared_multiline.values().map(Vec::len).sum::<usize>();
+
     let mut text_runs = Vec::new();
     let mut glyphs = BTreeSet::new();
     let mut unavailable_glyph_lines = 0usize;
     let mut source_color_lines = 0usize;
     let mut source_sized_single_lines = 0usize;
     for line in &flow.lines {
-        if line.text.is_empty() {
+        if shared_multiline.contains_key(&line.story_origin) || line.text.is_empty() {
             continue;
         }
         if !scene_ids.contains(&line.frame_origin) {
@@ -351,6 +590,18 @@ fn render_current_fixed_pdf_with_sheet(
             baseline_y: LengthEmu::new(baseline_y),
             fill_rgb: color_rgb,
         });
+    }
+
+    // Preserve the exact Reader-resolved per-line shaping and offsets when
+    // admitted. This is still the pinned fallback font, not Publisher Calibri.
+    for (_story_id, lines) in shared_multiline {
+        for line in lines {
+            if line.fill_rgb != [0, 0, 0] {
+                source_color_lines += 1;
+            }
+            glyphs.extend(line.shaped.glyphs.iter().map(|glyph| glyph.glyph_id));
+            text_runs.push(line);
+        }
     }
 
     let (font_plan, fonts) = if text_runs.is_empty() {
@@ -534,6 +785,8 @@ fn render_current_fixed_pdf_with_sheet(
             "font_missing_glyph_lines": unavailable_glyph_lines,
             "source_color_lines": source_color_lines,
             "source_sized_single_lines": source_sized_single_lines,
+            "source_sized_multiline_stories": source_sized_multiline_stories,
+            "source_sized_multiline_lines": source_sized_multiline_lines,
             "moved_nodes": moved.len(),
             "edited_stories": edited_stories,
             "layout_warnings": layout_warnings,
@@ -548,7 +801,8 @@ fn render_current_fixed_pdf_with_sheet(
         "limitations": [
             "fixed_pdf_bounded_visual_subset_not_publisher_parity",
             "fallback_ubuntu_light_not_original_source_font",
-            "source_size_only_for_exact_uniform_single_line_that_fits",
+            "source_uniform_multiline_exact_reader_lines_only_for_current_quill_story",
+            "source_size_single_line_only_if_fits_exact_frame",
             "mixed_or_stale_source_typography_keeps_fallback",
             "missing_fallback_glyph_lines_disclosed_not_serialized",
             "publisher_rich_vectors_and_effects_not_fully_supported"
