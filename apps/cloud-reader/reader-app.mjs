@@ -719,7 +719,7 @@ for (const name of ["dragenter", "dragover", "dragleave", "drop"]) {
 pageSelect.addEventListener("change", () => goToPage(Number(pageSelect.value)));
 $("#previous-page").addEventListener("click", () => goToPage(pageIndex - 1));
 $("#next-page").addEventListener("click", () => goToPage(pageIndex + 1));
-zoomSelect.addEventListener("change", () => { applyZoom(); goToPage(pageIndex); });
+zoomSelect.addEventListener("change", () => { applyZoom(); });
 viewer.addEventListener("keydown", (event) => {
   if (["PageDown", "PageUp", "ArrowRight", "ArrowLeft"].includes(event.key)) {
     event.preventDefault();
