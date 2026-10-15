@@ -317,6 +317,12 @@ def sbdc_r1_browser_own_pdf_raster(
     text_advance_census = census_private_browser_reader_advances(
         private_browser_geometry["private_advance_checks"]
     )
+    from sbdc_r1_text_advance_outlier_census import classify_private_advance_outliers
+    outlier_census = classify_private_advance_outliers(
+        private_browser_geometry["private_advance_outlier_checks"]
+    )
+    if outlier_census["sample_count"] != text_advance_census["total_samples"]:
+        raise AssertionError("private outlier sample does not match source advances")
     from sbdc_r1_raster_disagreement_census import census_r1_disagreement
     from sbdc_r1_text_metrics_census import census_r1_text_metrics
     disagreement_census = census_r1_disagreement(
@@ -332,6 +338,7 @@ def sbdc_r1_browser_own_pdf_raster(
         "text_line_geometry": text_line_geometry,
         "text_metrics_census": text_metrics_census,
         "chromium_reader_text_advance_census": text_advance_census,
+        "chromium_reader_advance_outlier_census": outlier_census,
         "source_r1_exact": True,
         "render_dpi": 144,
         "browser_source": "real_https_temporary_editor_scene",
