@@ -49,8 +49,8 @@ use crate::{
         EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, append_event_operation, decode_editor_history_event_v1,
-        decode_editor_revision_event_v1, encode_editor_history_event_v1,
+        RevisionMaterializerError, append_event_operation, cloud_replay_requires_local_identity,
+        decode_editor_history_event_v1, decode_editor_revision_event_v1, encode_editor_history_event_v1,
         encode_editor_revision_event_v1, project_sha256, undo_event_operation,
     },
     safe_preview_scene::{WorkerSafePreviewSamplesV1, collect_worker_preview_samples},
@@ -525,7 +525,17 @@ fn project_reader_scene_with_worker_samples(
                 format!("canonical editor could not open durable source for scene replay: {error}"),
             )
         })?;
-        session.apply_project(project).map_err(|error| {
+        // Cloud semantic RevisionStream excludes the local ProjectId lineage.
+        // Rehydrate only the transient EditorSession identity for versions
+        // that require it, exactly as materializer and confined Product worker
+        // replay already do; never change the canonical Cloud project/hash.
+        let mut local_replay = project.clone();
+        if local_replay.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_replay.schema_version)
+        {
+            local_replay.identity = session.project().identity;
+        }
+        session.apply_project(&local_replay).map_err(|error| {
             ProductApiError::internal(
                 "reader_scene_editor_replay_failed",
                 format!("canonical editor could not replay exact scene revision: {error}"),
