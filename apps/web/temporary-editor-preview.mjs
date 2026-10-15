@@ -216,6 +216,7 @@ export async function bootTemporaryEditorPreview({
   const actions = documentObject?.getElementById("temporary-export-actions");
   const idmlButton = documentObject?.getElementById("temporary-download-idml");
   const drawButton = documentObject?.getElementById("temporary-draw-rectangle");
+  const textBoxButton = documentObject?.getElementById("temporary-draw-textbox");
   const odgButton = documentObject?.getElementById("temporary-download-odg");
   const pdfButton = documentObject?.getElementById("temporary-download-pdf");
   const pdf9upButton = documentObject?.getElementById("temporary-download-pdf9up");
@@ -232,6 +233,7 @@ export async function bootTemporaryEditorPreview({
   const pdfPreviewEnabled = !!(editorEnabled && pdfPreviewButton && pdfPreviewCloseButton &&
     pdfPreview && pdfPreviewFrame && pdfPreviewInfo);
   const drawEnabled = editorEnabled && !!drawButton;
+  const textDrawEnabled = editorEnabled && !!textBoxButton;
   const viewButtons = {
     prev: documentObject?.getElementById("temporary-page-prev"),
     next: documentObject?.getElementById("temporary-page-next"),
@@ -267,6 +269,7 @@ export async function bootTemporaryEditorPreview({
   let gesturePage = null;
   let gestureOverlay = null;
   let rectangleToolActive = false;
+  let textBoxToolActive = false;
   let rectangleDraft = null;
   let selectedResizeNodeId = null;
   let selectedResizePageId = null;
@@ -347,6 +350,11 @@ export async function bootTemporaryEditorPreview({
         drawButton.disabled = !canExport || !interaction?.pages?.length;
         drawButton.setAttribute?.("aria-pressed", String(rectangleToolActive));
         pages.setAttribute?.("data-rectangle-tool", String(rectangleToolActive));
+      }
+      if (textDrawEnabled) {
+        textBoxButton.disabled = !canExport || !interaction?.pages?.length;
+        textBoxButton.setAttribute?.("aria-pressed", String(textBoxToolActive));
+        pages.setAttribute?.("data-textbox-tool", String(textBoxToolActive));
       }
       idmlButton.disabled = !canDownloadEdited;
       odgButton.disabled = !canDownloadEdited;
@@ -539,6 +547,9 @@ export async function bootTemporaryEditorPreview({
     clearGesture();
     clearResizeHandles({forget: true});
     rectangleToolActive = false;
+    textBoxToolActive = false;
+    pages.setAttribute?.("data-textbox-tool", "false");
+    textBoxButton?.setAttribute?.("aria-pressed", "false");
     pages.setAttribute?.("data-rectangle-tool", "false");
     drawButton?.setAttribute?.("aria-pressed", "false");
     moveClient = null;
@@ -734,14 +745,14 @@ export async function bootTemporaryEditorPreview({
     if (!svg || !interaction) return;
     try {
       const point = temporaryEditorPagePoint(svg, event.clientX, event.clientY);
-      if (drawEnabled && rectangleToolActive) {
+      if ((drawEnabled && rectangleToolActive) || (textDrawEnabled && textBoxToolActive)) {
         const pageId = svg.getAttribute("data-page-id");
         const page = interaction.pages.find(entry => entry.page_id === pageId);
         if (!page || !canonicalCurrent?.authoring_graph?.pages?.[pageId] ||
             point.x_emu < 0 || point.y_emu < 0 ||
             point.x_emu > page.width_emu || point.y_emu > page.height_emu) return;
         clearResizeHandles({forget: true});
-        rectangleDraft = {pageId, page, start: point, pointerId: event.pointerId};
+        rectangleDraft = {kind: textBoxToolActive ? "textbox" : "rectangle", pageId, page, start: point, pointerId: event.pointerId};
         gesturePage = svg;
         pages.setPointerCapture?.(event.pointerId);
         event.preventDefault?.();
@@ -823,15 +834,19 @@ export async function bootTemporaryEditorPreview({
       } catch {}
       clearGesture();
       if (!bounds) {
-        status.textContent = "Прямоугольник не создан: протяните область положительного размера внутри одной страницы.";
+        status.textContent = "Объект не создан: протяните область положительного размера внутри одной страницы.";
         return;
       }
       clearSheetPreview();
       editBusy = true;
       controls();
-      status.textContent = "Создаётся прямоугольник в канонической ревизии…";
+      status.textContent = draft.kind === "textbox"
+        ? "Создаётся текстовая рамка и новая Story в канонической ревизии…"
+        : "Создаётся прямоугольник в канонической ревизии…";
       try {
-        const result = await moveClient.createRectangle({pageId: draft.pageId, bounds});
+        const result = draft.kind === "textbox"
+          ? await moveClient.createTextBox({pageId: draft.pageId, bounds})
+          : await moveClient.createRectangle({pageId: draft.pageId, bounds});
         canonicalCurrent = result.current;
         const scene = await moveClient.readerScene();
         const created = result.accepted.canonical_operation;
@@ -839,7 +854,15 @@ export async function bootTemporaryEditorPreview({
         const fill = node?.paint?.fill_rgb;
         const line = node?.paint?.line;
         const expectedPaint = created.paint;
-        if (!node || node.kind !== "shape" || node.page_id !== draft.pageId ||
+        if (draft.kind === "textbox") {
+          const canonical = canonicalCurrent.authoring_graph;
+          if (!node || node.page_id !== draft.pageId ||
+              !node.bounds || ["x","y","width","height"].some(k => node.bounds[k] !== bounds[k]) ||
+              canonical.nodes?.[created.node_id]?.payload?.story_frame?.story_id !== created.story_id ||
+              canonical.stories?.[created.story_id]?.text !== "") {
+            throw new Error("temporary_create_textbox_scene_mismatch");
+          }
+        } else if (!node || node.kind !== "shape" || node.page_id !== draft.pageId ||
             !node.bounds || ["x", "y", "width", "height"].some(k => node.bounds[k] !== bounds[k]) ||
             !Array.isArray(fill) || fill.length !== 3 ||
             fill.some((value, index) => value !==
@@ -853,15 +876,17 @@ export async function bootTemporaryEditorPreview({
         interaction = projectReaderSceneToEditorInteractionScene(scene);
         partialFidelity ||= scene.fidelity?.state === "partial";
         await renderCanvas(scene);
-        refreshStoryEditor();
+        refreshStoryEditor(draft.kind === "textbox" ? created.story_id : null);
         clearResizeHandles({forget: true});
         expiry.textContent = temporaryExpiryText(canonicalCurrent.expires_at_ms);
-        status.textContent = "Прямоугольник сохранён сервером. Доступны изменённые IDML и ODG." +
+        status.textContent = (draft.kind === "textbox"
+          ? "Новая рамка подтверждена сервером. Введите текст и нажмите «Сохранить текст»."
+          : "Прямоугольник сохранён сервером. Доступны изменённые IDML и ODG.") +
           (partialFidelity ? " Needs review / Partial: порядок наложения и экспорт требуют проверки." : "");
       } catch {
         pages.replaceChildren();
         interaction = null;
-        status.textContent = "Создание прямоугольника или повторное открытие сцены не подтверждено. Восстановите сессию перед правкой.";
+        status.textContent = "Создание объекта или повторное открытие сцены не подтверждено. Восстановите сессию перед правкой.";
         if (!moveClient?.status.pending_reconciliation) clearEditor();
       } finally {
         editBusy = false;
@@ -930,6 +955,7 @@ export async function bootTemporaryEditorPreview({
       clearGesture();
       clearResizeHandles({forget: true});
       rectangleToolActive = false;
+      textBoxToolActive = false;
       controls();
       return;
     }
@@ -1201,9 +1227,27 @@ export async function bootTemporaryEditorPreview({
       clearGesture();
       clearResizeHandles({forget: true});
       rectangleToolActive = !rectangleToolActive;
+      textBoxToolActive = false;
       status.textContent = rectangleToolActive
         ? "Инструмент прямоугольника: нажмите на страницу и протяните область. Escape отменяет."
         : "Режим выбора: выделяйте, перемещайте и меняйте размер поддерживаемых объектов.";
+      controls();
+    });
+    if (textDrawEnabled) textBoxButton.addEventListener("click", () => {
+      if (storyDraftDirty() || composingStory) {
+        status.textContent = "Сначала сохраните или сбросьте несохранённый текст перед сменой инструмента.";
+        return;
+      }
+      if (busy || editBusy || !moveClient ||
+          moveClient.status.pending_reconciliation ||
+          moveClient.status.refresh_required) return;
+      clearGesture();
+      clearResizeHandles({forget: true});
+      textBoxToolActive = !textBoxToolActive;
+      rectangleToolActive = false;
+      status.textContent = textBoxToolActive
+        ? "Текстовая рамка: протяните область внутри страницы, затем введите текст."
+        : "Режим выбора: выделяйте существующие объекты.";
       controls();
     });
     pages.addEventListener("pointerdown", pointerDown);
