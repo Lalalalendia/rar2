@@ -1774,6 +1774,12 @@ pub fn run_product_replay_worker(
                     "product_create_textbox_invalid",
                     "author-created Story has no canonical proof",
                 )
+            })?
+            .ok_or_else(|| {
+                ProductReplayWorkerError::new(
+                    "product_create_textbox_invalid",
+                    "CreateTextBox has no proven author-created Story",
+                )
             })?;
         if operation != expected
             || proof.frame_id != *node_id
