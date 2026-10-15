@@ -1,0 +1,34 @@
+name: Cloud Reader published deploy dispatch selftest
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cloud-reader-published-deploy-dispatch.yml"
+      - ".github/workflows/cloud-reader-published-deploy-selftest.yml"
+      - "tools/ci/cloud_reader_release_dispatch_guard.py"
+      - "tools/ci/test_cloud_reader_release_dispatch_guard.py"
+      - "docs/cloud-reader-published-deploy.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cloud-reader-published-deploy-dispatch.yml"
+      - ".github/workflows/cloud-reader-published-deploy-selftest.yml"
+      - "tools/ci/cloud_reader_release_dispatch_guard.py"
+      - "tools/ci/test_cloud_reader_release_dispatch_guard.py"
+      - "docs/cloud-reader-published-deploy.md"
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Test source provenance, stale release and least privilege
+        run: |
+          python3 tools/ci/test_cloud_reader_release_dispatch_guard.py -v
+          python3 -m py_compile tools/ci/cloud_reader_release_dispatch_guard.py
