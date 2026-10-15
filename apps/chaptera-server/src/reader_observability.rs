@@ -301,7 +301,9 @@ mod tests {
             recorder.record(stage, Some(&context), "success", Duration::from_millis(3));
         }
         recorder.record(
-            "temporary.unbounded-custom-stage", Some(&context), "success",
+            "temporary.unbounded-custom-stage",
+            Some(&context),
+            "success",
             Duration::from_millis(1),
         );
         let events = recorder.receipt(&context.trace_id);
