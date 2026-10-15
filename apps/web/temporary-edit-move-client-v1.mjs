@@ -7,6 +7,31 @@ import {
   restoreStoryTextFromTextarea,
 } from "./story-line-endings-v1.mjs";
 
+
+function optionalGuestTraceContext(trace, operationClass, clientOperationId = null) {
+  try {
+    return trace?.recorder?.createContext({
+      operationClass, interactionId: trace.interactionId,
+      ...(clientOperationId ? {clientOperationId} : {}),
+    }) ?? null;
+  } catch { return null; } // Diagnostics cannot affect semantic authority.
+}
+function optionalGuestTraceHeaders(trace, context) {
+  try { return context ? (trace?.headersFor?.(context) ?? {}) : {}; }
+  catch { return {}; }
+}
+function guestTraceTimeMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+function markGuestHttpTrace(trace, context, started, outcome) {
+  if (!context) return;
+  try {
+    trace?.recorder?.mark("browser.guest_http", context, {
+      outcome, durationMs: Math.max(0, guestTraceTimeMs() - started),
+    });
+  } catch { /* Tracing is not a mutation or access-control gate. */ }
+}
+
 const SESSION = /^tempedit:[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;
 const SOURCE = /^[0-9a-f]{64}$/;
@@ -200,26 +225,29 @@ export class TemporaryGuestMoveClientV1 {
   #fetch;
   #operationIdFactory;
   #sleep;
+  #trace = null;
+  #latestTrace = null;
+  #lastExportTrace = null;
   #current = null;
   #pending = null;
   #busy = false;
   #refreshRequired = false;
 
   static fromTab({ storage = defaultStorage(), csrfToken, fetchImpl,
-    cryptoObject = globalThis.crypto, operationIdFactory } = {}) {
+    cryptoObject = globalThis.crypto, operationIdFactory, trace = null } = {}) {
     const record = recordFromTab(storage);
     if (!record) throw failure("temporary_edit_capability_missing");
     return new TemporaryGuestMoveClientV1({
       sessionId: record.session_id, accessToken: record.access_token,
       sourceHash: record.source_sha256, csrfToken, fetchImpl, cryptoObject,
-      operationIdFactory,
+      operationIdFactory, trace,
     });
   }
 
   constructor({ sessionId, accessToken, sourceHash, csrfToken,
     fetchImpl = globalThis.fetch, cryptoObject = globalThis.crypto,
     operationIdFactory = () => newOperationId(cryptoObject),
-    sleepImpl = defaultSleep } = {}) {
+    sleepImpl = defaultSleep, trace = null } = {}) {
     if (!SESSION.test(sessionId ?? "") || !SECRET.test(accessToken ?? "") ||
         !SOURCE.test(sourceHash ?? "") || !/^[0-9a-f]{32}$/.test(csrfToken ?? "") ||
         typeof fetchImpl !== "function" || typeof operationIdFactory !== "function"
@@ -233,6 +261,23 @@ export class TemporaryGuestMoveClientV1 {
     this.#fetch = fetchImpl;
     this.#operationIdFactory = operationIdFactory;
     this.#sleep = sleepImpl;
+    this.#trace = trace;
+  }
+
+  async #fetchTraced(path, options, context) {
+    const started = guestTraceTimeMs();
+    let outcome = "unknown";
+    try {
+      const response = await this.#fetch.call(globalThis, path, options);
+      outcome = response?.ok ? "success" :
+        response?.status >= 500 ? "error" : "rejected";
+      return response;
+    } catch (error) {
+      outcome = "error";
+      throw error;
+    } finally {
+      markGuestHttpTrace(this.#trace, context, started, outcome);
+    }
   }
 
   // No bearer or raw PUB contents are ever exposed by status introspection.
@@ -252,13 +297,14 @@ export class TemporaryGuestMoveClientV1 {
     return "/v1/editor/temporary-sessions/" + this.#sessionId + "/" + action;
   }
 
-  async #request(action, method = "GET", body = null) {
+  async #request(action, method = "GET", body = null, traceContext = null) {
     const options = {
       method,
       headers: {
         "accept": "application/json",
         "x-chaptera-reader-session": this.#token,
         "x-csrf-token": this.#csrf,
+        ...optionalGuestTraceHeaders(this.#trace, traceContext),
         ...(body ? { "content-type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -266,7 +312,7 @@ export class TemporaryGuestMoveClientV1 {
       redirect: "error", referrerPolicy: "no-referrer",
     };
     const path = this.#path(action);
-    let response = await this.#fetch.call(globalThis, path, options);
+    let response = await this.#fetchTraced(path, options, traceContext);
     if (response?.status === 429 && method === "GET" &&
         (action === "current" || action === "scene")) {
       const delayMs = boundedReadRetryAfterMs(response);
@@ -274,7 +320,7 @@ export class TemporaryGuestMoveClientV1 {
         // The retry is one-shot. Never replay mutation, export, or DELETE.
         // The same bearer/source/revision checks still run on the fresh reply.
         await this.#sleep(delayMs);
-        response = await this.#fetch.call(globalThis, path, options);
+        response = await this.#fetchTraced(path, options, traceContext);
       }
     }
     if (!response?.ok) {
@@ -308,7 +354,11 @@ export class TemporaryGuestMoveClientV1 {
     if (this.#busy) throw failure("temporary_move_busy");
     this.#busy = true;
     try {
-      const current = this.#checkedCurrent(await this.#request("current"));
+      const traceContext = optionalGuestTraceContext(this.#trace, "scene_read");
+      const current = this.#checkedCurrent(
+        await this.#request("current", "GET", null, traceContext),
+      );
+      this.#latestTrace = traceContext;
       this.#current = current;
       this.#refreshRequired = false;
       return current;
@@ -370,8 +420,12 @@ export class TemporaryGuestMoveClientV1 {
   async #finishPending() {
     const pending = this.#pending;
     if (!pending) throw failure("temporary_move_nothing_to_reconcile");
+    const traceContext = pending.traceContext ?? optionalGuestTraceContext(
+      this.#trace, "commit", pending.request.client_operation_id,
+    );
+    pending.traceContext = traceContext; // Exact retry keeps attempt correlation.
     let rawAck;
-    try { rawAck = await this.#request(pending.action, "POST", pending.request); }
+    try { rawAck = await this.#request(pending.action, "POST", pending.request, traceContext); }
     catch (error) {
       // Only this POST rejection is conclusive. A later GET 4xx after a
       // successful POST does NOT prove that the edit failed.
@@ -387,7 +441,9 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_move_ack_changed_on_replay");
     }
     pending.ack = ack;
-    const current = this.#checkedCurrent(await this.#request("current"));
+    const current = this.#checkedCurrent(
+      await this.#request("current", "GET", null, traceContext),
+    );
     const command = pending.request.command;
     const node = current.authoring_graph.nodes[command.node_id];
     const currentOperation = current.project?.operations?.at(-1);
@@ -412,6 +468,7 @@ export class TemporaryGuestMoveClientV1 {
       throw failure("temporary_move_reopened_state_mismatch");
     }
     this.#current = current;
+    this.#latestTrace = traceContext;
     this.#pending = null;
     this.#refreshRequired = false;
     return { accepted: ack, current };
@@ -425,7 +482,12 @@ export class TemporaryGuestMoveClientV1 {
     }
     const head = this.#current;
     let response;
-    try { response = await this.#request("scene"); }
+    try {
+      response = await this.#request(
+        "scene", "GET", null, this.#latestTrace ??
+          optionalGuestTraceContext(this.#trace, "scene_read"),
+      );
+    }
     catch (error) {
       this.#refreshRequired = true;
       throw error;
@@ -463,23 +525,35 @@ export class TemporaryGuestMoveClientV1 {
     }
     const head = this.#current;
     const physicalPdf = target === "pdf" || target === "pdf9up";
+    // Keep the export report and its immediately following binary on the
+    // same execution trace; a different target or revision creates a new one.
+    const previousExport = this.#lastExportTrace;
+    const traceContext = !reportOnly && previousExport?.target === target &&
+      previousExport.revisionId === head.revision_id
+      ? previousExport.context
+      : optionalGuestTraceContext(this.#trace, "export");
+    this.#lastExportTrace = reportOnly
+      ? {target, revisionId: head.revision_id, context: traceContext}
+      : null;
     const query = new URLSearchParams({
       revision_id: head.revision_id,
       canonical_authoring_revision_id: head.canonical_authoring_revision_id,
       report_only: String(reportOnly),
     });
-    const response = await this.#fetch.call(
-      globalThis, this.#path("exports/" + target) + "?" + query.toString(),
+    const response = await this.#fetchTraced(
+      this.#path("exports/" + target) + "?" + query.toString(),
       {
         method: "GET",
         headers: {
           accept: reportOnly ? "application/json" : physicalPdf ? "application/pdf" : "application/octet-stream",
           "x-chaptera-reader-session": this.#token,
           "x-csrf-token": this.#csrf,
+          ...optionalGuestTraceHeaders(this.#trace, traceContext),
         },
         credentials: "omit", mode: "same-origin", cache: "no-store",
         redirect: "error", referrerPolicy: "no-referrer",
       },
+      traceContext,
     );
     if (!response?.ok) {
       this.#refreshRequired = true;
