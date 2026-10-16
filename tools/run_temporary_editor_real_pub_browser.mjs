@@ -633,7 +633,8 @@ try {
       : message?.includes("Удаление не подтверждено сервером") ? "unconfirmed"
       : message?.includes("Удаляется временная сессия") ? "pending" : "other";
     const requests = observed.requests.filter(x =>
-      x.method === "DELETE" && /^\\/v1\\/editor\\/temporary-sessions\\/tempedit:[0-9a-f]{32}$/.test(x.path));
+      x.method === "DELETE" &&
+      x.path === "/v1/editor/temporary-sessions/" + oldHead.document_id);
     const statuses = observed.responses.filter(x =>
       x.path === "/v1/editor/temporary-sessions/{session}").map(x => x.status);
     return JSON.stringify({ui_state: uiState, delete_requests: requests.length,
