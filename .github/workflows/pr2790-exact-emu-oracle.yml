@@ -13,6 +13,7 @@ on:
       - tools/ci/test_pr2790_native_shape_probe.py
       - vendor/producer-a/crates/pub-editor/src/session_geometry.rs
       - vendor/producer-a/crates/pub-editor/src/lib.rs
+      - vendor/producer-a/crates/pub-editor/tests/pr2790_export_gap_v1.rs
       - apps/chaptera-server/src/exact_emu_move_nodes_intent_v1.rs
 
 permissions:
@@ -100,8 +101,9 @@ jobs:
           CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail
-          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
-          cargo check -p chaptera-server --all-targets
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --lib
+          cargo check -p chaptera-server --lib
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test pr2790_export_gap_v1 --no-run
 
       - name: Validate Python syntax
         run: |
@@ -159,7 +161,7 @@ jobs:
             echo '**Scope: synthetic packages only. No real PUB, native import, Rust MoveNodes, or browser acceptance was executed.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Probe real Rust EditorSession gap and export genuine Chaptera IDML/ODG
+      - name: Verify actual authored MoveNodes replay and post-move IDML/ODG
         env:
           PR2790_GEOMETRY_DIR: ${{ runner.temp }}/pr2790-adapter
           CARGO_INCREMENTAL: "0"
@@ -170,27 +172,27 @@ jobs:
           cargo --version
           cargo test --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-editor --test pr2790_export_gap_v1 \
-            actual_chaptera_adapters_export_three_shapes_and_overlay_move_gap_is_confirmed -- --exact --nocapture
-          python3 - "$PR2790_GEOMETRY_DIR/gap.json" <<'PY'
+            actual_chaptera_adapters_move_authored_middle_and_reopen -- --exact --nocapture
+          python3 - "$PR2790_GEOMETRY_DIR/move-positive.json" <<'PY'
           import json,sys
           with open(sys.argv[1],encoding='utf-8') as f:
               gap=json.load(f)
-          assert gap['status']=='GAP_CONFIRMED', gap
+          assert gap['status']=='PASS', gap
           assert gap['created_shapes']==3 and gap['attempted_changed_nodes']==1, gap
-          assert gap['author_created_move_nodes_implemented'] is False, gap
+          assert gap['author_created_move_nodes_implemented'] is True, gap
           PY
           for target in idml odg; do
             python3 tools/verify_temporary_guest_move_nodes_export.py \
-              --artifact "$PR2790_GEOMETRY_DIR/actual.$target" \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-moved.$target" \
               --target "$target" \
-              --witness "$PR2790_GEOMETRY_DIR/witness-baseline.json" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-moved.json" \
               | tee "$PR2790_GEOMETRY_DIR/$target-adapter-receipt.json"
           done
           {
             echo '## Rust: real Chaptera adapter, 3 created rectangles'
-            echo 'The current authored-shapes MoveNodes replay gap was reproduced as an expected fail-closed diagnostic.'
-            echo 'Real Chaptera-exported IDML and ODG packages passed the 3-shape exact-EMU oracle at baseline.'
-            echo '**This is NOT a passing MoveNodes implementation or real PUB/Chromium acceptance.**'
+            echo 'Authored MoveNodes replay and atomic Undo/Redo passed.'
+            echo 'Real Chaptera-exported IDML and ODG packages passed 3-shape exact-EMU oracle after MoveNodes.'
+            echo '**This does not prove Guest browser acceptance.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fetch pinned public Apache POI original Publisher fixture
@@ -219,27 +221,27 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-editor --test pr2790_export_gap_v1 \
             pinned_public_real_pub_three_shapes_replay_and_export -- --exact --nocapture
-          python3 - "$PR2790_GEOMETRY_DIR/gap-real.json" <<'PY'
+          python3 - "$PR2790_GEOMETRY_DIR/move-real.json" <<'PY'
           import json,sys
           from pathlib import Path
           d=json.loads(Path(sys.argv[1]).read_text())
           assert d['source_sha256']=='6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf'
-          assert d['status']=='GAP_CONFIRMED' and d['canonical_project_replay'] is True
+          assert d['status']=='PASS' and d['canonical_project_replay'] is True
           assert d['create_undo_redo'] is True and d['created_shapes']==3
-          assert d['author_created_move_nodes_implemented'] is False
+          assert d['author_created_move_nodes_implemented'] is True
           PY
           for target in idml odg; do
             python3 tools/verify_temporary_guest_move_nodes_export.py \
-              --artifact "$PR2790_GEOMETRY_DIR/actual-real.$target" \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-real-moved.$target" \
               --target "$target" \
-              --witness "$PR2790_GEOMETRY_DIR/witness-real-baseline.json" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-real-moved.json" \
               --source "$PR2790_PUBLIC_REAL_PUB" \
               | tee "$PR2790_GEOMETRY_DIR/$target-real-adapter-receipt.json"
           done
           {
             echo '## Original SHA-pinned public PUB acceptance (before MoveNodes)'
-            echo 'Actual publisher reader, canonical 3xCreateShape project replay, 3x Undo/Redo and IDML/ODG adapter package exact geometry verified.'
-            echo '**Authored MoveNodes remains intentionally proven unsupported; no Guest browser mutation claimed.**'
+            echo 'Actual PUB reader, canonical CreateShape x3 -> MoveNodes, Undo/Redo and exact moved IDML/ODG verified.'
+            echo '**Candidate MoveNodes succeeded; Guest browser is not verified.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install native file consumers
@@ -256,9 +258,9 @@ jobs:
           set -euo pipefail
           for target in idml odg; do
             python3 tools/ci/pr2790_native_shape_probe.py \
-              --artifact "$PR2790_GEOMETRY_DIR/actual.$target" \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-moved.$target" \
               --target "$target" \
-              --witness "$PR2790_GEOMETRY_DIR/witness-baseline.json" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-moved.json" \
               | tee "$PR2790_GEOMETRY_DIR/$target-native-receipt.json"
             python3 - "$PR2790_GEOMETRY_DIR/$target-native-receipt.json" <<'PY'
           import json,sys
@@ -278,7 +280,7 @@ jobs:
             echo 'all three authored shapes matched separate native objects by four bounding-box fields.'
             echo '**Native group geometry uses <= 1 pt import tolerance, modulo ONE uniform canvas-origin shift if the importer moves the whole group.**'
             echo '**Absolute native page placement is NOT asserted when registration mode is uniform_canvas_translation. Package XML exact-EMU is checked independently.**'
-            echo '**No real source PUB, changed MoveNodes or browser mutation was exercised.**'
+            echo '**Changed authored MoveNodes was exercised; no Guest browser mutation.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify real-source authored rectangles in native Scribus and LibreOffice
@@ -289,9 +291,9 @@ jobs:
           set -euo pipefail
           for target in idml odg; do
             python3 tools/ci/pr2790_native_shape_probe.py \
-              --artifact "$PR2790_GEOMETRY_DIR/actual-real.$target" \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-real-moved.$target" \
               --target "$target" \
-              --witness "$PR2790_GEOMETRY_DIR/witness-real-baseline.json" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-real-moved.json" \
               | tee "$PR2790_GEOMETRY_DIR/$target-real-native-receipt.json"
             python3 - "$PR2790_GEOMETRY_DIR/$target-real-native-receipt.json" <<'PY'
           import json,sys
@@ -317,13 +319,13 @@ jobs:
             ${{ runner.temp }}/pr2790-oracle/dependency-overlay-receipt.json
             ${{ runner.temp }}/pr2790-oracle/idml-receipt.json
             ${{ runner.temp }}/pr2790-oracle/odg-receipt.json
-            ${{ runner.temp }}/pr2790-adapter/gap.json
+            ${{ runner.temp }}/pr2790-adapter/move-positive.json
             ${{ runner.temp }}/pr2790-adapter/idml-adapter-receipt.json
             ${{ runner.temp }}/pr2790-adapter/odg-adapter-receipt.json
             ${{ runner.temp }}/pr2790-adapter/idml-native-receipt.json
             ${{ runner.temp }}/pr2790-adapter/odg-native-receipt.json
-            ${{ runner.temp }}/pr2790-adapter/witness-real-baseline.json
-            ${{ runner.temp }}/pr2790-adapter/gap-real.json
+            ${{ runner.temp }}/pr2790-adapter/witness-real-moved.json
+            ${{ runner.temp }}/pr2790-adapter/move-real.json
             ${{ runner.temp }}/pr2790-adapter/idml-real-adapter-receipt.json
             ${{ runner.temp }}/pr2790-adapter/odg-real-adapter-receipt.json
             ${{ runner.temp }}/pr2790-adapter/idml-real-native-receipt.json

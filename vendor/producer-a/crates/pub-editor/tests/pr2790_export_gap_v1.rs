@@ -1,8 +1,8 @@
-//! CI-only, source-neutral diagnostic for PR #2790.
+//! CI-only bounded positive consumer test for PR #2790.
 //!
-//! Uses the ACTUAL pub-editor IDML/ODG adapters, unlike the synthetic XML
-//! oracle self-test. It deliberately proves the known pre-fix overlay MoveNodes
-//! rejection. GAP_CONFIRMED is not evidence that MoveNodes is implemented.
+//! Exercises the actual canonical MoveNodes authored Rectangle runtime,
+//! persisted replay, Undo/Redo, and Chaptera IDML/ODG adapters before and
+//! after movement. Real public PUB bytes never leave the Actions runner.
 
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
@@ -97,7 +97,7 @@ fn baseline_graph() -> PubResolvedGraph {
 }
 
 #[test]
-fn actual_chaptera_adapters_export_three_shapes_and_overlay_move_gap_is_confirmed() {
+fn actual_chaptera_adapters_move_authored_middle_and_reopen() {
     let graph = baseline_graph();
     let mut session = EditorSession::new(graph.clone()).expect("source-neutral EditorSession");
     let positions = [(A, 100_000), (B, 300_000), (C, 900_000)];
@@ -149,43 +149,108 @@ fn actual_chaptera_adapters_export_three_shapes_and_overlay_move_gap_is_confirme
             .expect("write real Chaptera editable artifact");
     }
 
-    // Isolate the current implementation gap. It is expected to fail until
-    // the canonical authored_shapes MoveNodes consumer is implemented.
-    let node_b: NodeId = canonical_id(B);
-    let mut attempted = project;
-    attempted.operations.push(EditOperation::MoveNodes {
+    let middle: NodeId = canonical_id(B);
+    let mut moved_project = project;
+    moved_project.operations.push(EditOperation::MoveNodes {
         page_id: page_id(),
         entries: vec![MoveNodeBatchEntry {
-            node_id: node_b,
-            before: rectangle(300_000),
-            after: rectangle(500_000),
+            node_id: middle, before: rectangle(300_000), after: rectangle(500_000),
         }],
     });
     let mut reopened = EditorSession::new(graph.clone()).expect("fresh EditorSession");
-    let result = reopened.apply_project(&attempted);
-    let exact_gap = match &result {
+    reopened.apply_project(&moved_project).expect("author-created MoveNodes replay");
+    assert_eq!(reopened.project(), moved_project, "canonical history must replay exactly");
+    assert_eq!(reopened.operations().len(), 4, "one atomic MoveNodes history unit");
+    assert_eq!(reopened.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+    for (id, x) in [(A, 100_000), (C, 900_000)] {
+        assert_eq!(reopened.authored_shape(canonical_id(id)).unwrap().bounds, rectangle(x));
+    }
+    assert_eq!(reopened.graph(), &graph, "never rewrite imported source graph");
+    reopened.undo().expect("one MoveNodes undo");
+    assert_eq!(reopened.operations().len(), 3);
+    assert_eq!(reopened.authored_shape(middle).unwrap().bounds, rectangle(300_000));
+    reopened.redo().expect("one MoveNodes redo");
+    assert_eq!(reopened.project(), moved_project);
+    assert_eq!(reopened.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+    let mut separate = EditorSession::new(graph.clone()).expect("another fresh source");
+    separate.apply_project(&moved_project).expect("persisted project source-bound reopen");
+    assert_eq!(separate.project(), moved_project);
+    assert_eq!(separate.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+    assert_eq!(separate.graph(), &graph);
+
+    let mut moved_expected = expected_bounds;
+    moved_expected.insert(B.to_string(), json!({
+        "x": 500_000, "y": 100_000, "width": 500_000, "height": 250_000
+    }));
+    let moved_witness = json!({
+        "schema": "chaptera.temporary-editor-move-nodes-export-witness.v1",
+        "source_sha256": SOURCE_HASH,
+        "revision_id": format!("sha256:{}", "1".repeat(64)),
+        "page_id": PAGE,
+        "page_size": {"width": 3_000_000, "height": 2_000_000},
+        "selected_node_ids": selected,
+        "operations": moved_project.operations.clone(),
+        "expected_bounds": moved_expected,
+        "expected_moved_node_ids": [B],
+    });
+    fs::write(out.join("witness-moved.json"),
+        serde_json::to_vec_pretty(&moved_witness).expect("moved witness"))
+        .expect("persist moved geometry witness");
+    for (target, extension) in [
+        (EditorEditableTarget::Idml, "idml"),
+        (EditorEditableTarget::Odg, "odg"),
+    ] {
+        let export = reopened.export_editable(target, "pr2790-after-MoveNodes")
+            .expect("real Chaptera moved-geometry export");
+        assert!(export.report.can_serialize);
+        assert_eq!(export.report.counts.blocking, 0);
+        fs::write(out.join(format!("actual-moved.{extension}")), &export.bytes)
+            .expect("write moved geometry editable export");
+    }
+
+    // Stale or foreign entries fail before any mutation and never partially
+    // append one batch to the baseline history.
+    let mut stale = moved_project.clone();
+    let EditOperation::MoveNodes { entries, .. } = stale.operations.last_mut().unwrap()
+        else { unreachable!("canonical last operation must be MoveNodes") };
+    entries[0].before = rectangle(300_001);
+    let mut denied = EditorSession::new(graph.clone()).expect("stale source");
+    assert!(matches!(
+        denied.apply_project(&stale),
         Err(EditorProjectError::Operation {
-            index: 3,
-            error: EditorError::NodeMoveUnsupported { node_id },
-        }) => *node_id == node_b,
-        _ => false,
-    };
-    assert!(exact_gap,
-        "expected pre-fix authored-overlays-not-in-graph refusal; got {result:?}");
-    assert_eq!(reopened.graph(), &graph);
-    assert!(reopened.operations().is_empty(), "failed project must not mutate history");
-    fs::write(out.join("gap.json"),
-              serde_json::to_vec_pretty(&json!({
-                  "schema": "chaptera.pr2790-overlay-move-gap.v1",
-                  "status": "GAP_CONFIRMED",
-                  "source_graph_unchanged": true,
-                  "created_shapes": 3,
-                  "attempted_changed_nodes": 1,
-                  "expected_error_code": "node_move_unsupported",
-                  "real_adapter_baseline_export_only": true,
-                  "author_created_move_nodes_implemented": false,
-              })).expect("gap JSON"))
-        .expect("write gap report");
+            index: 3, error: EditorError::StaleNodeMove { node_id },
+        }) if node_id == middle
+    ));
+    assert!(denied.operations().is_empty());
+    assert_eq!(denied.graph(), &graph);
+    let mut foreign = moved_project.clone();
+    let EditOperation::MoveNodes { entries, .. } = foreign.operations.last_mut().unwrap()
+        else { unreachable!("canonical last operation must be MoveNodes") };
+    entries.push(MoveNodeBatchEntry {
+        node_id: canonical_id("019a2d80-1112-7001-8001-aabbccddee04"),
+        before: rectangle(400_000),
+        after: rectangle(600_000),
+    });
+    let mut denied = EditorSession::new(graph.clone()).expect("foreign source");
+    assert!(denied.apply_project(&foreign).is_err());
+    assert!(denied.operations().is_empty());
+    assert_eq!(denied.graph(), &graph);
+
+    fs::write(out.join("move-positive.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema": "chaptera.pr2790-authored-move-proof.v1",
+            "status": "PASS",
+            "source_graph_unchanged": true,
+            "created_shapes": 3,
+            "attempted_changed_nodes": 1,
+            "changed_node_ids": [B],
+            "canonical_project_replay": true,
+            "one_atomic_history_operation": true,
+            "move_undo_redo": true,
+            "stale_and_foreign_fail_closed": true,
+            "author_created_move_nodes_implemented": true,
+        })).expect("positive proof JSON"))
+        .expect("write source-neutral positive result");
 }
 
 /// Source bytes come from the immutable, SHA-pinned public Apache POI fixture.
@@ -286,34 +351,79 @@ fn pinned_public_real_pub_three_shapes_replay_and_export() {
             .expect("ephemeral real-derived editable artifact");
     }
 
-    // The same authored-overlay MoveNodes gap must be reproduced when the
-    // underlying source is a genuine PUB, not merely a synthetic graph.
-    let mut attempt = project;
+    // Replay ONE exact MoveNodes operation against original Publisher bytes.
+    let mut moved = project;
     let middle: NodeId = canonical_id(B);
-    attempt.operations.push(EditOperation::MoveNodes {
+    moved.operations.push(EditOperation::MoveNodes {
         page_id: source_page,
         entries: vec![MoveNodeBatchEntry {
             node_id: middle, before: rectangle(300_000), after: rectangle(500_000),
         }],
     });
     let mut fresh = open_mature_0x2c_editor(&bytes, source_hash)
-        .expect("fresh original source for fail-closed diagnosis");
-    let result = fresh.apply_project(&attempt);
-    assert!(matches!(result, Err(EditorProjectError::Operation {
-        index: 3, error: EditorError::NodeMoveUnsupported { node_id },
-    }) if node_id == middle), "current author-created MoveNodes gap must be fail-closed");
-    assert!(fresh.operations().is_empty());
+        .expect("fresh original public PUB");
+    fresh.apply_project(&moved).expect("real PUB CreateShape*3 -> MoveNodes success");
+    assert_eq!(fresh.project(), moved);
     assert_eq!(fresh.graph(), &source_graph);
-    fs::write(output.join("gap-real.json"), serde_json::to_vec_pretty(&json!({
-        "schema": "chaptera.pr2790-overlay-move-gap.v1",
+    assert_eq!(fresh.operations().len(), 4);
+    assert_eq!(fresh.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+    fresh.undo().expect("real PUB MoveNodes Undo");
+    assert_eq!(fresh.authored_shape(middle).unwrap().bounds, rectangle(300_000));
+    assert_eq!(fresh.operations().len(), 3);
+    fresh.redo().expect("real PUB MoveNodes Redo");
+    assert_eq!(fresh.project(), moved);
+    assert_eq!(fresh.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+    for (id, x) in [(A, 100_000), (C, 900_000)] {
+        assert_eq!(fresh.authored_shape(canonical_id(id)).unwrap().bounds, rectangle(x));
+    }
+    let mut independently_reopened = open_mature_0x2c_editor(&bytes, source_hash)
+        .expect("independent source reopen");
+    independently_reopened.apply_project(&moved).expect("persisted changed project replay");
+    assert_eq!(independently_reopened.project(), moved);
+    assert_eq!(independently_reopened.graph(), &source_graph);
+    assert_eq!(independently_reopened.authored_shape(middle).unwrap().bounds, rectangle(500_000));
+
+    let mut moved_expected = expected_bounds;
+    moved_expected.insert(B.to_string(), json!({
+        "x": 500_000, "y": 100_000, "width": 500_000, "height": 250_000
+    }));
+    let witness = json!({
+        "schema": "chaptera.temporary-editor-move-nodes-export-witness.v1",
+        "source_sha256": PINNED,
+        "revision_id": format!("sha256:{}", "1".repeat(64)),
+        "page_id": source_page.as_canonical().to_string(),
+        "page_size": {"width": page.size.width.get(), "height": page.size.height.get()},
+        "selected_node_ids": selected,
+        "operations": moved.operations.clone(),
+        "expected_bounds": moved_expected,
+        "expected_moved_node_ids": [B],
+    });
+    fs::write(output.join("witness-real-moved.json"),
+        serde_json::to_vec_pretty(&witness).expect("moved real witness"))
+        .expect("write source-free moved witness");
+    for (target, suffix) in [
+        (EditorEditableTarget::Idml, "idml"),
+        (EditorEditableTarget::Odg, "odg"),
+    ] {
+        let export = fresh.export_editable(target, "public-pinned-sample-after-move")
+            .expect("real PUB post MoveNodes exporter");
+        assert!(export.report.can_serialize);
+        assert_eq!(export.report.counts.blocking, 0);
+        fs::write(output.join(format!("actual-real-moved.{suffix}")), &export.bytes)
+            .expect("write ephemeral changed editable export");
+    }
+    fs::write(output.join("move-real.json"), serde_json::to_vec_pretty(&json!({
+        "schema": "chaptera.pr2790-authored-move-proof.v1",
         "source_sha256": PINNED,
         "source_type": "pinned_public_original_pub",
         "created_shapes": 3,
         "source_graph_unchanged": true,
         "canonical_project_replay": true,
         "create_undo_redo": true,
-        "status": "GAP_CONFIRMED",
-        "expected_error_code": "node_move_unsupported",
-        "author_created_move_nodes_implemented": false,
-    })).expect("gap diagnostic JSON")).expect("write source-free real PUB gap");
+        "move_undo_redo": true,
+        "one_atomic_history_operation": true,
+        "changed_node_ids": [B],
+        "status": "PASS",
+        "author_created_move_nodes_implemented": true,
+    })).expect("real positive JSON")).expect("write source-free real move proof");
 }
