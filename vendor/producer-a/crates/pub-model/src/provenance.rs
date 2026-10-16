@@ -226,10 +226,10 @@ impl SourceRef {
             });
         }
 
-        if let Some(range) = self.byte_range {
-            if range.end().is_none() {
-                return Err(SourceRefValidationError::ByteRangeOverflow { range });
-            }
+        if let Some(range) = self.byte_range
+            && range.end().is_none()
+        {
+            return Err(SourceRefValidationError::ByteRangeOverflow { range });
         }
 
         Ok(())
