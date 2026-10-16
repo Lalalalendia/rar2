@@ -143,7 +143,7 @@ pub(super) fn decode_explicit_paragraph_line_spacing(
 ) -> Option<QuillParagraphLineSpacing> {
     let mode = raw_value & 0x3;
     let magnitude = raw_value & !0x3;
-    if magnitude == 0 || magnitude % PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU != 0 {
+    if magnitude == 0 || !magnitude.is_multiple_of(PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU) {
         return None;
     }
     let point_equivalent_emu = magnitude / PARAGRAPH_LINE_SPACING_RAW_UNITS_PER_EMU;
@@ -278,18 +278,19 @@ pub(super) fn build_paragraph_flow_runs(
             if let (Some(constraint), Some(value)) = (
                 paragraph_flow_constraint_from_native_id(block.id),
                 block.value,
-            ) {
-                if block.block_type == 0x20 && value == PARAGRAPH_FLOW_NATIVE_ON_VALUE {
-                    observations.push((
-                        constraint,
-                        value,
-                        RawSpan {
-                            stream: range.style_source.stream.clone(),
-                            offset: property_start as u64,
-                            len: (next - property_start) as u64,
-                        },
-                    ));
-                }
+            )
+                && block.block_type == 0x20
+                && value == PARAGRAPH_FLOW_NATIVE_ON_VALUE
+            {
+                observations.push((
+                    constraint,
+                    value,
+                    RawSpan {
+                        stream: range.style_source.stream.clone(),
+                        offset: property_start as u64,
+                        len: (next - property_start) as u64,
+                    },
+                ));
             }
             cursor = next;
         }
