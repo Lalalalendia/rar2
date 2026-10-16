@@ -11,6 +11,9 @@ on:
       - tools/test_verify_temporary_guest_move_nodes_export.py
       - tools/ci/pr2790_native_shape_probe.py
       - tools/ci/test_pr2790_native_shape_probe.py
+      - vendor/producer-a/crates/pub-editor/src/session_geometry.rs
+      - vendor/producer-a/crates/pub-editor/src/lib.rs
+      - apps/chaptera-server/src/exact_emu_move_nodes_intent_v1.rs
 
 permissions:
   contents: read
@@ -91,6 +94,14 @@ jobs:
             echo "Testing donor code plus sole-owner ZIP PR #2830 at a pinned head; owner/base manifests are exact SHA-matched."
             echo "**No owner manifests or product changes were committed to this branch; dependency migration is not treated as merged.**"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compile candidate MoveNodes authored overlay and server planner
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+          cargo check -p chaptera-server --all-targets
 
       - name: Validate Python syntax
         run: |
