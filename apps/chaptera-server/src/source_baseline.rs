@@ -559,7 +559,13 @@ fn classify_isolated_baseline_failure(harness_stdout: &[u8]) -> &'static str {
     if tail.len() > 4096 {
         return UNKNOWN;
     }
-    match tail.lines().last().unwrap_or("") {
+    let last_line = tail.lines().last().unwrap_or("");
+    // SourceBaseline CLI prints Display as "chaptera: CODE: fixed message".
+    // Compare only an exact fixed suffix, never return the message itself.
+    let fixed_editor_code = last_line
+        .strip_suffix(": isolated editor could not admit the verified PUB")
+        .unwrap_or(last_line);
+    match fixed_editor_code {
         "chaptera: source_baseline_editor_legacy_low_text" => {
             "source_baseline_editor_legacy_low_text"
         }
@@ -575,7 +581,7 @@ fn classify_isolated_baseline_failure(harness_stdout: &[u8]) -> &'static str {
         "chaptera: source_baseline_editor_assets" => {
             "source_baseline_editor_assets"
         }
-        "chaptera: source_baseline_sandbox_failed" => {
+        "chaptera: source_baseline_sandbox_failed: post-read filesystem default-deny could not be installed" => {
             "source_baseline_worker_sandbox_failed"
         }
         _ => UNKNOWN,
@@ -891,11 +897,16 @@ mod tests {
             } else {
                 code
             };
+            let stderr_tail = if code == "source_baseline_worker_sandbox_failed" {
+                format!("chaptera: {worker_code}: post-read filesystem default-deny could not be installed")
+            } else {
+                format!("chaptera: {worker_code}: isolated editor could not admit the verified PUB")
+            };
             let output = json!({
                 "status": "failed",
                 "exit_code": 1,
                 "timed_out": false,
-                "stderr_tail": format!("chaptera: {worker_code}")
+                "stderr_tail": stderr_tail
             })
             .to_string();
             assert_eq!(classify_isolated_baseline_failure(output.as_bytes()), code);
