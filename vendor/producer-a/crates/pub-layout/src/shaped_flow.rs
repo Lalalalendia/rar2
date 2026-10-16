@@ -351,33 +351,32 @@ fn should_defer_paragraph_flow_v1(
         return Ok(true);
     }
 
-    if state.keep_with_next {
-        if let Some(pair_end) = next_paragraph_end_v1(scalars, state.scalar_end) {
-            if pair_end > state.scalar_end {
-                let current_pair_lines = line_count_to_boundary_v1(
-                    scalars,
-                    shaped,
-                    policy,
-                    cursor,
-                    pair_end,
-                    current_bounds.width,
-                    runtime,
-                )?;
-                let successor_pair_lines = line_count_to_boundary_v1(
-                    scalars,
-                    shaped,
-                    policy,
-                    cursor,
-                    pair_end,
-                    successor_bounds.width,
-                    runtime,
-                )?;
-                if current_pair_lines.is_some_and(|lines| lines > remaining_rows)
-                    && successor_pair_lines.is_some_and(|lines| lines <= successor_rows)
-                {
-                    return Ok(true);
-                }
-            }
+    if state.keep_with_next
+        && let Some(pair_end) = next_paragraph_end_v1(scalars, state.scalar_end)
+        && pair_end > state.scalar_end
+    {
+        let current_pair_lines = line_count_to_boundary_v1(
+            scalars,
+            shaped,
+            policy,
+            cursor,
+            pair_end,
+            current_bounds.width,
+            runtime,
+        )?;
+        let successor_pair_lines = line_count_to_boundary_v1(
+            scalars,
+            shaped,
+            policy,
+            cursor,
+            pair_end,
+            successor_bounds.width,
+            runtime,
+        )?;
+        if current_pair_lines.is_some_and(|lines| lines > remaining_rows)
+            && successor_pair_lines.is_some_and(|lines| lines <= successor_rows)
+        {
+            return Ok(true);
         }
     }
 
@@ -533,30 +532,30 @@ pub fn resolve_bounded_shaped_flow_with_paragraph_flow(
                     break;
                 }
 
-                if frame_line_index > 0 {
-                    if let Some(state) = paragraph_flow_state_at_cursor(
+                if frame_line_index > 0
+                    && let Some(state) = paragraph_flow_state_at_cursor(
                         paragraph_flow,
                         story.origin,
                         cursor,
                         scalar_count,
-                    ) {
-                        let successor_bounds = chain
-                            .get(chain_index + 1)
-                            .and_then(|next_frame| geometry.get(next_frame));
-                        let remaining_rows = row_count - frame_line_index;
-                        if should_defer_paragraph_flow_v1(
-                            state,
-                            &scalars,
-                            &shaped,
-                            &policy,
-                            cursor,
-                            remaining_rows,
-                            bounds,
-                            successor_bounds,
-                            runtime,
-                        )? {
-                            break;
-                        }
+                    )
+                {
+                    let successor_bounds = chain
+                        .get(chain_index + 1)
+                        .and_then(|next_frame| geometry.get(next_frame));
+                    let remaining_rows = row_count - frame_line_index;
+                    if should_defer_paragraph_flow_v1(
+                        state,
+                        &scalars,
+                        &shaped,
+                        &policy,
+                        cursor,
+                        remaining_rows,
+                        bounds,
+                        successor_bounds,
+                        runtime,
+                    )? {
+                        break;
                     }
                 }
 
