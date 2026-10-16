@@ -67,7 +67,7 @@ impl FromStr for Sha256Digest {
         let input = input.as_bytes();
         let mut output = [0_u8; 32];
 
-        for (output_index, chunk) in input.chunks_exact(2).enumerate() {
+        for (output_index, chunk) in input.as_chunks::<2>().0.iter().enumerate() {
             let source_index = output_index * 2;
             let high = lowercase_hex_value(chunk[0]).ok_or(Sha256DigestParseError::InvalidHex {
                 index: source_index,
