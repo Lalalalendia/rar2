@@ -5,6 +5,7 @@ on:
     branches:
       - ci/pr2790-exact-emu-oracle-20261016
     paths:
+      - vendor/producer-a/crates/pub-editor/tests/pr2790_export_gap_v1.rs
       - .github/workflows/pr2790-exact-emu-oracle.yml
       - tools/verify_temporary_guest_move_nodes_export.py
       - tools/test_verify_temporary_guest_move_nodes_export.py
@@ -20,7 +21,7 @@ jobs:
   exact-emu-oracle:
     name: Exact EMU geometry | synthetic IDML + ODG
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 35
     steps:
       - name: Checkout non-authoritative CI branch
         uses: actions/checkout@v4
@@ -76,12 +77,74 @@ jobs:
             echo '**Scope: synthetic packages only. No real PUB, native import, Rust MoveNodes, or browser acceptance was executed.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload source-free synthetic receipts
+      - name: Probe real Rust EditorSession gap and export genuine Chaptera IDML/ODG
+        env:
+          PR2790_GEOMETRY_DIR: ${{ runner.temp }}/pr2790-adapter
+          CARGO_INCREMENTAL: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PR2790_GEOMETRY_DIR"
+          cargo --version
+          cargo test --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --test pr2790_export_gap_v1 -- --nocapture
+          python3 - "$PR2790_GEOMETRY_DIR/gap.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1],encoding='utf-8') as f:
+              gap=json.load(f)
+          assert gap['status']=='GAP_CONFIRMED', gap
+          assert gap['created_shapes']==3 and gap['attempted_changed_nodes']==1, gap
+          assert gap['author_created_move_nodes_implemented'] is False, gap
+          PY
+          for target in idml odg; do
+            python3 tools/verify_temporary_guest_move_nodes_export.py \
+              --artifact "$PR2790_GEOMETRY_DIR/actual.$target" \
+              --target "$target" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-baseline.json" \
+              | tee "$PR2790_GEOMETRY_DIR/$target-adapter-receipt.json"
+          done
+          {
+            echo '## Rust: real Chaptera adapter, 3 created rectangles'
+            echo 'The current authored-shapes MoveNodes replay gap was reproduced as an expected fail-closed diagnostic.'
+            echo 'Real Chaptera-exported IDML and ODG packages passed the 3-shape exact-EMU oracle at baseline.'
+            echo '**This is NOT a passing MoveNodes implementation or real PUB/Chromium acceptance.**'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install native file consumers
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            scribus xvfb libreoffice-draw
+
+      - name: Verify independent native reopen on genuine Chaptera exports
+        shell: bash
+        env:
+          PR2790_GEOMETRY_DIR: ${{ runner.temp }}/pr2790-adapter
+        run: |
+          set -euo pipefail
+          for target in idml odg; do
+            python3 tools/verify_temporary_guest_move_nodes_export.py \
+              --artifact "$PR2790_GEOMETRY_DIR/actual.$target" \
+              --target "$target" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-baseline.json" \
+              --native | tee "$PR2790_GEOMETRY_DIR/$target-native-receipt.json"
+          done
+          {
+            echo 'Genuine Chaptera adapter IDML/ODG archives reopened in Scribus/LibreOffice.'
+            echo '**Native per-object retention is NOT yet verified; native_document_reopen only checks the document as a whole.**'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload source-free synthetic and real-adapter receipts
         uses: actions/upload-artifact@v4
         with:
-          name: pr2790-exact-emu-synthetic-receipts
+          name: pr2790-exact-emu-adapter-receipts
           path: |
             ${{ runner.temp }}/pr2790-oracle/idml-receipt.json
             ${{ runner.temp }}/pr2790-oracle/odg-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/gap.json
+            ${{ runner.temp }}/pr2790-adapter/idml-adapter-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/odg-adapter-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/idml-native-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/odg-native-receipt.json
           if-no-files-found: error
           retention-days: 7
