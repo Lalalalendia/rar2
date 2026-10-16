@@ -121,26 +121,17 @@ pub fn derive_move_nodes_operation(
             || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
             || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
             || validate_authored_shape_runtime_v1(shape).is_err()
-            || page
-                .children
-                .iter()
-                .filter(|child| **child == node_id)
-                .count()
-                != 1
+            || graph.nodes.contains_key(&node_id)
+            || shape.bounds.x.get() < 0
+            || shape.bounds.y.get() < 0
+            || shape.bounds.right().is_none_or(|edge| edge.get() > page.size.width.get())
+            || shape.bounds.bottom().is_none_or(|edge| edge.get() > page.size.height.get())
         {
             return Err(MoveNodesIntentErrorV1::NotAuthorCreated);
         }
-        let node = graph
-            .nodes
-            .get(&node_id)
-            .ok_or(MoveNodesIntentErrorV1::NotAuthorCreated)?;
-        if node.header.parent_id != page_id.into_canonical() {
-            return Err(MoveNodesIntentErrorV1::NotAuthorCreated);
-        }
-        // The provenance overlay preserves author-created identity, whereas
-        // the graph tracks CURRENT geometry after earlier MoveNode/MoveNodes.
-        // Authoring from shape.bounds would silently replay initial geometry.
-        let r = node.header.bounds;
+        // The authored overlay is the authority for *current* geometry.
+        // graph.nodes contains imported/source-backed nodes, not CreateShape.
+        let r = shape.bounds;
         members.push(Member {
             node_id: node_id.as_canonical().to_string(),
             bounds: PlanRectEmu {

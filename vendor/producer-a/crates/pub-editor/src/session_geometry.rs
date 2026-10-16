@@ -27,6 +27,72 @@ use pub_editor_geometry_core::{
     validate_resize_nodes_transition_v1 as validate_resize_nodes_transition_core_v1,
 };
 
+
+/// Apply a canonical batch to author-created Rectangle overlays, atomically.
+/// Imported/source-backed MoveNodes continue through graph-only geometry code.
+pub(super) fn apply_authored_move_nodes_v1(
+    shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    page_id: PageId,
+    entries: &[MoveNodeBatchEntry],
+    forward: bool,
+) -> Result<(), EditorError> {
+    if entries.is_empty() {
+        return Err(EditorError::MoveNodesEmpty);
+    }
+    if entries.len() > MAX_MOVE_NODES_V1 {
+        return Err(EditorError::MoveNodesTooLarge { found: entries.len() });
+    }
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        if !seen.insert(entry.node_id) {
+            return Err(EditorError::MoveNodesDuplicate { node_id: entry.node_id });
+        }
+        let shape = shapes.get(&entry.node_id)
+            .ok_or(EditorError::NodeMoveUnsupported { node_id: entry.node_id })?;
+        if shape.node_id != entry.node_id
+            || shape.page_id != page_id
+            || shape.parent_id != page_id
+        {
+            return Err(EditorError::MoveNodesPageMismatch { node_id: entry.node_id, page_id });
+        }
+        if validate_authored_shape_runtime_v1(shape).is_err()
+            || shape.shape_kind != AuthoredShapeKindV1::Rectangle
+            || shape.transform != AuthoredShapeTransformV1::Identity
+            || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+        {
+            return Err(EditorError::NodeMoveUnsupported { node_id: entry.node_id });
+        }
+        if entry.before.width != entry.after.width
+            || entry.before.height != entry.after.height
+        {
+            return Err(EditorError::MoveNodesSizeChanged { node_id: entry.node_id });
+        }
+        if entry.before == entry.after {
+            return Err(EditorError::NodeMoveNoChange { node_id: entry.node_id });
+        }
+        let expected = if forward { entry.before } else { entry.after };
+        let destination = if forward { entry.after } else { entry.before };
+        if shape.bounds != expected {
+            return Err(EditorError::StaleNodeMove { node_id: entry.node_id });
+        }
+        if destination.right().is_none() || destination.bottom().is_none() {
+            return Err(EditorError::NodeMoveOverflow { node_id: entry.node_id });
+        }
+        let mut candidate = shape.clone();
+        candidate.bounds = destination;
+        if validate_authored_shape_runtime_v1(&candidate).is_err() {
+            return Err(EditorError::NodeMoveUnsupported { node_id: entry.node_id });
+        }
+    }
+    for entry in entries {
+        shapes.get_mut(&entry.node_id)
+            .expect("validated authored MoveNodes entry")
+            .bounds = if forward { entry.after } else { entry.before };
+    }
+    Ok(())
+}
+
 impl EditorSession {
     fn has_table_track_extent_history_v1(&self, node_id: NodeId) -> bool {
         self.undo.iter().any(|operation| {
@@ -162,6 +228,22 @@ impl EditorSession {
             }
         }
 
+        // A CreateShape is in authored_shapes, not in graph.nodes.
+        if entries.iter().any(|entry| self.authored_shapes.contains_key(&entry.node_id)) {
+            if !self.graph.pages.contains_key(&page_id)
+                || entries.iter().any(|entry| self.graph.nodes.contains_key(&entry.node_id))
+            {
+                return Err(EditorError::NodeMoveUnsupported { node_id: entries[0].node_id });
+            }
+            let mut candidate = self.authored_shapes.clone();
+            apply_authored_move_nodes_v1(&mut candidate, page_id, &entries, true)?;
+            let operation = EditOperation::MoveNodes { page_id, entries };
+            self.authored_shapes = candidate;
+            self.undo.push(operation.clone());
+            self.redo.clear();
+            self.validate_source_identity()?;
+            return Ok(operation);
+        }
         let page_parent = page_id.into_canonical();
         for entry in &entries {
             let node =

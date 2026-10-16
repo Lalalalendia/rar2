@@ -18,7 +18,7 @@ mod session_table;
 use session_table::apply_table_cell_state;
 mod session_text;
 use session_geometry::{
-    apply_authored_line_inverse, apply_authored_shape_delete_forward,
+    apply_authored_move_nodes_v1, apply_authored_line_inverse, apply_authored_shape_delete_forward,
     apply_authored_shape_delete_inverse, apply_authored_shape_inverse,
     apply_authored_stack_history_forward_v1, apply_page_lifecycle_graph_forward_v1,
     apply_page_lifecycle_graph_inverse_v1, authored_line_from_operation,
@@ -5835,6 +5835,14 @@ impl EditorSession {
                         node_id: history.table_id,
                     },
                 )?;
+            } else if let EditOperation::MoveNodes { page_id, entries } = &operation {
+                if entries.iter().any(|entry| self.authored_shapes.contains_key(&entry.node_id)) {
+                    let mut candidate = self.authored_shapes.clone();
+                    apply_authored_move_nodes_v1(&mut candidate, *page_id, entries, false)?;
+                    self.authored_shapes = candidate;
+                } else {
+                    apply_inverse(&mut self.graph, &operation)?;
+                }
             } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
                 apply_crop_inverse(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
@@ -6001,6 +6009,14 @@ impl EditorSession {
                         node_id: history.table_id,
                     },
                 )?;
+            } else if let EditOperation::MoveNodes { page_id, entries } = &operation {
+                if entries.iter().any(|entry| self.authored_shapes.contains_key(&entry.node_id)) {
+                    let mut candidate = self.authored_shapes.clone();
+                    apply_authored_move_nodes_v1(&mut candidate, *page_id, entries, true)?;
+                    self.authored_shapes = candidate;
+                } else {
+                    apply_forward(&mut self.graph, &operation)?;
+                }
             } else if matches!(operation, EditOperation::SetImageCrop { .. }) {
                 apply_crop_forward(&self.graph, &mut self.image_crop_overrides, &operation)?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
