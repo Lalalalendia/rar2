@@ -140,7 +140,7 @@ fn actual_chaptera_adapters_export_three_shapes_and_overlay_move_gap_is_confirme
         (EditorEditableTarget::Idml, "idml"),
         (EditorEditableTarget::Odg, "odg"),
     ] {
-        let export = session.export_editable(target, "pr2790-three-authored-rectangles".into())
+        let export = session.export_editable(target, "pr2790-three-authored-rectangles")
             .expect("real Chaptera adapter export");
         assert!(export.report.can_serialize, "no blocking export losses");
         fs::write(out.join(format!("actual.{extension}")), &export.bytes)
