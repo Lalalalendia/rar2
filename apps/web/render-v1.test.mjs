@@ -11,6 +11,7 @@ import {
   assertSceneSourceNeutral,
   buildOverlayPlan,
   buildRenderPlan,
+  editorSourceShapePaintGeometry,
   imageContentRotationGeometry,
   imagePaintGeometry,
   imageRecolorPaintPlan,
@@ -73,6 +74,28 @@ test("render plan is deterministic and does not mutate a frozen scene", () => {
   );
   assert.equal(left.pages[0].stacking_authority, "exact");
   assert.equal(left.pages[0].nodes.length, 3);
+});
+
+test("source admitted ellipse keeps center/radii and white paint in Editor plan", () => {
+  const scene = fixture("simple-text.json");
+  scene.paints[0].preset_shape = "ellipse";
+  scene.paints[0].fill = { r: 255, g: 255, b: 255, a: 255 };
+  const node = buildRenderPlan(scene, VIEW).pages[0].nodes[0];
+  assert.equal(node.paint.preset_shape, "ellipse");
+  assert.equal(node.paint.fill, "rgba(255,255,255,1)");
+  assert.deepEqual(editorSourceShapePaintGeometry(node), {
+    tag: "ellipse",
+    attrs: {
+      cx: node.x + node.width / 2,
+      cy: node.y + node.height / 2,
+      rx: node.width / 2,
+      ry: node.height / 2
+    }
+  });
+  scene.paints[0].preset_shape = "unsupported-preset";
+  const fallback = buildRenderPlan(scene, VIEW).pages[0].nodes[0];
+  assert.equal(fallback.paint.preset_shape, null);
+  assert.equal(editorSourceShapePaintGeometry(fallback).tag, "rect");
 });
 
 test("exact stacking is back-to-front by z then paint order", () => {

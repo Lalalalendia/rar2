@@ -519,7 +519,8 @@ export function buildRenderPlan(snapshot, rawView = {}) {
         paint: Object.freeze({
           fill: rgbaCss(paint?.fill ?? null),
           stroke: rgbaCss(paint?.stroke?.color ?? null),
-          stroke_width_css_px: emuToCss(paint?.stroke?.width_emu ?? 0, view)
+          stroke_width_css_px: emuToCss(paint?.stroke?.width_emu ?? 0, view),
+          preset_shape: paint?.preset_shape === "ellipse" ? "ellipse" : null
         }),
         table: resolvedTable,
         story: story ? Object.freeze({
@@ -615,6 +616,23 @@ function svgNode(tag, attrs) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
   return node;
+}
+
+// The source Reader already admitted the ellipse geometry and paint. Keep
+// the same bounded preset in the Editor rather than using its enclosing box.
+// Unsupported/missing presets deliberately keep the existing rectangle path.
+export function editorSourceShapePaintGeometry(node) {
+  const { x, y, width, height } = node;
+  if (node.paint?.preset_shape === "ellipse") {
+    return Object.freeze({
+      tag: "ellipse",
+      attrs: Object.freeze({
+        cx: x + width / 2, cy: y + height / 2,
+        rx: width / 2, ry: height / 2
+      })
+    });
+  }
+  return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
 }
 
 // A diagnostic is not a shaped paragraph. Never allow unresolved text
@@ -864,8 +882,9 @@ class SvgRenderer {
         fill: "white", stroke: "rgba(0,0,0,0.25)", "data-page-id": page.page_id
       }));
       for (const node of page.nodes) {
-        this.root.appendChild(svgNode("rect", {
-          x: node.x, y: node.y, width: node.width, height: node.height,
+        const geometry = editorSourceShapePaintGeometry(node);
+        this.root.appendChild(svgNode(geometry.tag, {
+          ...geometry.attrs,
           fill: node.paint.fill ?? "rgba(120,120,120,0.08)",
           stroke: node.paint.stroke ?? (node.diagnostics.length ? "rgba(180,80,0,0.9)" : "rgba(0,0,0,0.15)"),
           "stroke-width": Math.max(0.5, node.paint.stroke_width_css_px || 0.5),

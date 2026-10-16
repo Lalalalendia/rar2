@@ -25,9 +25,9 @@ use pub_output::{
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
-    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError, PdfTargetProfile,
-    render_bounded_pdf, render_bounded_pdf_a4_card_9up,
+    FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPaintPreset,
+    FixedPdfResources, FixedStroke, FixedTextRun, PdfRenderDisposition, PdfRenderError,
+    PdfTargetProfile, render_bounded_pdf, render_bounded_pdf_a4_card_9up,
 };
 use pub_viewer::ViewerTypographyRun;
 use serde_json::{Value, json};
@@ -904,6 +904,14 @@ fn render_current_fixed_pdf_with_sheet(
         .filter(|paint| scene_ids.contains(&paint.node_id))
         .map(|paint| FixedNodePaint {
             node_id: paint.node_id,
+            // The Viewer only reports this preset after the exact OfficeArt
+            // source-ref and grouped-geometry guards. Do not infer a shape
+            // from box aspect ratio or fill color.
+            preset_shape: matches!(
+                paint.preset_shape,
+                Some(pub_viewer::ViewerPresetShape::Ellipse)
+            )
+            .then_some(FixedPaintPreset::Ellipse),
             fill_rgb: paint.solid_fill_rgb,
             stroke: paint.solid_line.as_ref().map(|line| FixedStroke {
                 rgb: line.rgb,
