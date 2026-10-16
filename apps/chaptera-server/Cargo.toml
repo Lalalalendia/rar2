@@ -48,7 +48,7 @@ tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "pr
 toml = "=1.1.6+spec-1.1.0"
 url = "=2.5.8"
 zeroize = "=1.9.0"
-zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
+zip = { workspace = true, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 png = "=0.18.1"
