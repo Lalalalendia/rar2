@@ -842,7 +842,11 @@ mod tests {
             let mut marker_in_xml = false;
             for entry_index in 0..package.len() {
                 let mut entry = package.by_index(entry_index).unwrap();
-                if !entry.name().ends_with(".xml") {
+                if !entry
+                    .name()
+                    .expect("editable export ZIP member name must be valid UTF-8")
+                    .ends_with(".xml")
+                {
                     continue;
                 }
                 let mut contents = String::new();
