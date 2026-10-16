@@ -1319,6 +1319,8 @@ mod tests {
         assert_eq!(previews.len(), 1);
         let configured = ReaderConfiguredFontResourceV1 {
             source_family: "Host Pinned Family".to_owned(),
+            bold: false,
+            italic: false,
             resource_id: "configured-face".to_owned(),
             expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
             face_index: 0,
