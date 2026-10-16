@@ -3529,16 +3529,14 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
-            {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesLinkTextFrameOperation { index },
-                );
-            }
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesLinkTextFrameOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_1
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_2
@@ -3577,14 +3575,12 @@ impl EditorSession {
         }
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_1
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_2
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::ReplaceImage { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesImageOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesImageOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_4
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_5
@@ -3610,14 +3606,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::MoveNode { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesGeometryOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesGeometryOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_5
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_6
@@ -3642,14 +3636,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::ResizeNode { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesResizeOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesResizeOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_6
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_7
@@ -3698,12 +3690,11 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
+            && let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
-            }) {
-                return Err(EditorProjectError::LegacyProjectCarriesBreakLinkOperation { index });
-            }
+            })
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesBreakLinkOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_8
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
@@ -3725,14 +3716,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::MoveNodes { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesMoveNodesOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesMoveNodesOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
@@ -3753,14 +3742,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::ResizeNodes { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesResizeNodesOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesResizeNodesOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
@@ -3780,14 +3767,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateShape { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_17
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_18
@@ -3800,14 +3785,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateLine { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesCreateLineOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_18
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_19
@@ -3819,44 +3802,39 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateTable { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesCreateTableOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_23
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::ReorderPagesV1 { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesPageOrderOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_24
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
+            && let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
                     EditOperation::RegisterAuthoredPageIdentityV1 { .. }
                 )
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesAuthoredPageIdentityOperation { index },
-                );
-            }
+            })
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesAuthoredPageIdentityOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
@@ -3875,16 +3853,14 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateTextBox { .. }))
-            {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesCreateTextBoxOperation { index },
-                );
-            }
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesCreateTextBoxOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
@@ -3902,14 +3878,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::DeleteNode { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
@@ -3926,14 +3900,13 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
+            && let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesReorderAuthoredStackOperation { index },
-                );
-            }
+            })
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesReorderAuthoredStackOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
@@ -3949,14 +3922,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| text_format_operation_story_id_v1(operation).is_some())
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_16
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_17
@@ -3970,16 +3941,14 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(is_scoped_text_format_operation_v1)
-            {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesScopedTextFormatOperation { index },
-                );
-            }
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesScopedTextFormatOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_16
@@ -3994,18 +3963,17 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
+            && let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
                     EditOperation::SetParagraphAlignmentOverride { .. }
                         | EditOperation::ClearParagraphAlignmentOverride { .. }
                 )
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesParagraphAlignmentOperation { index },
-                );
-            }
+            })
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesParagraphAlignmentOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_19
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_20
@@ -4016,14 +3984,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::SetImageCrop { .. }))
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesImageCropOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesImageCropOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_20
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_21
@@ -4033,14 +3999,13 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project.operations.iter().position(|operation| {
+            && let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::SetTableTrackExtent { .. })
-            }) {
-                return Err(
-                    EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index },
-                );
-            }
+            })
+        {
+            return Err(
+                EditorProjectError::LegacyProjectCarriesTableTrackExtentOperation { index },
+            );
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_21
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_22
@@ -4049,14 +4014,12 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_25
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_26
             && legacy_compatible_schema != EDITOR_PROJECT_VERSION_V0_27
-        {
-            if let Some(index) = project
+            && let Some(index) = project
                 .operations
                 .iter()
                 .position(|operation| table_rowcol_history_v1(operation).is_some())
-            {
-                return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index });
-            }
+        {
+            return Err(EditorProjectError::LegacyProjectCarriesTableRowColOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
@@ -4911,13 +4874,11 @@ impl EditorSession {
                 }
             }
 
-            if valid {
-                if let Some(alignment) = uniform {
-                    result.push(FullStoryParagraphAlignmentV1 {
-                        story_id,
-                        alignment,
-                    });
-                }
+            if valid && let Some(alignment) = uniform {
+                result.push(FullStoryParagraphAlignmentV1 {
+                    story_id,
+                    alignment,
+                });
             }
         }
 
