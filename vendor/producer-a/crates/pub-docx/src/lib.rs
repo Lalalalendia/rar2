@@ -165,7 +165,7 @@ fn escape_xml_text(input: &str) -> String {
 fn validate_written_docx(bytes: &[u8]) -> Result<(), DocxError> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     let names = (0..archive.len())
-        .map(|index| archive.by_index(index).map(|file| file.name().to_owned()))
+        .map(|index| archive.by_index(index).and_then(|file| file.name().map(|name| name.into_owned())))
         .collect::<Result<BTreeSet<_>, _>>()?;
 
     for required in [CONTENT_TYPES_PATH, ROOT_RELS_PATH, DOCUMENT_PATH] {
