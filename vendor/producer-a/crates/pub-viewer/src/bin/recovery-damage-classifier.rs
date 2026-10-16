@@ -1,12 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_reader::reader_evidence_disposition;
 use pub_viewer::{
-    build_reader_partial_source_graph, classify_failure_candidate, classify_pub_family,
-    open_pub_or_salvage, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
     FailureIntakeClass, ReaderPartialSourceFact, ReaderPartialSourceGap,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageTrigger,
-    ViewerProductOpenOutcome,
+    ViewerProductOpenOutcome, build_reader_partial_source_graph, classify_failure_candidate,
+    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
+    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
