@@ -314,6 +314,16 @@ impl eframe::App for RescueApp {
             }
         }
 
+        egui::TopBottomPanel::bottom("rescue-batch-panel")
+            .resizable(true)
+            .default_height(300.0)
+            .min_height(160.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.batch_ui.draw(ui, ctx);
+                });
+            });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(APP_TITLE);
             ui.label("Damaged-file intake and evidence surface. Recovery execution is not embedded in this technical-preview shell.");
@@ -366,9 +376,6 @@ impl eframe::App for RescueApp {
                     ui.label(status);
                 }
             });
-
-            ui.add_space(10.0);
-            self.batch_ui.draw(ui, ctx);
         });
     }
 }
