@@ -3534,9 +3534,7 @@ impl EditorSession {
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::LinkTextFrameTail { .. }))
         {
-            return Err(
-                EditorProjectError::LegacyProjectCarriesLinkTextFrameOperation { index },
-            );
+            return Err(EditorProjectError::LegacyProjectCarriesLinkTextFrameOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_1
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_2
@@ -3858,9 +3856,7 @@ impl EditorSession {
                 .iter()
                 .position(|operation| matches!(operation, EditOperation::CreateTextBox { .. }))
         {
-            return Err(
-                EditorProjectError::LegacyProjectCarriesCreateTextBoxOperation { index },
-            );
+            return Err(EditorProjectError::LegacyProjectCarriesCreateTextBoxOperation { index });
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13

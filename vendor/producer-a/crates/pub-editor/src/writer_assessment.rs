@@ -48,9 +48,7 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v032(
             .position(|operation| matches!(operation, EditOperation::DuplicateBlankPageV1 { .. }))
     {
         return Err(
-            super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation {
-                index,
-            },
+            super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation { index },
         );
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_28
