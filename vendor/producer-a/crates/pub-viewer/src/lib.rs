@@ -10,6 +10,7 @@
 mod authoring_projection;
 mod borderart;
 mod bridge_diagnostics;
+mod legacy_character_style;
 mod images;
 mod mature_emf_preview;
 mod mature_wmf_preview;
@@ -17,6 +18,7 @@ mod tables;
 mod typography;
 mod viewer_shape_preset;
 
+pub use legacy_character_style::{ViewerLegacyCharacterStyleRun, ViewerLegacyUnderlineStyle};
 pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
 
 pub use authoring_projection::bounded_authoring_slice_from_resolved;
@@ -118,6 +120,7 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
+    PubLegacyUnderlineStyle,
     PubParagraphAlignment, PubParagraphFlowConstraint, PubParagraphFlowRun,
     PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
@@ -293,6 +296,8 @@ pub struct ViewerGeometryDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_character_style_runs: Vec<ViewerLegacyCharacterStyleRun>,
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
@@ -1721,6 +1726,18 @@ fn open_legacy_0x22_noquill_bundle(
             .push(viewer_fallback_flow_metrics_diagnostic());
     }
 
+    let legacy_character_style_runs = viewer_legacy_character_style_runs(&source, &resolved.graph);
+    if !legacy_character_style_runs.is_empty() {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.text.legacy_character_style_preserved".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{} Publisher 97 character-style range(s) preserved with exact Story-relative ranges. Rendering of caps, baseline shift, underline, spacing and palette colours is not yet supported.",
+                legacy_character_style_runs.len(),
+            ),
+        });
+    }
+
     let scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
@@ -1782,6 +1799,7 @@ fn open_legacy_0x22_noquill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        legacy_character_style_runs,
         paragraph_alignments: Vec::new(),
         paragraph_line_spacings: Vec::new(),
         paragraph_flow_runs: Vec::new(),
@@ -1913,6 +1931,7 @@ fn open_legacy_0x22_quill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        legacy_character_style_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         paragraph_line_spacings: Vec::new(),
         paragraph_flow_runs: Vec::new(),
@@ -2531,6 +2550,7 @@ fn open_mature_0x2c_bundle(
         story_frames,
         text_fragments,
         typography_runs,
+        legacy_character_style_runs: Vec::new(),
         paragraph_alignments,
         paragraph_line_spacings,
         paragraph_flow_runs,
@@ -4523,6 +4543,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
             paragraph_flow_runs: Vec::new(),
@@ -4684,6 +4705,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
             paragraph_flow_runs: Vec::new(),
@@ -5210,6 +5232,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
             paragraph_flow_runs: Vec::new(),
@@ -5323,6 +5346,7 @@ mod tests {
             story_frames: initial_frames.clone(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
             paragraph_flow_runs: Vec::new(),
@@ -5395,6 +5419,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             paragraph_line_spacings: Vec::new(),
             paragraph_flow_runs: Vec::new(),

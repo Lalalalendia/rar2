@@ -71,6 +71,11 @@ pub(super) fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerD
             ViewerDiagnosticSeverity::FidelityWarning,
             "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
         ),
+        LegacyTextFormattingUnresolved { .. } => (
+            "viewer.text.legacy_formatting_unresolved",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "Legacy text remains available but exact old-generation formatting could not be projected safely.",
+        ),
         McldRecordCountMismatch { .. } | McldOuterBoundViolation { .. } => (
             "viewer.table.mcld_layout_metrics_unavailable",
             ViewerDiagnosticSeverity::FidelityWarning,

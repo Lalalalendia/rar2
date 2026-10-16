@@ -501,6 +501,7 @@ pub fn build_mature_0x2c_from_streams(
         source_page_paint_orders,
         diagnostics,
         typography_runs,
+        legacy_character_style_runs: Vec::new(),
         typography_size_runs,
         paragraph_alignments,
         paragraph_line_spacings,

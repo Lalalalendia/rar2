@@ -24,6 +24,10 @@ pub struct PubSourceGraphBuild {
     pub diagnostics: Vec<PubBridgeDiagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<PubTypographyRun>,
+    /// Bounded character styles from ASCII-only Publisher 2/95/97 no-Quill CHPX.
+    /// This sidecar never conveys physical font bytes or inferred palette RGB.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_character_style_runs: Vec<PubLegacyCharacterStyleRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_size_runs: Vec<PubTypographySizeRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
