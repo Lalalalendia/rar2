@@ -132,7 +132,10 @@ fn extract_and_verify(zip_path: &Path, manifest: &TreeManifest, destination: &Pa
         let mut entry = archive
             .by_index(index)
             .map_err(|error| UpdateError::LayoutInvariant(format!("read candidate ZIP entry: {error}")))?;
-        let raw = entry.name().to_owned();
+        let raw = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(error) => return invariant(format!("invalid candidate ZIP entry name: {error}")),
+        };
         if entry.is_dir() {
             let trimmed = raw.trim_end_matches('/');
             if !trimmed.is_empty() {

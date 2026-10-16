@@ -495,7 +495,14 @@ mod tests {
         assert_eq!(first, second);
 
         let mut archive = ZipArchive::new(Cursor::new(first)).unwrap();
-        assert_eq!(archive.by_index(0).unwrap().name().expect("decode emitted ZIP entry name"), ODG_MIMETYPE_PATH);
+        assert_eq!(
+            archive
+                .by_index(0)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            ODG_MIMETYPE_PATH
+        );
         assert!(archive.by_name(ODG_MANIFEST_PATH).is_ok());
         assert!(archive.by_name(ODG_CONTENT_PATH).is_ok());
     }
