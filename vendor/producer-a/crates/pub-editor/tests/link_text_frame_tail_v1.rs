@@ -415,7 +415,7 @@ fn current_idml_and_odg_preserve_chain_and_one_live_story() {
     use std::io::Read;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).unwrap();
-        if file.name().ends_with(".xml") {
+        if file.name().unwrap().ends_with(".xml") {
             file.read_to_string(&mut all).unwrap();
         }
     }

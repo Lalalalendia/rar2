@@ -368,23 +368,23 @@ fn validate_text<
                     range: paragraph.range,
                 });
             }
-            if let Some((previous_id, previous_range)) = previous {
-                if paragraph.range.start < previous_range.end {
-                    errors.push(SemanticGraphError::ParagraphOrderOrOverlap {
-                        previous_id,
-                        previous_range,
-                        current_id: paragraph.id,
-                        current_range: paragraph.range,
-                    });
-                }
+            if let Some((previous_id, previous_range)) = previous
+                && paragraph.range.start < previous_range.end
+            {
+                errors.push(SemanticGraphError::ParagraphOrderOrOverlap {
+                    previous_id,
+                    previous_range,
+                    current_id: paragraph.id,
+                    current_range: paragraph.range,
+                });
             }
-            if let Some(style_id) = paragraph.style_ref {
-                if !graph.styles.contains_key(&style_id) {
-                    errors.push(SemanticGraphError::MissingParagraphStyle {
-                        paragraph_id: paragraph.id,
-                        style_id,
-                    });
-                }
+            if let Some(style_id) = paragraph.style_ref
+                && !graph.styles.contains_key(&style_id)
+            {
+                errors.push(SemanticGraphError::MissingParagraphStyle {
+                    paragraph_id: paragraph.id,
+                    style_id,
+                });
             }
             previous = Some((paragraph.id, paragraph.range));
         }
@@ -406,13 +406,13 @@ fn validate_text<
                     range: run.range,
                 });
             }
-            if let Some(style_id) = run.style_ref {
-                if !graph.styles.contains_key(&style_id) {
-                    errors.push(SemanticGraphError::MissingTextRunStyle {
-                        run_id: run.id,
-                        style_id,
-                    });
-                }
+            if let Some(style_id) = run.style_ref
+                && !graph.styles.contains_key(&style_id)
+            {
+                errors.push(SemanticGraphError::MissingTextRunStyle {
+                    run_id: run.id,
+                    style_id,
+                });
             }
         }
     }
@@ -439,13 +439,13 @@ fn validate_styles<
     errors: &mut Vec<SemanticGraphError>,
 ) {
     for style in graph.styles.values() {
-        if let Some(parent_style_id) = style.parent_style {
-            if !graph.styles.contains_key(&parent_style_id) {
-                errors.push(SemanticGraphError::MissingParentStyle {
-                    style_id: style.id,
-                    parent_style_id,
-                });
-            }
+        if let Some(parent_style_id) = style.parent_style
+            && !graph.styles.contains_key(&parent_style_id)
+        {
+            errors.push(SemanticGraphError::MissingParentStyle {
+                style_id: style.id,
+                parent_style_id,
+            });
         }
     }
 }
@@ -482,13 +482,13 @@ fn validate_extensions<
     entities.extend(graph.extensions.values().map(|extension| extension.id));
 
     for (extension_id, extension) in &graph.extensions {
-        if let Some(owner_id) = extension.owner_id {
-            if !entities.contains(&owner_id) {
-                errors.push(SemanticGraphError::MissingExtensionOwner {
-                    extension_id: *extension_id,
-                    owner_id,
-                });
-            }
+        if let Some(owner_id) = extension.owner_id
+            && !entities.contains(&owner_id)
+        {
+            errors.push(SemanticGraphError::MissingExtensionOwner {
+                extension_id: *extension_id,
+                owner_id,
+            });
         }
     }
 }

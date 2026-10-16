@@ -68,10 +68,10 @@ pub(super) fn parse_text_color_references(
             while block_cursor < entry_end {
                 let (block, next) =
                     parse_block(bytes, block_cursor, entry_end, &mut unknown_block_types)?;
-                if block.id == PL_COLOR_REFERENCE_ID {
-                    if let Some(value) = block.value {
-                        values.push(value);
-                    }
+                if block.id == PL_COLOR_REFERENCE_ID
+                    && let Some(value) = block.value
+                {
+                    values.push(value);
                 }
                 block_cursor = next;
             }

@@ -1091,16 +1091,17 @@ fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32
                     winding += delta;
                     if before == 0 && winding != 0 {
                         start = Some(x);
-                    } else if before != 0 && winding == 0 {
-                        if let Some(from) = start.take() {
-                            canvas.span_brush(
-                                state.clip,
-                                y,
-                                from.ceil() as i32,
-                                x.floor() as i32,
-                                state.brush,
-                            )?;
-                        }
+                    } else if before != 0
+                        && winding == 0
+                        && let Some(from) = start.take()
+                    {
+                        canvas.span_brush(
+                            state.clip,
+                            y,
+                            from.ceil() as i32,
+                            x.floor() as i32,
+                            state.brush,
+                        )?;
                     }
                 }
             }

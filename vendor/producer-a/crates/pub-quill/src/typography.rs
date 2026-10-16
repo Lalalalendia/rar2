@@ -148,7 +148,8 @@ pub struct QuillExplicitTypographyRun {
 
 impl QuillExplicitTypographyRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        (self.text_size_emu % QUILL_TEXT_SIZE_EMU_PER_POINT == 0)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 }
@@ -200,7 +201,8 @@ pub struct QuillTextSizeRun {
 
 impl QuillTextSizeRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        (self.text_size_emu % QUILL_TEXT_SIZE_EMU_PER_POINT == 0)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 }
@@ -244,7 +246,8 @@ pub struct QuillEffectiveTypographyRun {
 
 impl QuillEffectiveTypographyRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        (self.text_size_emu % QUILL_TEXT_SIZE_EMU_PER_POINT == 0)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 
@@ -899,10 +902,10 @@ fn parse_fdpp_styles(
                     if let Some(value) = block.value {
                         selectors.push(value);
                     }
-                } else if block.id == PARAGRAPH_ALIGNMENT_ID {
-                    if let Some(value) = block.value {
-                        alignments.push(value);
-                    }
+                } else if block.id == PARAGRAPH_ALIGNMENT_ID
+                    && let Some(value) = block.value
+                {
+                    alignments.push(value);
                 }
                 cursor = next;
             }
@@ -961,7 +964,7 @@ fn materialize_paragraph_ranges(
             )));
         }
         let byte_delta = style.absolute_text_end - text_start;
-        if byte_delta % 2 != 0 {
+        if !byte_delta.is_multiple_of(2) {
             return Err(QuillTypographyReadError::new(format!(
                 "FDPP text offset 0x{:x} is not aligned to UTF-16LE code units",
                 style.absolute_text_end
@@ -1110,10 +1113,10 @@ fn parse_stsh1_paragraph_defaults(
 
         while cursor < style_end {
             let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
-            if block.id == PARAGRAPH_ALIGNMENT_ID {
-                if let Some(value) = block.value {
-                    alignment_values.push(value);
-                }
+            if block.id == PARAGRAPH_ALIGNMENT_ID
+                && let Some(value) = block.value
+            {
+                alignment_values.push(value);
             }
             cursor = next;
         }
@@ -1271,23 +1274,22 @@ fn parse_stsh1_character_defaults(
 
         while cursor < style_end {
             let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
-            if block.id == FONT_INDEX_CONTAINER_ID {
-                if let Some(index) = extract_primary_font_index(bytes, block, unknown_block_types)?
-                {
-                    let index_usize = to_usize(index, "STSH1 font index")?;
-                    if index_usize >= font_names.len() {
-                        return Err(QuillTypographyReadError::new(format!(
-                            "STSH1 font index {index} is outside FONT catalog of {} records",
-                            font_names.len()
-                        )));
-                    }
-                    font_indices.push(index);
+            if block.id == FONT_INDEX_CONTAINER_ID
+                && let Some(index) = extract_primary_font_index(bytes, block, unknown_block_types)?
+            {
+                let index_usize = to_usize(index, "STSH1 font index")?;
+                if index_usize >= font_names.len() {
+                    return Err(QuillTypographyReadError::new(format!(
+                        "STSH1 font index {index} is outside FONT catalog of {} records",
+                        font_names.len()
+                    )));
                 }
+                font_indices.push(index);
             }
-            if block.id == TEXT_SIZE_ID {
-                if let Some(value) = block.value {
-                    text_sizes_emu.push(value);
-                }
+            if block.id == TEXT_SIZE_ID
+                && let Some(value) = block.value
+            {
+                text_sizes_emu.push(value);
             }
             if matches!(block.id, BARE_COLOR_INDEX_ID | BARE_COLOR_INDEX_EXTENDED_ID) {
                 if let Some(value) = block.value {
@@ -1296,10 +1298,9 @@ fn parse_stsh1_character_defaults(
             } else if matches!(
                 block.id,
                 COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
-            ) {
-                if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
-                    color_indices.push(value);
-                }
+            ) && let Some(value) = extract_color_index(bytes, block, unknown_block_types)?
+            {
+                color_indices.push(value);
             }
             cursor = next;
         }
@@ -1989,23 +1990,22 @@ fn parse_fdpc_styles(
                     )?);
                     if let Some(index) =
                         extract_primary_font_index(bytes, block, unknown_block_types)?
+                        && index != 0xFFFF
                     {
-                        if index != 0xFFFF {
-                            let index_usize = to_usize(index, "FDPC font index")?;
-                            if index_usize >= font_names.len() {
-                                return Err(QuillTypographyReadError::new(format!(
-                                    "FDPC font index {index} is outside FONT catalog of {} records",
-                                    font_names.len()
-                                )));
-                            }
-                            font_indices.push(index);
+                        let index_usize = to_usize(index, "FDPC font index")?;
+                        if index_usize >= font_names.len() {
+                            return Err(QuillTypographyReadError::new(format!(
+                                "FDPC font index {index} is outside FONT catalog of {} records",
+                                font_names.len()
+                            )));
                         }
+                        font_indices.push(index);
                     }
                 }
-                if block.id == TEXT_SIZE_ID {
-                    if let Some(value) = block.value {
-                        text_sizes_emu.push(value);
-                    }
+                if block.id == TEXT_SIZE_ID
+                    && let Some(value) = block.value
+                {
+                    text_sizes_emu.push(value);
                 }
                 if matches!(block.id, BARE_COLOR_INDEX_ID | BARE_COLOR_INDEX_EXTENDED_ID) {
                     if let Some(value) = block.value {
@@ -2014,10 +2014,10 @@ fn parse_fdpc_styles(
                 } else if matches!(
                     block.id,
                     COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
-                ) {
-                    if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
-                        color_indices.push(value);
-                    }
+                ) && let Some(value) =
+                    extract_color_index(bytes, block, unknown_block_types)?
+                {
+                    color_indices.push(value);
                 }
                 cursor = next;
             }

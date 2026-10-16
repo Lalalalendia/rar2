@@ -47,7 +47,9 @@ fn run() -> Result<(), Box<dyn Error>> {
 fn parse_fixture_arg() -> Result<PathBuf, Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
     match (args.next(), args.next(), args.next()) {
-        (Some(flag), Some(path), None) if flag == std::ffi::OsStr::new("--fixture") => Ok(PathBuf::from(path)),
+        (Some(flag), Some(path), None) if flag == std::ffi::OsStr::new("--fixture") => {
+            Ok(PathBuf::from(path))
+        }
         _ => Err("usage: chaptera-resize-producer --fixture FILE.pub".into()),
     }
 }
@@ -145,7 +147,9 @@ fn select_resize_candidate(
             let Some(authored) = editor.graph().nodes.get(&scene_node.origin) else {
                 continue;
             };
-            if authored.payload.story_frame.is_none() || editor.can_resize_node(scene_node.origin).is_err() {
+            if authored.payload.story_frame.is_none()
+                || editor.can_resize_node(scene_node.origin).is_err()
+            {
                 continue;
             }
 
@@ -413,8 +417,7 @@ fn probe_response(
                 cmo_slot_index: None,
                 cmo_scalar_index: None,
             };
-            let admission =
-                admit_object_mutation_v1(&projected, ObjectMutationKindV1::ResizeNode);
+            let admission = admit_object_mutation_v1(&projected, ObjectMutationKindV1::ResizeNode);
             if admission.admitted || admission.origin_node_id.is_some() {
                 return Err("projected ResizeNode target was unexpectedly admitted".into());
             }
@@ -486,7 +489,10 @@ fn odg_contains_bounds(
         format!("svg:x=\"{}pt\"", format_emu_points(bounds.x.get())),
         format!("svg:y=\"{}pt\"", format_emu_points(bounds.y.get())),
         format!("svg:width=\"{}pt\"", format_emu_points(bounds.width.get())),
-        format!("svg:height=\"{}pt\"", format_emu_points(bounds.height.get())),
+        format!(
+            "svg:height=\"{}pt\"",
+            format_emu_points(bounds.height.get())
+        ),
     ];
 
     for (_, xml) in zip_xml_parts(bytes)? {
@@ -508,7 +514,7 @@ fn zip_xml_parts(bytes: &[u8]) -> Result<Vec<(String, String)>, Box<dyn Error>> 
     let mut parts = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let name = entry.name().to_owned();
+        let name = entry.name()?.into_owned();
         if entry.is_dir() || !name.ends_with(".xml") {
             continue;
         }
@@ -543,7 +549,9 @@ fn format_ratio(numerator: i128, denominator: i128, precision: usize) -> String 
     for _ in 0..precision {
         remainder *= 10;
         let digit = remainder / denominator;
-        result.push(char::from(b'0' + u8::try_from(digit).expect("decimal digit")));
+        result.push(char::from(
+            b'0' + u8::try_from(digit).expect("decimal digit"),
+        ));
         remainder %= denominator;
         if remainder == 0 {
             break;

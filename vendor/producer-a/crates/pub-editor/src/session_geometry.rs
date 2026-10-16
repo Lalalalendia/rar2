@@ -1228,12 +1228,12 @@ impl EditorSession {
                 page_id: identity.page_id,
             });
         }
-        if let Some(existing) = self.authored_page_identities_v1().get(&identity.page_id) {
-            if *existing != identity {
-                return Err(EditorError::AuthoredPageIdentityConflict {
-                    page_id: identity.page_id,
-                });
-            }
+        if let Some(existing) = self.authored_page_identities_v1().get(&identity.page_id)
+            && *existing != identity
+        {
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: identity.page_id,
+            });
         }
 
         let current_customer_page_ids =
@@ -1277,12 +1277,11 @@ impl EditorSession {
         if let Some(existing) = self
             .authored_page_identities_v1()
             .get(&expected.identity.page_id)
+            && *existing != expected.identity
         {
-            if *existing != expected.identity {
-                return Err(EditorError::AuthoredPageIdentityConflict {
-                    page_id: expected.identity.page_id,
-                });
-            }
+            return Err(EditorError::AuthoredPageIdentityConflict {
+                page_id: expected.identity.page_id,
+            });
         }
 
         let existing_page_ids = self.graph.pages.keys().copied().collect::<BTreeSet<_>>();

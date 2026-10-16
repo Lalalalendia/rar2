@@ -94,10 +94,10 @@ fn seq_to_node_map(
 
     for node in graph.nodes.values() {
         let seq = node.payload.contents_seq_num;
-        if let Some(existing) = map.insert(seq, node.header.id) {
-            if existing != node.header.id {
-                ambiguous.insert(seq);
-            }
+        if let Some(existing) = map.insert(seq, node.header.id)
+            && existing != node.header.id
+        {
+            ambiguous.insert(seq);
         }
     }
 

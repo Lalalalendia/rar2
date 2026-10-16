@@ -186,7 +186,7 @@ fn recover_root_regular_stream_from_bytes(
     if recovery_u16(source, 32)? != 6 {
         anyhow::bail!("unsupported CFB mini-sector size");
     }
-    if source.len() < sector_len || source.len() % sector_len != 0 {
+    if source.len() < sector_len || !source.len().is_multiple_of(sector_len) {
         anyhow::bail!("unaligned CFB recovery input");
     }
     let num_sectors = source.len() / sector_len - 1;
@@ -439,7 +439,7 @@ fn recovery_fat_chain_to_end(
 
 fn recovery_directory_name(entry: &[u8]) -> Result<String> {
     let byte_len = recovery_u16(entry, 64)? as usize;
-    if !(2..=64).contains(&byte_len) || byte_len % 2 != 0 {
+    if !(2..=64).contains(&byte_len) || !byte_len.is_multiple_of(2) {
         anyhow::bail!("invalid CFB directory name length {byte_len}");
     }
     let raw = &entry[..byte_len - 2];

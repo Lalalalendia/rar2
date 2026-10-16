@@ -281,13 +281,13 @@ impl EffectiveTableGridV1 {
             if self.rows[..index].iter().any(|other| other.id == row.id) {
                 return Err(EffectiveTableGridError::DuplicateRowId);
             }
-            if let Some(extent) = row.extent {
-                if extent.get() <= 0 {
-                    return Err(EffectiveTableGridError::NonPositiveRowExtent {
-                        id: row.id,
-                        value: extent.get(),
-                    });
-                }
+            if let Some(extent) = row.extent
+                && extent.get() <= 0
+            {
+                return Err(EffectiveTableGridError::NonPositiveRowExtent {
+                    id: row.id,
+                    value: extent.get(),
+                });
             }
         }
         for (index, column) in self.columns.iter().enumerate() {
@@ -300,13 +300,13 @@ impl EffectiveTableGridV1 {
             {
                 return Err(EffectiveTableGridError::DuplicateColumnId);
             }
-            if let Some(extent) = column.extent {
-                if extent.get() <= 0 {
-                    return Err(EffectiveTableGridError::NonPositiveColumnExtent {
-                        id: column.id,
-                        value: extent.get(),
-                    });
-                }
+            if let Some(extent) = column.extent
+                && extent.get() <= 0
+            {
+                return Err(EffectiveTableGridError::NonPositiveColumnExtent {
+                    id: column.id,
+                    value: extent.get(),
+                });
             }
         }
 
