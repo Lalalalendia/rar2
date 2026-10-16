@@ -1,0 +1,87 @@
+name: PR2790 exact-EMU authored Rectangle oracle (synthetic)
+
+on:
+  push:
+    branches:
+      - ci/pr2790-exact-emu-oracle-20261016
+    paths:
+      - .github/workflows/pr2790-exact-emu-oracle.yml
+      - tools/verify_temporary_guest_move_nodes_export.py
+      - tools/test_verify_temporary_guest_move_nodes_export.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr2790-exact-emu-oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-emu-oracle:
+    name: Exact EMU geometry | synthetic IDML + ODG
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout non-authoritative CI branch
+        uses: actions/checkout@v4
+
+      - name: Validate Python syntax
+        run: |
+          python3 --version
+          python3 -m py_compile \
+            tools/verify_temporary_guest_move_nodes_export.py \
+            tools/test_verify_temporary_guest_move_nodes_export.py
+
+      - name: Execute exact-EMU positive and adversarial regressions
+        run: python3 -m unittest discover -s tools -p 'test_verify_temporary_guest_move_nodes_export.py' -v
+
+      - name: Check IDML and ODG CLI receipts using synthetic packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr2790-oracle"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          from test_verify_temporary_guest_move_nodes_export import build_package, witness
+          root = Path(os.environ['RUNNER_TEMP']) / 'pr2790-oracle'
+          canonical = witness()
+          (root / 'witness.json').write_text(json.dumps(canonical), encoding='utf-8')
+          for target in ('idml', 'odg'):
+              build_package(root / ('synthetic.' + target), target, canonical)
+          PY
+          for target in idml odg; do
+            python3 tools/verify_temporary_guest_move_nodes_export.py \
+              --artifact "$RUNNER_TEMP/pr2790-oracle/synthetic.$target" \
+              --target "$target" \
+              --witness "$RUNNER_TEMP/pr2790-oracle/witness.json" \
+              | tee "$RUNNER_TEMP/pr2790-oracle/$target-receipt.json"
+            python3 - "$RUNNER_TEMP/pr2790-oracle/$target-receipt.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding='utf-8') as f:
+              result = json.load(f)
+          assert result['status'] == 'PASS', result
+          assert result['geometry_exact_emu'] is True, result
+          assert result['verified_shape_count'] == 3, result
+          assert result['individual_native_shape_retention_verified'] is False, result
+          PY
+          done
+          {
+            echo '## PR2790 exact-EMU synthetic self-test'
+            echo '17 Python unit tests and both IDML/ODG CLI receipts passed.'
+            echo '**Scope: synthetic packages only. No real PUB, native import, Rust MoveNodes, or browser acceptance was executed.**'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload source-free synthetic receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2790-exact-emu-synthetic-receipts
+          path: |
+            ${{ runner.temp }}/pr2790-oracle/idml-receipt.json
+            ${{ runner.temp }}/pr2790-oracle/odg-receipt.json
+          if-no-files-found: error
+          retention-days: 7
