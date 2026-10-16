@@ -133,7 +133,69 @@ def uniquely_match(expected: dict[str, dict], observed: list[dict],
             "max_native_delta_emu": best[0],
             "matching_tolerance_emu": tolerance_emu,
             "geometry_matching_method": "injective_bbox_4d",
-            "matched_node_ids": ids}
+            "matched_node_ids": ids,
+            "matched_object_indices": [j for j, _ in best[2]]}
+
+
+def match_native_group(expected: dict[str, dict], observed: list[dict],
+                       tolerance_emu: int = NATIVE_TOLERANCE_EMU) -> dict:
+    """Prove 3 injective bounds with either absolute or ONE shared canvas shift.
+
+    Scribus imports IDML onto a pasteboard; native XPOS/YPOS can acquire an
+    origin offset even when each object and all inter-object distances survive.
+    A shared translation is *not* proof of absolute native page placement.
+    The original IDML/ODG XML is separately verified at exact integer EMU.
+    """
+    try:
+        absolute = uniquely_match(expected, observed, tolerance_emu)
+    except AssertionError as err:
+        if not str(err).startswith("native_individual_geometry_retention_failed"):
+            raise
+    else:
+        return {**absolute, "native_registration_mode": "absolute",
+                "native_origin_shift_emu": {"x": 0, "y": 0},
+                "native_absolute_page_position_verified": True}
+
+    require(len(expected) == 3 and 3 <= len(observed) <= 256,
+            "native_rectangle_budget_invalid")
+    # At least one distinct geometric signature per selected authored object.
+    require(len({tuple(v[key] for key in ("x", "y", "width", "height"))
+                 for v in expected.values()}) == 3,
+            "native_individual_geometry_nonunique")
+    first = expected[sorted(expected)[0]]
+    candidates: list[tuple[int, int, int, dict]] = []
+    for seen in observed:
+        if (abs(first["width"] - seen["width"]) > tolerance_emu or
+                abs(first["height"] - seen["height"]) > tolerance_emu):
+            continue
+        dx, dy = seen["x"] - first["x"], seen["y"] - first["y"]
+        shifted = {ident: {**bbox, "x": bbox["x"] + dx, "y": bbox["y"] + dy}
+                   for ident, bbox in expected.items()}
+        try:
+            hit = uniquely_match(shifted, observed, tolerance_emu)
+        except AssertionError as err:
+            if not str(err).startswith("native_individual_geometry_retention_failed"):
+                raise
+            continue
+        candidates.append((hit["max_native_delta_emu"], dx, dy, hit))
+    require(candidates, "native_individual_geometry_retention_failed: shared translation "
+            "not found; expected=" + json.dumps(expected, sort_keys=True) +
+            "; observed=" + json.dumps(observed[:30], sort_keys=True))
+    candidates.sort(key=lambda x: (x[0], abs(x[1])+abs(x[2]), x[1], x[2]))
+    best_error, dx, dy, hit = candidates[0]
+    # An unrelated second full triple must not be silently confused with the
+    # authored group if its registration has equally good residual error.
+    for other_error, other_dx, other_dy, other_hit in candidates[1:]:
+        if other_error > best_error:
+            break
+        if (other_hit["matched_object_indices"] != hit["matched_object_indices"]
+                and (abs(other_dx - dx) > tolerance_emu or
+                     abs(other_dy - dy) > tolerance_emu)):
+            raise AssertionError("native_registration_ambiguous")
+    return {**hit, "geometry_matching_method": "injective_bbox_4d_uniform_translation",
+            "native_registration_mode": "uniform_canvas_translation",
+            "native_origin_shift_emu": {"x": dx, "y": dy},
+            "native_absolute_page_position_verified": False}
 
 
 def sha256_file(path: Path) -> str:
@@ -178,7 +240,7 @@ def run_native(package: Path, target: str, expected: dict[str, dict]) -> dict:
         shape_root = ET.parse(output).getroot()
         shapes = (collect_scribus_shapes(shape_root) if target == "idml"
                   else collect_libreoffice_shapes(shape_root))
-        matching = uniquely_match(expected, shapes)
+        matching = match_native_group(expected, shapes)
         return {"application": app, "reopened": True,
                 "import_sha256": sha256_file(output),
                 "individual_native_shape_retention_verified": True,

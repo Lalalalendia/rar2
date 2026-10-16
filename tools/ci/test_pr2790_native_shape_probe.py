@@ -3,7 +3,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pr2790_native_shape_probe import (collect_scribus_shapes,
                                        collect_libreoffice_shapes,
-                                       length_to_emu, uniquely_match)
+                                       length_to_emu, uniquely_match, match_native_group)
 
 
 EXPECTED = {
@@ -40,6 +40,49 @@ class NativeProbeTests(unittest.TestCase):
         observed[1]['x'] += 12701
         with self.assertRaisesRegex(AssertionError, 'native_individual_geometry_retention_failed'):
             uniquely_match(EXPECTED, observed)
+
+    def test_scribus_real_canvas_shift_retains_three_relative_bboxes(self):
+        observed = [dict(v, x=v['x']-1730000, y=v['y']+4283200)
+                    for v in EXPECTED.values()]
+        hit = match_native_group(EXPECTED, observed)
+        self.assertEqual(hit['matched_shape_count'], 3)
+        self.assertEqual(hit['native_registration_mode'], 'uniform_canvas_translation')
+        self.assertEqual(hit['native_origin_shift_emu'], {'x':-1730000,'y':4283200})
+        self.assertFalse(hit['native_absolute_page_position_verified'])
+        self.assertEqual(hit['max_native_delta_emu'], 0)
+
+    def test_native_unshifted_all_three_keep_absolute(self):
+        hit = match_native_group(EXPECTED, list(EXPECTED.values()))
+        self.assertEqual(hit['native_registration_mode'], 'absolute')
+        self.assertTrue(hit['native_absolute_page_position_verified'])
+
+    def test_native_group_rejects_only_two_after_translation(self):
+        observed = [dict(v, x=v['x']-1730000, y=v['y']+4283200)
+                    for v in list(EXPECTED.values())[:2]]
+        with self.assertRaisesRegex(AssertionError, 'native_rectangle_budget_invalid'):
+            match_native_group(EXPECTED, observed)
+
+    def test_native_group_rejects_one_shape_independent_shift(self):
+        observed = [dict(v, x=v['x']-1730000, y=v['y']+4283200)
+                    for v in EXPECTED.values()]
+        observed[1]['y'] += 12701
+        with self.assertRaisesRegex(AssertionError, 'native_individual_geometry_retention_failed'):
+            match_native_group(EXPECTED, observed)
+
+    def test_native_group_rejects_changed_middle_width(self):
+        observed = [dict(v, x=v['x']-1730000, y=v['y']+4283200)
+                    for v in EXPECTED.values()]
+        observed[1]['width'] += 12701
+        with self.assertRaisesRegex(AssertionError, 'native_individual_geometry_retention_failed'):
+            match_native_group(EXPECTED, observed)
+
+    def test_native_group_rejects_two_indistinguishable_complete_groups(self):
+        observed = [dict(v, x=v['x']-1730000, y=v['y']+4283200)
+                    for v in EXPECTED.values()]
+        observed += [dict(v, x=v['x']+9000000, y=v['y']+6000000)
+                     for v in EXPECTED.values()]
+        with self.assertRaisesRegex(AssertionError, 'native_registration_ambiguous'):
+            match_native_group(EXPECTED, observed)
 
     def test_scribus_pageobjects_extraction(self):
         root = ET.fromstring('<SCRIBUSUTF8NEW><DOCUMENT><PAGEOBJECT XPOS="72" '
