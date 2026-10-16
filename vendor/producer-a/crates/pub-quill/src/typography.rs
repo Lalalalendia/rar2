@@ -148,7 +148,8 @@ pub struct QuillExplicitTypographyRun {
 
 impl QuillExplicitTypographyRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        self.text_size_emu.is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 }
@@ -200,7 +201,8 @@ pub struct QuillTextSizeRun {
 
 impl QuillTextSizeRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        self.text_size_emu.is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 }
@@ -244,7 +246,8 @@ pub struct QuillEffectiveTypographyRun {
 
 impl QuillEffectiveTypographyRun {
     pub fn text_size_points_exact(&self) -> Option<u32> {
-        self.text_size_emu.is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
+        self.text_size_emu
+            .is_multiple_of(QUILL_TEXT_SIZE_EMU_PER_POINT)
             .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
     }
 
@@ -1272,8 +1275,7 @@ fn parse_stsh1_character_defaults(
         while cursor < style_end {
             let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
             if block.id == FONT_INDEX_CONTAINER_ID
-                && let Some(index) =
-                    extract_primary_font_index(bytes, block, unknown_block_types)?
+                && let Some(index) = extract_primary_font_index(bytes, block, unknown_block_types)?
             {
                 let index_usize = to_usize(index, "STSH1 font index")?;
                 if index_usize >= font_names.len() {
@@ -2012,7 +2014,8 @@ fn parse_fdpc_styles(
                 } else if matches!(
                     block.id,
                     COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
-                ) && let Some(value) = extract_color_index(bytes, block, unknown_block_types)?
+                ) && let Some(value) =
+                    extract_color_index(bytes, block, unknown_block_types)?
                 {
                     color_indices.push(value);
                 }

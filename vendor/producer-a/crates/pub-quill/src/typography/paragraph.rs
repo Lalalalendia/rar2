@@ -278,8 +278,7 @@ pub(super) fn build_paragraph_flow_runs(
             if let (Some(constraint), Some(value)) = (
                 paragraph_flow_constraint_from_native_id(block.id),
                 block.value,
-            )
-                && block.block_type == 0x20
+            ) && block.block_type == 0x20
                 && value == PARAGRAPH_FLOW_NATIVE_ON_VALUE
             {
                 observations.push((
