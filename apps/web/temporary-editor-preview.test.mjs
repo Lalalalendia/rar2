@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   bootTemporaryEditorPreview,
   describeTemporaryPreview,
@@ -59,6 +60,21 @@ const opened = {
   source_sha256: sha, scene,
   can_edit: false, can_download_changed_file: false,
 };
+
+test("anonymous PUB start stays inert until async editor controller installs submit", async () => {
+  const html = readFileSync(new URL("./temporary-editor-preview.html", import.meta.url), "utf8");
+  assert.match(html, /<button id="temporary-start" type="submit" disabled>/);
+  const { nodes, documentObject } = fakeDom();
+  nodes["temporary-start"].disabled = true;
+  await bootTemporaryEditorPreview({
+    documentObject, cryptoObject, storage: memoryStorage(),
+    fetchImpl: async () => { throw Error("unexpected network during boot"); },
+    renderer: async () => {},
+  });
+  assert.equal(typeof nodes["temporary-upload-form"].handlers.submit, "function");
+  assert.equal(nodes["temporary-start"].disabled, false,
+    "controller enables native form submit only after installing its handler");
+});
 
 test("temporary preview explicitly forbids edit and changed-file downloads", () => {
   const described = describeTemporaryPreview({ kind: "temporary_preview", ...opened });
