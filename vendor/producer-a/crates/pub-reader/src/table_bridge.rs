@@ -974,31 +974,31 @@ fn populate_native_autoformat_table_cell_fill(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         )];
-        if paint_context_uses_officeart_scheme_color(shape, context.dgg_defaults) {
-            if let Some(scheme) = context.color_scheme {
-                source_refs.push(source_ref(
-                    context.source,
-                    &scheme.source,
-                    None,
-                    Some("OplSccm/current-color-scheme".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
+        if paint_context_uses_officeart_scheme_color(shape, context.dgg_defaults)
+            && let Some(scheme) = context.color_scheme
+        {
+            source_refs.push(source_ref(
+                context.source,
+                &scheme.source,
+                None,
+                Some("OplSccm/current-color-scheme".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
         }
-        if effective_paint_has_dgg_authority(&paint) {
-            if let Some(dgg) = context.dgg_defaults {
-                source_refs.push(source_ref(
-                    context.source,
-                    &dgg.source,
-                    Some("escher/dgg/default-options".into()),
-                    Some("DggContainer/FOPT-defaults".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
+        if effective_paint_has_dgg_authority(&paint)
+            && let Some(dgg) = context.dgg_defaults
+        {
+            source_refs.push(source_ref(
+                context.source,
+                &dgg.source,
+                Some("escher/dgg/default-options".into()),
+                Some("DggContainer/FOPT-defaults".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
         }
 
         cell.paint = Some(PubTableCellPaintSource {
