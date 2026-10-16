@@ -28,6 +28,70 @@ jobs:
       - name: Checkout non-authoritative CI branch
         uses: actions/checkout@v4
 
+      - name: Compose exact dependency-owner PR #2830 solely inside disposable runner
+        env:
+          ZIP_OWNER_BASE: 1aae385ba8cf12aad33b3b6ee2d84b509a7d3ad5
+          ZIP_OWNER_HEAD: 68de4f241f0a3aabcc36f6b922d744d19250b900
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags --depth=20 origin "$ZIP_OWNER_BASE" "$ZIP_OWNER_HEAD"
+          owned=(
+            Cargo.toml
+            apps/chaptera-desktop/Cargo.toml
+            apps/chaptera-server/Cargo.toml
+            crates/chaptera-update-engine/src/staging.rs
+            vendor/producer-a/Cargo.toml
+            vendor/producer-a/crates/pub-docx/src/lib.rs
+            vendor/producer-a/crates/pub-idml/src/package_writer.rs
+            vendor/producer-a/crates/pub-odg/src/lib.rs
+            vendor/producer-a/crates/pub-reader/Cargo.toml
+            vendor/producer-a/crates/pub-reader/src/failure_intake.rs
+          )
+          mapfile -t actual < <(git diff --name-only "$ZIP_OWNER_BASE" "$ZIP_OWNER_HEAD")
+          if [[ "${actual[*]}" != "${owned[*]}" ]]; then
+            printf "dependency-owner file set changed; refusing overlay\n" >&2
+            printf "actual: %s\n" "${actual[*]}" >&2
+            exit 1
+          fi
+          git diff --binary "$ZIP_OWNER_BASE" "$ZIP_OWNER_HEAD" -- "${owned[@]}" > "$RUNNER_TEMP/pr2790-zip-owner.patch"
+          git apply --check "$RUNNER_TEMP/pr2790-zip-owner.patch"
+          git apply "$RUNNER_TEMP/pr2790-zip-owner.patch"
+          for file in "${owned[@]}"; do
+            test "$(git hash-object "$file")" = "$(git rev-parse "$ZIP_OWNER_HEAD:$file")"
+          done
+          mapfile -t after < <(git diff --name-only HEAD)
+          test "${after[*]}" = "${owned[*]}"
+          git diff --check
+          grep -Fq 'zip = { version = "=9.0.4", default-features = false }' vendor/producer-a/Cargo.toml
+          grep -Fq 'zip = { version = "=9.0.4", default-features = false }' Cargo.toml
+          test ! -e Cargo.lock
+          test ! -e vendor/producer-a/Cargo.lock
+          mkdir -p "$RUNNER_TEMP/pr2790-oracle"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof = {
+              "schema": "chaptera.pr2790-ci-ephemeral-dependency-owner-overlay.v1",
+              "donor_source_head": os.environ["GITHUB_SHA"],
+              "dependency_owner_pr": 2830,
+              "dependency_owner_base": os.environ["ZIP_OWNER_BASE"],
+              "dependency_owner_head": os.environ["ZIP_OWNER_HEAD"],
+              "source_files": ["Cargo.toml","apps/chaptera-desktop/Cargo.toml","apps/chaptera-server/Cargo.toml","crates/chaptera-update-engine/src/staging.rs","vendor/producer-a/Cargo.toml","vendor/producer-a/crates/pub-docx/src/lib.rs","vendor/producer-a/crates/pub-idml/src/package_writer.rs","vendor/producer-a/crates/pub-odg/src/lib.rs","vendor/producer-a/crates/pub-reader/Cargo.toml","vendor/producer-a/crates/pub-reader/src/failure_intake.rs"],
+              "overlay_mode": "ephemeral_git_apply_only",
+              "dependency_fix_merged": False,
+              "pr2790_production_branch_changed": False,
+          }
+          out = Path(os.environ["RUNNER_TEMP"]) / "pr2790-oracle" / "dependency-overlay-receipt.json"
+          out.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          {
+            echo "## Exact ephemeral ZIP dependency integration"
+            echo "Testing donor code plus sole-owner ZIP PR #2830 at a pinned head; owner/base manifests are exact SHA-matched."
+            echo "**No owner manifests or product changes were committed to this branch; dependency migration is not treated as merged.**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Validate Python syntax
         run: |
           python3 --version
@@ -239,6 +303,7 @@ jobs:
         with:
           name: pr2790-exact-emu-adapter-receipts
           path: |
+            ${{ runner.temp }}/pr2790-oracle/dependency-overlay-receipt.json
             ${{ runner.temp }}/pr2790-oracle/idml-receipt.json
             ${{ runner.temp }}/pr2790-oracle/odg-receipt.json
             ${{ runner.temp }}/pr2790-adapter/gap.json
