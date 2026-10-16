@@ -304,7 +304,7 @@ fn build_partial_cfb_fat_context(source: &[u8]) -> Result<PartialCfbFatContext> 
     if read_u16(source, 32)? != 6 {
         anyhow::bail!("unsupported CFB mini-sector size");
     }
-    if source.len() < sector_len || source.len() % sector_len != 0 {
+    if source.len() < sector_len || !source.len().is_multiple_of(sector_len) {
         anyhow::bail!("unaligned CFB partial recovery input");
     }
 
@@ -1204,7 +1204,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
 
 fn directory_name(entry: &[u8]) -> Result<String> {
     let byte_len = read_u16(entry, 64)? as usize;
-    if !(2..=64).contains(&byte_len) || byte_len % 2 != 0 {
+    if !(2..=64).contains(&byte_len) || !byte_len.is_multiple_of(2) {
         anyhow::bail!("invalid CFB directory name length {byte_len}");
     }
     let raw = &entry[..byte_len - 2];
