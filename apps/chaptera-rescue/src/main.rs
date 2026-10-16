@@ -1,3 +1,5 @@
+mod batch_ui;
+
 use eframe::egui;
 use pub_reader::{FailureIntakeClass, classify_failure_candidate};
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,7 @@ struct RescueApp {
     receipt_status: Option<String>,
     report_path: String,
     report_status: Option<String>,
+    batch_ui: batch_ui::BatchUi,
 }
 
 fn is_lower_sha256(value: &str) -> bool {
@@ -283,6 +286,18 @@ impl eframe::App for RescueApp {
             let Some(path) = file.path else {
                 continue;
             };
+            if path.is_dir() {
+                self.batch_ui.use_input(&path);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                == Some("pub".to_owned())
+            {
+                self.batch_ui.use_input(&path);
+            }
             match path
                 .extension()
                 .and_then(|value| value.to_str())
@@ -298,6 +313,16 @@ impl eframe::App for RescueApp {
                 _ => {}
             }
         }
+
+        egui::TopBottomPanel::bottom("rescue-batch-panel")
+            .resizable(true)
+            .default_height(300.0)
+            .min_height(160.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.batch_ui.draw(ui, ctx);
+                });
+            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(APP_TITLE);
@@ -449,7 +474,7 @@ fn main() -> eframe::Result<()> {
     }
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([820.0, 620.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 760.0]),
         ..Default::default()
     };
     eframe::run_native(
