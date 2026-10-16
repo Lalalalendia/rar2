@@ -11,6 +11,13 @@ export const RENDER_SCENE_PROTOCOLS = Object.freeze([
   "chaptera.editor-render-scene.v1",
 ]);
 
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+export function preserveResolvedSvgWhitespace(element) {
+  // Dynamically created SVG needs the XML namespace; CSS governs Chromium ink.
+  element.setAttributeNS(XML_NS, "xml:space", "preserve");
+  element.style.whiteSpace = "pre";
+}
+
 export function isRenderableSceneProtocol(value) {
   return RENDER_SCENE_PROTOCOLS.includes(value);
 }
@@ -814,7 +821,7 @@ function appendResolvedSvgText(root, story) {
       "data-text-line-index": line.line_index,
       "data-measured-width-css-px": line.measured_width_css_px,
     });
-    text.setAttribute("xml:space", "preserve");
+    preserveResolvedSvgWhitespace(text);
     if (line.spans.length) {
       for (const span of line.spans) {
         const tspan = svgNode("tspan", {
@@ -826,7 +833,7 @@ function appendResolvedSvgText(root, story) {
           "data-measured-width-css-px": span.measured_width_css_px,
           "data-font-resource-id": span.font_resource_id,
         });
-        tspan.setAttribute("xml:space", "preserve");
+        preserveResolvedSvgWhitespace(tspan);
         tspan.textContent = span.text;
         text.appendChild(tspan);
       }

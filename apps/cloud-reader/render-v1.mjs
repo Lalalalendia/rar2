@@ -6,6 +6,7 @@ const FORBIDDEN_SOURCE_KEYS = new Set([
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
 const Q16_ONE = 65_536;
 // Physical fallback metrics from chaptera-desktop-fallback-font-resource.
 // Browser font sizes (including SVG attributes) are clamped. Paint text in
@@ -14,6 +15,12 @@ const Q16_ONE = 65_536;
 const PREVIEW_FONT_SIZE_EMU = 114_300;
 const PREVIEW_LINE_HEIGHT_EMU = 142_875;
 const EMU_PER_CSS_PX = 9525;
+
+export function preserveResolvedSvgWhitespace(element) {
+  // Dynamically created SVG needs the XML namespace; CSS governs Chromium ink.
+  element.setAttributeNS(XML_NS, "xml:space", "preserve");
+  element.style.whiteSpace = "pre";
+}
 
 function previewForeignObject(bounds, attrs) {
   return svgNode("foreignObject", {
@@ -450,7 +457,7 @@ function appendText(group, defs, node, fonts, index) {
       "data-text-line-index": line.line_index,
       "data-measured-width-emu": line.measured_width_emu
     });
-    text.setAttribute("xml:space", "preserve");
+    preserveResolvedSvgWhitespace(text);
     if (line.spans.length) {
       for (const span of line.spans) {
         const spanInstalled = span.font_resource_id
@@ -465,7 +472,7 @@ function appendText(group, defs, node, fonts, index) {
           "data-measured-width-emu": span.measured_width_emu,
           "data-font-resource-id": span.font_resource_id
         });
-        tspan.setAttribute("xml:space", "preserve");
+        preserveResolvedSvgWhitespace(tspan);
         tspan.textContent = span.text;
         text.appendChild(tspan);
       }

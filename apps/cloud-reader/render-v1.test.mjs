@@ -14,10 +14,26 @@ import {
   previewTextSizeSource,
   resolvedTextLinePaintPlan,
   resolvedTextViewportGeometry,
+  preserveResolvedSvgWhitespace,
   tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
+
+test("source-resolved SVG text and spans preserve source whitespace", () => {
+  for (const tag of ["text", "tspan"]) {
+    const attributes = [];
+    const element = {
+      style: {},
+      setAttributeNS(ns, name, value) { attributes.push([ns, name, value]); }
+    };
+    preserveResolvedSvgWhitespace(element);
+    assert.deepEqual(attributes, [
+      ["http://www.w3.org/XML/1998/namespace", "xml:space", "preserve"]
+    ], tag);
+    assert.equal(element.style.whiteSpace, "pre", tag);
+  }
+});
 
 test("decorative BorderArt placement uses exact server geometry and bounded image resources", () => {
   const resource = {
