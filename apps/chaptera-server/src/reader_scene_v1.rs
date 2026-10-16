@@ -321,6 +321,8 @@ pub struct ReaderImageResourceV1 {
 #[derive(Debug, Clone)]
 pub struct ReaderConfiguredFontResourceV1 {
     pub source_family: String,
+    pub bold: bool,
+    pub italic: bool,
     pub resource_id: String,
     pub expected_sha256: String,
     pub face_index: u32,
@@ -652,6 +654,62 @@ pub fn from_viewer_geometry(
     )
 }
 
+// A source-exact styled face is selected only when BOTH effective Quill
+// booleans are known. Missing operator-config style labels may still mean
+// Regular for configuration compatibility; that is not source-style evidence.
+fn configured_source_style_v1(bold: Option<bool>, italic: Option<bool>) -> Option<(bool, bool)> {
+    bold.zip(italic)
+}
+
+fn uniform_configured_source_style_v1(fragment: &RenderTextFragmentV1) -> Option<(bool, bool)> {
+    if fragment.typography.is_empty() {
+        // An unstyled source fragment must not claim a source-exact Regular face.
+        return None;
+    }
+    let mut cursor = fragment.scalar_start;
+    let mut selected = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= cursor
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let style = configured_source_style_v1(run.bold, run.italic)?;
+        if selected.is_some_and(|previous| previous != style) {
+            return None;
+        }
+        selected = Some(style);
+        cursor = run.scalar_end;
+    }
+    (cursor == fragment.scalar_end)
+        .then_some(selected)
+        .flatten()
+}
+
+type ConfiguredSourceStyleKeyV1 = (String, bool, bool);
+
+fn configured_fonts_by_style_v1(
+    fonts: &[ReaderConfiguredFontResourceV1],
+) -> Result<HashMap<ConfiguredSourceStyleKeyV1, &ReaderConfiguredFontResourceV1>, String> {
+    let mut by_style = HashMap::with_capacity(fonts.len());
+    let mut resource_ids = HashSet::new();
+    for font in fonts {
+        let key = (font.normalized_source_family(), font.bold, font.italic);
+        if key.0.is_empty()
+            || font.resource_id.is_empty()
+            || font.face_index != 0
+            || !resource_ids.insert(font.resource_id.as_str())
+            || by_style.insert(key, font).is_some()
+        {
+            return Err(
+                "configured source font face/style identity is duplicated or invalid".to_owned(),
+            );
+        }
+    }
+    Ok(by_style)
+}
+
 pub fn from_viewer_geometry_with_fonts(
     document_id: String,
     source_hash: String,
@@ -954,10 +1012,7 @@ pub fn from_viewer_geometry_with_fonts(
     chaptera_desktop_fallback_font_resource::validate()
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
-    let configured_fonts_by_family = configured_fonts
-        .iter()
-        .map(|font| (font.normalized_source_family(), font))
-        .collect::<HashMap<_, _>>();
+    let configured_fonts_by_style = configured_fonts_by_style_v1(configured_fonts)?;
     let configured_font_ids = configured_fonts
         .iter()
         .map(|font| font.resource_id.as_str())
@@ -984,15 +1039,17 @@ pub fn from_viewer_geometry_with_fonts(
             &fallback_font,
             |fragment| {
                 let source_family = effective_source_font_family_v1(geometry, fragment)?;
-                let normalized = source_family.trim().to_lowercase();
-                configured_fonts_by_family
-                    .get(&normalized)
+                let (bold, italic) = uniform_configured_source_style_v1(fragment)?;
+                let key = (source_family.trim().to_lowercase(), bold, italic);
+                configured_fonts_by_style
+                    .get(&key)
                     .map(|font| font.explicit_resource())
             },
             |_, run| {
-                let normalized = run.source_font_name.trim().to_lowercase();
-                configured_fonts_by_family
-                    .get(&normalized)
+                let (bold, italic) = configured_source_style_v1(run.bold, run.italic)?;
+                let key = (run.source_font_name.trim().to_lowercase(), bold, italic);
+                configured_fonts_by_style
+                    .get(&key)
                     .map(|font| font.explicit_resource())
             },
         ) {
@@ -1007,9 +1064,14 @@ pub fn from_viewer_geometry_with_fonts(
             let Some(text) = node.text.as_ref() else {
                 continue;
             };
-            if let Some(source_family) = effective_source_font_family_v1(geometry, text) {
+            if let Some((source_family, (bold, italic))) =
+                effective_source_font_family_v1(geometry, text)
+                    .zip(uniform_configured_source_style_v1(text))
+            {
                 let normalized = source_family.trim().to_lowercase();
-                if !normalized.is_empty() && !configured_fonts_by_family.contains_key(&normalized) {
+                if !normalized.is_empty()
+                    && !configured_fonts_by_style.contains_key(&(normalized.clone(), bold, italic))
+                {
                     missing_configured_font_families.insert(normalized);
                 }
             } else if text.typography.is_empty() {
@@ -1019,8 +1081,18 @@ pub fn from_viewer_geometry_with_fonts(
                     let normalized = run.source_font_name.trim().to_lowercase();
                     if normalized.is_empty() {
                         source_font_family_unresolved = true;
-                    } else if !configured_fonts_by_family.contains_key(&normalized) {
-                        missing_configured_font_families.insert(normalized);
+                    } else if let Some((bold, italic)) =
+                        configured_source_style_v1(run.bold, run.italic)
+                    {
+                        if !configured_fonts_by_style.contains_key(&(
+                            normalized.clone(),
+                            bold,
+                            italic,
+                        )) {
+                            missing_configured_font_families.insert(normalized);
+                        }
+                    } else {
+                        source_font_family_unresolved = true;
                     }
                 }
             }
@@ -1929,11 +2001,75 @@ mod tests {
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
         MAX_INLINE_JPEG_RESOURCE_BYTES, ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1,
         ReaderPaintV1, ReaderRectV1, ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode,
-        bind_visible_paint, from_viewer_geometry, from_viewer_geometry_with_fonts,
-        inline_image_data_url, inline_image_resource_byte_limit,
-        insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
-        reader_image_resource, shared_text_font_resource, take_direct_render_text,
+        bind_visible_paint, configured_fonts_by_style_v1, configured_source_style_v1,
+        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
+        inline_image_resource_byte_limit, insert_inherited_master_nodes_before_page_locals,
+        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
+        take_direct_render_text,
     };
+
+    #[test]
+    fn configured_source_style_binding_is_exact_and_never_aliases_faces() {
+        let font = |id: &str, bold: bool, italic: bool| ReaderConfiguredFontResourceV1 {
+            source_family: " Example ".to_owned(),
+            bold,
+            italic,
+            resource_id: id.to_owned(),
+            expected_sha256: if bold { "b".repeat(64) } else { "a".repeat(64) },
+            face_index: 0,
+            mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+            bytes: vec![1],
+        };
+        let regular = font("regular-face", false, false);
+        let bold = font("bold-face", true, false);
+        let faces = [regular.clone(), bold.clone()];
+        let by_style =
+            configured_fonts_by_style_v1(&faces).expect("separate source styles must be admitted");
+        assert_eq!(
+            by_style
+                .get(&("example".to_owned(), false, false))
+                .unwrap()
+                .resource_id,
+            "regular-face"
+        );
+        assert_eq!(
+            by_style
+                .get(&("example".to_owned(), true, false))
+                .unwrap()
+                .resource_id,
+            "bold-face"
+        );
+        assert!(!by_style.contains_key(&("example".to_owned(), false, true)));
+        assert_eq!(
+            configured_source_style_v1(Some(true), Some(false)),
+            Some((true, false))
+        );
+        assert_eq!(configured_source_style_v1(Some(true), None), None);
+        assert_eq!(configured_source_style_v1(None, None), None);
+        assert_eq!(configured_source_style_v1(None, Some(false)), None);
+        assert_eq!(configured_source_style_v1(Some(false), None), None);
+        assert_eq!(
+            configured_source_style_v1(Some(false), Some(false)),
+            Some((false, false))
+        );
+        let untyped: chaptera_viewer_render_plan::RenderTextFragmentV1 =
+            serde_json::from_value(serde_json::json!({
+                "story_id": "15613e56-726e-5ae7-8c54-ec876c9bcfda",
+                "scalar_start": 0,
+                "scalar_end": 4,
+                "text": "Text",
+                "line_count": 1
+            }))
+            .expect("a legacy fragment without source typography is parseable");
+        assert_eq!(super::uniform_configured_source_style_v1(&untyped), None);
+        assert!(configured_fonts_by_style_v1(&[regular.clone(), regular]).is_err());
+        let mut aliased = bold;
+        aliased.resource_id = "regular-face".to_owned();
+        assert!(configured_fonts_by_style_v1(&[faces[0].clone(), aliased]).is_err());
+        let mut nonzero_face = faces[0].clone();
+        nonzero_face.face_index = 1;
+        assert!(configured_fonts_by_style_v1(&[nonzero_face]).is_err());
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ProbeImageInlineAdmission {
@@ -2451,6 +2587,8 @@ mod tests {
             );
             let configured = ReaderConfiguredFontResourceV1 {
                 source_family: "Arial".to_owned(),
+                bold: false,
+                italic: false,
                 resource_id: configured_resource_id.clone(),
                 expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
                     .to_owned(),
@@ -2623,6 +2761,8 @@ mod tests {
             == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3")
             .then(|| ReaderConfiguredFontResourceV1 {
                 source_family: "Arial".to_owned(),
+                bold: false,
+                italic: false,
                 resource_id: format!(
                     "chaptera.cloud.configured-font.{}.face0",
                     chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
