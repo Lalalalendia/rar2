@@ -42,7 +42,8 @@ class RescueBatchTests(unittest.TestCase):
         private = (self.output / "queue-private.json").read_text()
         public = (self.output / "summary.json").read_text()
         csv = (self.output / "entries.csv").read_text()
-        self.assertIn("nested/two.PUB", private)
+        self.assertIn(str(b.absolute()), [path for row in batch.load_queue(self.output)["entries"]
+                                          for path in row["paths"]])
         self.assertNotIn(str(self.sources), public)
         self.assertNotIn("one.pub", csv)
         self.assertNotIn("two.PUB", public)

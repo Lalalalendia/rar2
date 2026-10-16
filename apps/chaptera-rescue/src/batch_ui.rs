@@ -239,13 +239,16 @@ impl BatchUi {
                 Err(error) => error,
             };
         }
-        let controlled = self.control_receiver.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(v) => Some(v),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                Some(Err("Local control command disconnected".to_owned()))
-            }
-        });
+        let controlled = self
+            .control_receiver
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(v) => Some(v),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => {
+                    Some(Err("Local control command disconnected".to_owned()))
+                }
+            });
         if let Some(result) = controlled {
             self.control_receiver = None;
             if !matches!(result, Ok(0)) {
@@ -342,8 +345,14 @@ mod tests {
             .join("../..")
             .to_string_lossy()
             .to_string();
-        surface.output_path = "C:/rescue-output".to_owned();
-        surface.input_path = "C:/private-folder".to_owned();
+        surface.output_path = std::env::temp_dir()
+            .join("rescue-output")
+            .to_string_lossy()
+            .to_string();
+        surface.input_path = std::env::temp_dir()
+            .join("private-folder")
+            .to_string_lossy()
+            .to_string();
         let command = surface.command_for("scan").expect("local engine command");
         let args: Vec<String> = command
             .get_args()
