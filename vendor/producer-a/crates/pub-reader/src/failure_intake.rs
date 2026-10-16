@@ -312,7 +312,15 @@ fn classify_zip(bytes: &[u8]) -> FailureIntakeClassification {
             continue;
         }
 
-        let name_is_pub = member.name().to_ascii_lowercase().ends_with(".pub");
+        let name_is_pub = match member.name() {
+            Ok(name) => name.to_ascii_lowercase().ends_with(".pub"),
+            Err(_) => {
+                // The archive member could be Publisher, but its entry name
+                // could not be decoded. Do not classify it as NotPub.
+                ambiguous_candidate = true;
+                continue;
+            }
+        };
         let declared_size = member.size();
         if declared_size > MAX_ZIP_MEMBER_DECLARED_BYTES && !name_is_pub {
             continue;

@@ -567,7 +567,7 @@ fn is_declared_regular_sector(sector: u32) -> bool {
 
 fn directory_name(entry: &[u8]) -> Result<String> {
     let byte_len = read_u16(entry, 64)? as usize;
-    if !(2..=64).contains(&byte_len) || byte_len % 2 != 0 {
+    if !(2..=64).contains(&byte_len) || !byte_len.is_multiple_of(2) {
         anyhow::bail!("invalid CFB directory name length {byte_len}");
     }
     if entry.get(byte_len - 2..byte_len) != Some(&[0, 0][..]) {

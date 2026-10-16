@@ -271,15 +271,15 @@ pub fn validate_story_structure<ParagraphProperties, RunProperties>(
             });
         }
 
-        if let Some((previous_id, previous_range)) = previous {
-            if paragraph.range.start < previous_range.end {
-                errors.push(StoryStructureError::ParagraphOrderOrOverlap {
-                    previous_id: *previous_id,
-                    previous_range,
-                    current_id: paragraph.id,
-                    current_range: paragraph.range,
-                });
-            }
+        if let Some((previous_id, previous_range)) = previous
+            && paragraph.range.start < previous_range.end
+        {
+            errors.push(StoryStructureError::ParagraphOrderOrOverlap {
+                previous_id: *previous_id,
+                previous_range,
+                current_id: paragraph.id,
+                current_range: paragraph.range,
+            });
         }
 
         previous = Some((&paragraph.id, paragraph.range));

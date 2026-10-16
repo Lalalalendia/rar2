@@ -336,7 +336,7 @@ fn parse_blocks_in_span(
 }
 
 fn decode_utf16le_name(raw: &[u8]) -> Result<String, MatureColorSchemeReadError> {
-    if raw.len() % 2 != 0 {
+    if !raw.len().is_multiple_of(2) {
         return Err(MatureColorSchemeReadError::InvalidNameUtf16);
     }
     let mut units = raw
