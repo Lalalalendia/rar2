@@ -74,3 +74,16 @@ jobs:
                                 'first': 'extracted', 'second': 'reused',
                                 'tamper': 'failed_closed', 'source_unchanged': True}, sort_keys=True))
           PY
+
+  windows-lock:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify crash recovery, live lock contention and atomic CSV on Windows
+        shell: pwsh
+        run: |
+          python -m unittest tools.test_rescue_corpus_replay_v1.ReplayTests.test_abrupt_child_exit_does_not_block_resume tools.test_rescue_corpus_replay_v1.ReplayTests.test_output_lock_survives_prior_run_and_rejects_live_contention tools.test_rescue_corpus_replay_v1.ReplayTests.test_csv_write_is_atomic_when_serialization_fails -v
