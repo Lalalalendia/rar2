@@ -44,7 +44,7 @@ def main() -> int:
     assert (home / "_internal").is_dir(), "PyInstaller onedir runtime absent"
 
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PYTHON")}
-    env["PATH"] = str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32")
+    env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
     code, stdout = invoke(engine, ["--self-check"], env)
     assert code == 0, "frozen dependency import failed"
     check = json.loads(stdout)

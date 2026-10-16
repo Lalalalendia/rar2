@@ -25,17 +25,17 @@ class PortableEntrypointTests(unittest.TestCase):
         seen = []
         module = SimpleNamespace(__file__="frozen/batch.py", main=lambda: seen.append(sys.argv[:]) or 0)
         with patch.object(engine.importlib, "import_module", return_value=module) as loader:
-            self.assertEqual(engine.dispatch(["scan", "--output", "C:/out"]), 0)
+            self.assertEqual(engine.dispatch(["scan", "--output", "synthetic-output"]), 0)
         loader.assert_called_once_with(engine.BATCH)
-        self.assertEqual(seen[0][1:], ["scan", "--output", "C:/out"])
+        self.assertEqual(seen[0][1:], ["scan", "--output", "synthetic-output"])
 
     def test_child_modules_use_same_argument_contract(self):
         for name in sorted(engine.ALLOWED_MODULES):
             seen = []
             module = SimpleNamespace(__file__="frozen/module.py", main=lambda: seen.append(sys.argv[:]) or 0)
             with self.subTest(module=name), patch.object(engine.importlib, "import_module", return_value=module):
-                self.assertEqual(engine.dispatch(["-m", name, "input.pub", "--output", "C:/out"]), 0)
-                self.assertEqual(seen[0][1:], ["input.pub", "--output", "C:/out"])
+                self.assertEqual(engine.dispatch(["-m", name, "input.pub", "--output", "synthetic-output"]), 0)
+                self.assertEqual(seen[0][1:], ["input.pub", "--output", "synthetic-output"])
 
     def test_process_argv_restored_after_module_crash(self):
         old = sys.argv

@@ -427,7 +427,9 @@ mod tests {
             .to_string_lossy()
             .to_string();
         surface.python_path.clear();
-        let engine = std::env::temp_dir().join("rescuedir").join("rescue-engine.exe");
+        let engine = std::env::temp_dir()
+            .join("rescuedir")
+            .join("rescue-engine.exe");
         let command = surface
             .command_for_engine("scan", Some(&engine))
             .expect("bundled engine command");
