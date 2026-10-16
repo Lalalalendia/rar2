@@ -8,6 +8,7 @@ filesystem storage stands in for S3, and export remains out of scope.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import hashlib
@@ -274,7 +275,6 @@ def main() -> int:
     caddy_log = TARGET / "caddy.log"
     worker_log = TARGET / "worker.log"
     browser_log = TARGET / "browser.log"
-    story_browser_log = TARGET / "browser-story.log"
     cross_principal_browser_log = TARGET / "browser-cross-principal.log"
     restart_server_log = TARGET / "server-restart.log"
     restart_worker_log = TARGET / "worker-restart.log"
@@ -424,41 +424,191 @@ def main() -> int:
                 # existing OIDC session and live Product runtime, not a
                 # second authentication, storage or revision implementation.
                 if story_browser_script is not None:
-                    story_env = browser_env.copy()
-                    story_env.update(
-                        {
-                            "CHAPTERA_STORY_PUB_FIXTURE": str(story_fixture),
-                            "CHAPTERA_STORY_PUB_SHA256": args.story_fixture_sha256,
-                            "CHAPTERA_STORY_RECEIPT": str(
-                                (TARGET / "story-receipt.json").resolve()
-                            ),
-                        }
-                    )
-                    story_browser = subprocess.run(
-                        ["node", str(story_browser_script)],
-                        cwd=ROOT,
-                        env=story_env,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    story_browser_log.write_text(
-                        story_browser.stdout + "\n--- stderr ---\n" + story_browser.stderr,
+                    story_engines = [
+                        item.strip()
+                        for item in os.environ.get(
+                            "CHAPTERA_STORY_BROWSER_ENGINES", "chromium"
+                        ).split(",")
+                        if item.strip()
+                    ]
+                    if (
+                        not story_engines
+                        or len(story_engines) != len(set(story_engines))
+                        or any(
+                            item not in {"chromium", "webkit"}
+                            for item in story_engines
+                        )
+                    ):
+                        raise RuntimeError(
+                            "Story browser engines must be unique chromium/webkit values"
+                        )
+                    story_receipts = []
+                    for story_engine in story_engines:
+                        story_receipt_path = (
+                            TARGET / f"story-receipt-{story_engine}.json"
+                        ).resolve()
+                        engine_story_log = TARGET / f"browser-story-{story_engine}.log"
+                        story_env = browser_env.copy()
+                        story_env.update(
+                            {
+                                "CHAPTERA_STORY_PUB_FIXTURE": str(story_fixture),
+                                "CHAPTERA_STORY_PUB_SHA256": args.story_fixture_sha256,
+                                "CHAPTERA_STORY_RECEIPT": str(story_receipt_path),
+                                "CHAPTERA_STORY_BROWSER": story_engine,
+                            }
+                        )
+                        story_browser = subprocess.run(
+                            ["node", str(story_browser_script)],
+                            cwd=ROOT,
+                            env=story_env,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        engine_story_log.write_text(
+                            story_browser.stdout
+                            + "\n--- stderr ---\n"
+                            + story_browser.stderr,
+                            encoding="utf-8",
+                        )
+                        if worker.poll() is not None:
+                            raise RuntimeError(
+                                "real SourceValidation worker exited during Story "
+                                f"acceptance: {worker.returncode}"
+                            )
+                        if story_browser.returncode != 0:
+                            raise RuntimeError(
+                                "real Product Story browser acceptance failed for "
+                                f"{story_engine}; see {engine_story_log}"
+                            )
+                        if not story_receipt_path.is_file():
+                            raise RuntimeError(
+                                "real Product Story browser emitted no bounded receipt "
+                                f"for {story_engine}"
+                            )
+                        story_receipt = json.loads(
+                            story_receipt_path.read_text(encoding="utf-8")
+                        )
+                        if (
+                            story_receipt.get("schema")
+                            != "chaptera.real-product-story-browser-acceptance.v1"
+                            or story_receipt.get("browser_engine") != story_engine
+                            or not story_receipt.get("browser_version")
+                            or story_receipt.get("source_immutable_sha256")
+                            != args.story_fixture_sha256
+                            or not story_receipt.get("one_authorized_story_commit")
+                            or not story_receipt.get("browser_reload_preserves_story")
+                            or not story_receipt.get("anonymous_read_denied")
+                            or not story_receipt.get("selected_first_scalar_range")
+                            or not story_receipt.get("export_job_claim")
+                            or not story_receipt.get("export_csrf_negative_confirmed")
+                            or not story_receipt.get(
+                                "export_forged_artifact_negative_confirmed"
+                            )
+                            or not story_receipt.get("export_anonymous_denied")
+                            or not story_receipt.get("story_undo_redo_claim")
+                            or not story_receipt.get("selection_reconciliation_claim")
+                            or story_receipt.get("authorized_history_call_count")
+                            != 3
+                            or not story_receipt.get("redo_unavailable_confirmed")
+                            or (
+                                story_engine == "chromium"
+                                and (
+                                    story_receipt.get("input_path")
+                                    != "chromium_ime_composition"
+                                    or not story_receipt.get(
+                                        "composition_events_confirmed"
+                                    )
+                                    or not story_receipt.get(
+                                        "composition_apply_fenced"
+                                    )
+                                    or not story_receipt.get(
+                                        "physical_clipboard_paste_confirmed"
+                                    )
+                                    or story_receipt.get(
+                                        "authorized_story_commit_count"
+                                    )
+                                    != 2
+                                )
+                            )
+                            or (
+                                story_engine == "webkit"
+                                and (
+                                    story_receipt.get("input_path")
+                                    != "webkit_caret_range_keyboard"
+                                    or not story_receipt.get(
+                                        "caret_range_input_confirmed"
+                                    )
+                                )
+                            )
+                        ):
+                            raise RuntimeError(
+                                f"invalid exact {story_engine} Story acceptance receipt"
+                            )
+                        story_receipts.append(story_receipt)
+
+                    aggregate_story_receipt = {
+                        "schema": (
+                            "chaptera.real-product-story-two-engine-acceptance.v1"
+                        ),
+                        "head_sha": os.environ.get("CHAPTERA_HEAD_SHA", "unknown"),
+                        "source_immutable_sha256": args.story_fixture_sha256,
+                        "browser_engines": [
+                            {
+                                "engine": receipt["browser_engine"],
+                                "version": receipt["browser_version"],
+                                "document_id": receipt["document_id"],
+                                "original_revision_id": receipt[
+                                    "original_revision_id"
+                                ],
+                                "committed_revision_id": receipt[
+                                    "committed_revision_id"
+                                ],
+                                "input_path": receipt["input_path"],
+                            }
+                            for receipt in story_receipts
+                        ],
+                        "two_engine_claim": set(story_engines)
+                        == {"chromium", "webkit"},
+                        "two_engine_caret_ime_range_claim": (
+                            set(story_engines) == {"chromium", "webkit"}
+                            and any(
+                                receipt.get("composition_events_confirmed")
+                                and receipt.get("composition_apply_fenced")
+                                for receipt in story_receipts
+                                if receipt.get("browser_engine") == "chromium"
+                            )
+                            and any(
+                                receipt.get("caret_range_input_confirmed")
+                                for receipt in story_receipts
+                                if receipt.get("browser_engine") == "webkit"
+                            )
+                        ),
+                        "browser_layout_is_canonical": False,
+                        "authoritative_relayout_overset_verified": False,
+                        "story_undo_redo_claim": all(
+                            receipt.get("story_undo_redo_claim")
+                            for receipt in story_receipts
+                        ),
+                        "selection_reconciliation_claim": all(
+                            receipt.get("selection_reconciliation_claim")
+                            for receipt in story_receipts
+                        ),
+                        "physical_clipboard_paste_claim": any(
+                            receipt.get("physical_clipboard_paste_confirmed")
+                            for receipt in story_receipts
+                            if receipt.get("browser_engine") == "chromium"
+                        ),
+                        "export_job_claim": all(
+                            receipt.get("export_job_claim")
+                            for receipt in story_receipts
+                        ),
+                        "source_bytes_in_receipt": False,
+                    }
+                    (TARGET / "story-receipt.json").write_text(
+                        json.dumps(aggregate_story_receipt, indent=2) + "\n",
                         encoding="utf-8",
                     )
-                    if worker.poll() is not None:
-                        raise RuntimeError(
-                            f"real SourceValidation worker exited during Story acceptance: {worker.returncode}"
-                        )
-                    if story_browser.returncode != 0:
-                        raise RuntimeError(
-                            "real Product Story browser acceptance failed; "
-                            f"see {story_browser_log}"
-                        )
-                    if not (TARGET / "story-receipt.json").is_file():
-                        raise RuntimeError(
-                            "real Product Story browser emitted no bounded receipt"
-                        )
 
                 # Same issuer/JWKS, different OIDC subject, fresh browser context.
                 # This proves guessed durable DocumentId does not grant a second

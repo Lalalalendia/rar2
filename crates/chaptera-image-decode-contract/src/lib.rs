@@ -467,6 +467,74 @@ fn jpeg_coding(process: CodingProcess) -> &'static str {
     }
 }
 
+/// SafePreview is allowed to approximate *explicit* Adobe CMYK (transform 0).
+/// The Adobe header is only a narrow discriminator, never a second JPEG decoder.
+/// Unknown/YCCK colour variants still fail closed.
+fn has_explicit_adobe_cmyk_transform0(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return false;
+    }
+    let mut offset = 2_usize;
+    let mut found = false;
+    // Bounded metadata walk: stop before any entropy-coded scan data.
+    for _ in 0..256 {
+        if bytes.get(offset) != Some(&0xff) {
+            return false;
+        }
+        while bytes.get(offset) == Some(&0xff) {
+            offset += 1;
+        }
+        let Some(&marker) = bytes.get(offset) else {
+            return false;
+        };
+        offset += 1;
+        if marker == 0xda || marker == 0xd9 {
+            return found;
+        }
+        if matches!(marker, 0x00 | 0x01 | 0xd0..=0xd8) {
+            return false;
+        }
+        let Some(length_bytes) = bytes.get(offset..offset.saturating_add(2)) else {
+            return false;
+        };
+        let length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        let Some(end) = offset.checked_add(length) else {
+            return false;
+        };
+        if length < 2 || end > bytes.len() {
+            return false;
+        }
+        let payload = &bytes[offset + 2..end];
+        if marker == 0xee && payload.starts_with(b"Adobe") {
+            if payload.len() < 12 || payload[11] != 0 {
+                return false;
+            }
+            found = true;
+        }
+        offset = end;
+    }
+    false
+}
+
+/// The pinned jpeg-decoder returns *uninverted ink components* for Adobe CMYK.
+/// This bounded in-place conversion deliberately does NOT apply the ICC profile.
+/// Its result is a visibly useful, explicitly partial-fidelity RGB preview.
+fn adobe_cmyk_to_unprofiled_rgb_in_place(samples: &mut Vec<u8>) {
+    let pixels = samples.len() / 4;
+    for pixel in 0..pixels {
+        let input = pixel * 4;
+        let c = u16::from(samples[input]);
+        let m = u16::from(samples[input + 1]);
+        let y = u16::from(samples[input + 2]);
+        let k_inv = 255_u16 - u16::from(samples[input + 3]);
+        let output = pixel * 3;
+        samples[output] = (((255 - c) * k_inv + 127) / 255) as u8;
+        samples[output + 1] = (((255 - m) * k_inv + 127) / 255) as u8;
+        samples[output + 2] = (((255 - y) * k_inv + 127) / 255) as u8;
+    }
+    samples.truncate(pixels * 3);
+}
+
 fn decode_jpeg(
     bytes: &[u8],
     resource_sha256: &str,
@@ -495,6 +563,8 @@ fn decode_jpeg(
     let height = u32::from(info.height);
     validate_limits(bytes.len(), width, height, 0, limits)?;
 
+    let adobe_cmyk =
+        info.pixel_format == PixelFormat::CMYK32 && has_explicit_adobe_cmyk_transform0(bytes);
     let (source_model, decoded_model, source_precision, decoded_precision, alpha_present) =
         match info.pixel_format {
             PixelFormat::L8 => ("jpeg_grayscale", "gray", 8, 8, false),
@@ -505,10 +575,11 @@ fn decode_jpeg(
                     "16-bit JPEG sample precision is not admitted by V1",
                 ));
             }
+            PixelFormat::CMYK32 if adobe_cmyk => ("jpeg_adobe_cmyk", "rgb", 8, 8, false),
             PixelFormat::CMYK32 => {
                 return Err(fail(
                     "cmyk_or_ycck_unsupported",
-                    "CMYK/YCCK JPEG is detected but no V1 display transform is admitted",
+                    "CMYK/YCCK JPEG without explicit Adobe transform 0 remains unsupported",
                 ));
             }
         };
@@ -519,13 +590,28 @@ fn decode_jpeg(
         ));
     }
 
-    let samples = decoder.decode().map_err(|e| {
+    let mut samples = decoder.decode().map_err(|e| {
         fail(
             "jpeg_decode_error",
             fixed_jpeg_failure_detail("jpeg_pixels", &e),
         )
     })?;
     validate_limits(bytes.len(), width, height, samples.len(), limits)?;
+    let color_disposition = if adobe_cmyk {
+        let expected_cmyk_bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or_else(|| fail("allocation_overflow", "CMYK sample size overflow"))?;
+        if samples.len() != expected_cmyk_bytes {
+            return Err(fail("jpeg_decode_error", "jpeg_pixels_internal"));
+        }
+        adobe_cmyk_to_unprofiled_rgb_in_place(&mut samples);
+        validate_limits(bytes.len(), width, height, samples.len(), limits)?;
+        format!("{color_disposition_ref};adobe-cmyk0-unprofiled-rgb-v1")
+    } else {
+        color_disposition_ref.to_owned()
+    };
     let exif_orientation = match decoder.exif_data() {
         Some(tiff) => parse_exif_orientation(tiff)?,
         None => None,
@@ -557,14 +643,14 @@ fn decode_jpeg(
         frame_disposition: frame_disposition.clone(),
         coding_process: jpeg_coding(info.coding_process).into(),
         decoder_id: policy.decoder_id.clone(),
-        color_disposition_ref: color_disposition_ref.into(),
+        color_disposition_ref: color_disposition.clone(),
         decoded_byte_count: samples.len(),
         sample_digest_sha256: sha256_hex(&samples),
         cache_identity_sha256: cache_identity(
             resource_sha256,
             "image/jpeg",
             policy,
-            color_disposition_ref,
+            &color_disposition,
             &frame_disposition,
         ),
         samples,
@@ -831,17 +917,58 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_jpeg_is_detected_not_silently_treated_as_rgb() {
+    fn explicit_adobe_cmyk_jpeg_is_classified_as_unprofiled_rgb_preview() {
         let cmyk = jpeg_fixture(
             JpegColorType::Cmyk,
             &[0, 255, 255, 0, 255, 0, 255, 0, 255, 255, 0, 0, 0, 0, 0, 0],
             false,
             None,
         );
+        let decoded = decode(&cmyk, "image/jpeg");
+        assert_eq!(decoded.source_sample_model, "jpeg_adobe_cmyk");
+        assert_eq!(decoded.decoded_sample_model, "rgb");
+        assert_eq!(decoded.decoded_byte_count, 12);
+        assert!(decoded.color_disposition_ref.contains("unprofiled-rgb-v1"));
+    }
+
+    #[test]
+    fn explicit_adobe_cmyk0_has_bounded_unprofiled_rgb_preview() {
+        let mut pixels = vec![
+            0, 255, 255, 0, // cyan=0 magenta=255 yellow=255 -> red
+            0, 0, 0, 0, // white
+            0, 0, 0, 255, // black
+            255, 255, 255, 0, // black
+        ];
+        adobe_cmyk_to_unprofiled_rgb_in_place(&mut pixels);
+        assert_eq!(pixels, vec![255, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0]);
+
+        let original = jpeg_fixture(
+            JpegColorType::Cmyk,
+            &[0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0],
+            false,
+            None,
+        );
+        let mut tagged = vec![0xff, 0xd8, 0xff, 0xee, 0, 14];
+        tagged.extend_from_slice(b"Adobe");
+        tagged.extend_from_slice(&[0, 100, 128, 0, 0, 0, 0]);
+        tagged.extend_from_slice(&original[2..]);
+        assert!(has_explicit_adobe_cmyk_transform0(&tagged));
+        let first = decode(&tagged, "image/jpeg");
+        let second = decode(&tagged, "image/jpeg");
+        assert_eq!(first.source_sample_model, "jpeg_adobe_cmyk");
+        assert_eq!(first.decoded_sample_model, "rgb");
+        assert_eq!(first.decoded_byte_count, 12);
+        assert_eq!(first.sample_digest_sha256, second.sample_digest_sha256);
+        assert!(first.color_disposition_ref.contains("unprofiled-rgb-v1"));
+
+        let mut ycck = tagged.clone();
+        // Last byte in Adobe APP14 is the transform selector (0 = CMYK, 2 = YCCK).
+        ycck[17] = 2;
+        assert!(!has_explicit_adobe_cmyk_transform0(&ycck));
         let err = decode_image_v1(
-            &cmyk,
+            &ycck,
             "image/jpeg",
-            &hash(&cmyk),
+            &hash(&ycck),
             "color:test",
             &DecodePolicyV1::reference(),
             &DecodeLimitsV1::default(),

@@ -30,7 +30,8 @@ pub use paragraph_alignment::{
     add_full_story_paragraph_alignment_to_idml, add_paragraph_scoped_alignment_to_idml,
 };
 pub use semantic::{
-    IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlSemanticError, IdmlWireProfile,
+    IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlAuthoredShapeError,
+    IdmlSemanticError, IdmlWireProfile, add_authored_rectangles_to_idml,
     project_resolved_graph_to_idml, project_resolved_graph_to_idml_with_tables,
 };
 pub use table::{IdmlSimpleTable, IdmlTableCell, IdmlTableError};

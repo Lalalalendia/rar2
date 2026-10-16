@@ -37,6 +37,12 @@ const TEMPORARY_EDIT_BROWSER_SESSION: &[u8] =
 const TEMPORARY_PREVIEW_HTML: &[u8] = include_bytes!("../../web/temporary-editor-preview.html");
 const TEMPORARY_PREVIEW_ENTRY: &[u8] = include_bytes!("../../web/temporary-editor-preview.mjs");
 const TEMPORARY_PREVIEW_CSS: &[u8] = include_bytes!("../../web/temporary-editor-preview.css");
+const TEMPORARY_EDIT_MOVE_CLIENT: &[u8] =
+    include_bytes!("../../web/temporary-edit-move-client-v1.mjs");
+// This module is the SAME UI-neutral ResizeTransaction used by the desktop
+// and protocol tests, not a second browser-side geometry implementation.
+const TEMPORARY_RESIZE_GESTURE: &[u8] =
+    include_bytes!("../../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs");
 const RICH_SHELL: &[u8] = include_bytes!("../../web/rich-reader-editor-shell-v1.mjs");
 const INTERACTION_SCENE: &[u8] = include_bytes!("../../web/reader-scene-editor-interaction-v1.mjs");
 const INTERACTION: &[u8] = include_bytes!("../../web/interaction-v1.mjs");
@@ -53,7 +59,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 28] = [
+const ASSETS: [EmbeddedAsset; 30] = [
     EmbeddedAsset {
         name: "product-editor.html",
         content_type: "text/html; charset=utf-8",
@@ -190,9 +196,19 @@ const ASSETS: [EmbeddedAsset; 28] = [
         bytes: TEMPORARY_PREVIEW_CSS,
     },
     EmbeddedAsset {
+        name: "temporary-edit-move-client-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_EDIT_MOVE_CLIENT,
+    },
+    EmbeddedAsset {
         name: "story-line-endings-v1.mjs",
         content_type: "text/javascript; charset=utf-8",
         bytes: STORY_LINE_ENDINGS,
+    },
+    EmbeddedAsset {
+        name: "resize-gesture-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: TEMPORARY_RESIZE_GESTURE,
     },
 ];
 
@@ -250,6 +266,10 @@ where
             "/editor/chaptera-product-editor-service-v1.mjs",
             get(product_service),
         )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
         .route("/editor/rich-reader-editor-shell-v1.mjs", get(rich_shell))
         .route(
             "/editor/reader-scene-editor-interaction-v1.mjs",
@@ -284,6 +304,22 @@ where
         .route(
             "/editor/temporary-editor-preview.css",
             get(temporary_preview_css),
+        )
+        .route(
+            "/editor/temporary-edit-move-client-v1.mjs",
+            get(temporary_edit_move_client),
+        )
+        // Existing source-neutral text helpers, not Product AuthN routes.
+        .route("/editor/text-protocol-v1.mjs", get(text_protocol))
+        .route("/editor/story-line-endings-v1.mjs", get(story_line_endings))
+        .route("/editor/interaction-v1.mjs", get(interaction))
+        .route(
+            "/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs",
+            get(temporary_resize_gesture),
+        )
+        .route(
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+            get(interaction_scene),
         )
         .route("/cloud-reader/render-v1.mjs", get(reader_render))
 }
@@ -351,7 +387,7 @@ async fn text_protocol() -> Response {
     asset_response(&ASSETS[22])
 }
 async fn story_line_endings() -> Response {
-    asset_response(&ASSETS[27])
+    asset_response(&ASSETS[28])
 }
 async fn temporary_edit_browser_session() -> Response {
     asset_response(&ASSETS[23])
@@ -364,6 +400,12 @@ async fn temporary_preview_entry() -> Response {
 }
 async fn temporary_preview_css() -> Response {
     asset_response(&ASSETS[26])
+}
+async fn temporary_edit_move_client() -> Response {
+    asset_response(&ASSETS[27])
+}
+async fn temporary_resize_gesture() -> Response {
+    asset_response(&ASSETS[29])
 }
 async fn product_service() -> Response {
     asset_response(&ASSETS[14])
@@ -470,6 +512,29 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), READER_ADAPTER);
+    }
+
+    #[tokio::test]
+    async fn guest_resize_gesture_is_the_canonical_embedded_protocol_module() {
+        let module = std::str::from_utf8(TEMPORARY_PREVIEW_ENTRY).unwrap();
+        assert!(module.contains("../../packages/protocol/editor-resize/v1/resize-gesture-v1.mjs"));
+        let response = temporary_preview_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri("/packages/protocol/editor-resize/v1/resize-gesture-v1.mjs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TEMPORARY_RESIZE_GESTURE);
+        assert!(
+            std::str::from_utf8(TEMPORARY_RESIZE_GESTURE)
+                .unwrap()
+                .contains("export class ResizeTransactionV1")
+        );
     }
 
     #[tokio::test]
@@ -587,7 +652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn temporary_preview_entry_is_same_origin_csp_and_explicitly_read_only() {
+    async fn temporary_preview_entry_is_same_origin_csp_and_source_bound() {
         let routes = router::<()>();
         for (uri, content_type, bytes) in [
             (
@@ -627,7 +692,7 @@ mod tests {
         }
 
         let html = std::str::from_utf8(TEMPORARY_PREVIEW_HTML).unwrap();
-        assert!(html.contains("Пока только просмотр"));
+        assert!(html.contains("Просмотр и PDF без правки"));
         assert!(html.contains("/editor/temporary-editor-preview.mjs"));
         assert!(!html.contains("x-chaptera-principal-id"));
         assert!(!html.contains("temporary_access_token="));
@@ -654,6 +719,11 @@ mod tests {
             "/editor/temporary-editor-preview.mjs",
             "/editor/temporary-editor-preview.css",
             "/cloud-reader/render-v1.mjs",
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
         ] {
             let response = routes
                 .clone()
@@ -673,6 +743,42 @@ mod tests {
             "/editor/doc/10000000-0000-7000-8000-000000000001",
             "/editor/product-editor-entry-v1.mjs",
             "/v1/documents/tempedit:0123456789abcdef0123456789abcdef/commit",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_move_module_is_only_static_and_never_mounts_product_routes() {
+        let routes = temporary_preview_router::<()>();
+        for path in [
+            "/editor/temporary-edit-move-client-v1.mjs",
+            "/editor/text-protocol-v1.mjs",
+            "/editor/story-line-endings-v1.mjs",
+            "/editor/interaction-v1.mjs",
+            "/editor/reader-scene-editor-interaction-v1.mjs",
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/javascript; charset=utf-8"
+            );
+        }
+        for path in [
+            "/editor/chaptera-product-editor-service-v1.mjs",
+            "/editor/rich-reader-editor-shell-v1.mjs",
+            "/editor/reader-scene-editor-adapter-v1.mjs",
+            "/editor/product-editor-entry-v1.mjs",
         ] {
             let response = routes
                 .clone()

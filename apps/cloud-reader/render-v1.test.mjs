@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  indexReaderScenePageNodes,
   decorativeBorderPlacementPaintPlan,
   imageContentRotationGeometry,
   imagePaintGeometry,
@@ -749,4 +750,75 @@ test("existing OfficeArt line and dash-gel diagonals are not flattened", () => {
       attrs: { x1: 100, y1: 200, x2: 400, y2: 600 }
     });
   }
+});
+
+test("page-node index preserves page-major legacy ordinals with interleaved input nodes", () => {
+  const pages = [
+    { page_id: "p2", order: 2, width_emu: 100, height_emu: 100 },
+    { page_id: "p1", order: 1, width_emu: 100, height_emu: 100 }
+  ];
+  const nodes = [
+    { node_id: "n2", page_id: "p2" },
+    { node_id: "n1", page_id: "p1" },
+    { node_id: "n3", page_id: "p1" },
+    { node_id: "n4", page_id: "p2" }
+  ];
+  const index = indexReaderScenePageNodes(pages, nodes);
+  assert.deepEqual(index.map(row => ({
+    page_id: row.pageModel.page_id,
+    nodes: row.nodes.map(node => node.node_id),
+    firstPaintIndex: row.firstPaintIndex
+  })), [
+    { page_id: "p1", nodes: ["n1", "n3"], firstPaintIndex: 0 },
+    { page_id: "p2", nodes: ["n2", "n4"], firstPaintIndex: 2 }
+  ]);
+  assert.deepEqual(nodes.map(node => node.node_id), ["n2", "n1", "n3", "n4"]);
+});
+
+test("page-node index does not shift ordinals for skipped pages or zero-bounds nodes", () => {
+  const pages = [
+    { page_id: "invalid", order: 0, width_emu: 100, height_emu: 0 },
+    { page_id: "empty", order: 1, width_emu: 100, height_emu: 100 },
+    { page_id: "p1", order: 2, width_emu: 100, height_emu: 100 },
+    { page_id: "p2", order: 3, width_emu: 100, height_emu: 100 }
+  ];
+  const nodes = [
+    { node_id: "invalid", page_id: "invalid" },
+    { node_id: "zero-bounds", page_id: "p1", bounds: { x: 0, y: 0, width: 0, height: 10 } },
+    { node_id: "drawable", page_id: "p2" },
+    { node_id: "unknown-owner", page_id: "absent" }
+  ];
+  const index = indexReaderScenePageNodes(pages, nodes);
+  assert.deepEqual(index.map(x => x.nodes.length), [0, 0, 1, 1]);
+  assert.deepEqual(index.map(x => x.firstPaintIndex), [0, 0, 0, 1]);
+  assert.deepEqual(index.map(x => x.validDimensions), [false, true, true, true]);
+});
+
+test("page-node index is equivalent to the old traversal for mixed page orders", () => {
+  const pages = Array.from({ length: 40 }, (_, i) => ({
+    page_id: "page-" + i, order: 39 - i, width_emu: 800,
+    height_emu: i % 9 === 0 ? 0 : 1000
+  }));
+  const nodes = Array.from({ length: 1000 }, (_, i) => ({
+    node_id: "n" + i,
+    page_id: i % 17 === 0 ? "absent" : "page-" + (i * 13 % 40)
+  }));
+  const legacy = [];
+  let ordinal = 0;
+  for (const page of [...pages].sort((a,b) => a.order - b.order)) {
+    if (page.width_emu <= 0 || page.height_emu <= 0) continue;
+    for (const node of nodes) {
+      if (node.page_id !== page.page_id) continue;
+      legacy.push([page.page_id, node.node_id, ordinal++]);
+    }
+  }
+  const indexed = indexReaderScenePageNodes(pages, nodes).flatMap(row =>
+    row.nodes.map((node, i) => [row.pageModel.page_id, node.node_id, row.firstPaintIndex + i]));
+  assert.deepEqual(indexed, legacy);
+});
+
+test("page-node index validates dimensions as legacy renderer does", () => {
+  assert.throws(() => indexReaderScenePageNodes([
+    { page_id: "p", order: 0, width_emu: NaN, height_emu: 100 }
+  ], []), /page.width_emu/);
 });

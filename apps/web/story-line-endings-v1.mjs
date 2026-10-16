@@ -38,6 +38,90 @@ export function restoreStoryTextFromTextarea(value, sourceProfile) {
   return value.replace(/\n/g, newline) + (sourceProfile.terminal_cr ? "\r" : "");
 }
 
+function requireTextareaSelection(value, startUtf16, endUtf16, direction) {
+  if (!Number.isInteger(startUtf16) || !Number.isInteger(endUtf16) ||
+      startUtf16 < 0 || endUtf16 < startUtf16 || endUtf16 > value.length) {
+    throw new Error("textarea selection must be an ordered in-bounds UTF-16 range");
+  }
+  if (!["forward", "backward", "none"].includes(direction)) {
+    throw new Error("textarea selection direction is invalid");
+  }
+  for (const offset of [startUtf16, endUtf16]) {
+    const left = value.charCodeAt(offset - 1);
+    const right = value.charCodeAt(offset);
+    if (offset > 0 && offset < value.length &&
+        left >= 0xd800 && left <= 0xdbff &&
+        right >= 0xdc00 && right <= 0xdfff) {
+      throw new Error("textarea selection cannot split a Unicode surrogate pair");
+    }
+  }
+}
+
+function canonicalPrefixScalarLength(value, sourceProfile, utf16Offset) {
+  const prefix = value.slice(0, utf16Offset);
+  const restoredPrefix = sourceProfile.line_ending_kind === "crlf"
+    ? prefix.replace(/\n/g, "\r\n")
+    : sourceProfile.line_ending_kind === "cr"
+      ? prefix.replace(/\n/g, "\r")
+      : prefix;
+  return Array.from(restoredPrefix).length;
+}
+
+/**
+ * Capture a live textarea selection as canonical Publisher Story scalar
+ * positions. The separator profile comes only from the current canonical
+ * Story; browser UTF-16 offsets and normalized LF are never persisted as
+ * revision authority.
+ */
+export function canonicalStorySelectionFromTextarea(
+  canonicalStory, textareaValue, startUtf16, endUtf16, direction = "none",
+) {
+  const sourceProfile = prepareStoryTextForTextarea(canonicalStory);
+  requireTextareaSelection(textareaValue, startUtf16, endUtf16, direction);
+  // This also rejects new/mixed paragraph separators under the bounded writer.
+  restoreStoryTextFromTextarea(textareaValue, sourceProfile);
+  return {
+    start_scalar: canonicalPrefixScalarLength(textareaValue, sourceProfile, startUtf16),
+    end_scalar: canonicalPrefixScalarLength(textareaValue, sourceProfile, endUtf16),
+    direction,
+  };
+}
+
+/**
+ * Restore a canonical scalar selection into the confirmed Story's textarea
+ * projection. A scalar position inside a CRLF pair is not representable in a
+ * browser textarea and therefore fails closed.
+ */
+export function textareaSelectionFromCanonicalStory(
+  canonicalStory, startScalar, endScalar, direction = "none",
+) {
+  const profile = prepareStoryTextForTextarea(canonicalStory);
+  if (!Number.isInteger(startScalar) || !Number.isInteger(endScalar) ||
+      startScalar < 0 || endScalar < startScalar) {
+    throw new Error("canonical selection must be an ordered non-negative scalar range");
+  }
+  if (!["forward", "backward", "none"].includes(direction)) {
+    throw new Error("canonical selection direction is invalid");
+  }
+  const wanted = new Set([startScalar, endScalar]);
+  const offsets = new Map([[0, 0]]);
+  let scalar = 0;
+  let utf16 = 0;
+  for (const character of profile.value) {
+    scalar += character === "\n" && profile.line_ending_kind === "crlf" ? 2 : 1;
+    utf16 += character.length;
+    if (wanted.has(scalar)) offsets.set(scalar, utf16);
+  }
+  if (!offsets.has(startScalar) || !offsets.has(endScalar)) {
+    throw new Error("canonical selection is outside the visible Story or splits CRLF");
+  }
+  return {
+    start_utf16: offsets.get(startScalar),
+    end_utf16: offsets.get(endScalar),
+    direction,
+  };
+}
+
 
 /**
  * Convert exact, unmodified textarea UTF-16 selection offsets to canonical

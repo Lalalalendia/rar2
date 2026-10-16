@@ -91,7 +91,21 @@ const fixtures = manifestPath
 const acceptedScenePath = process.env.READER_ACCEPTED_SCENE_JSON
   ? resolve(process.env.READER_ACCEPTED_SCENE_JSON)
   : null;
-if (acceptedScenePath) {
+// Never confuse a real accepted R1 temporary Editor scene with Guest R0.
+const acceptedEditorScenePath = process.env.READER_ACCEPTED_EDITOR_SCENE_JSON
+  ? resolve(process.env.READER_ACCEPTED_EDITOR_SCENE_JSON)
+  : null;
+assert.ok(!(acceptedScenePath && acceptedEditorScenePath),
+  "Guest and Editor scene modes are mutually exclusive");
+const acceptedAnyScenePath = acceptedScenePath ?? acceptedEditorScenePath;
+// Private line geometry for an exact accepted R1 only. Never ship hashes or private boxes.
+const ephemeralTextGeometryPath = process.env.READER_EPHEMERAL_TEXT_GEOMETRY_JSON
+  ? resolve(process.env.READER_EPHEMERAL_TEXT_GEOMETRY_JSON) : null;
+assert.ok(!ephemeralTextGeometryPath || acceptedEditorScenePath,
+  "text geometry witness requires a real accepted Editor R1");
+const sceneOrigin = acceptedEditorScenePath ? "accepted_https_temp_editor_service"
+  : acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct";
+if (acceptedAnyScenePath) {
   assert.equal(fixtures.length, 1, "live accepted-scene proof must contain exactly one source");
 }
 // Optional physical 001/023 gate: require every host-admitted preview to paint
@@ -100,7 +114,7 @@ const requiredHostImageCount = process.env.READER_REQUIRED_PAINTED_HOST_IMAGES
   ? Number(process.env.READER_REQUIRED_PAINTED_HOST_IMAGES)
   : null;
 if (requiredHostImageCount !== null) {
-  assert.ok(acceptedScenePath, "host image paint proof requires a real host-accepted Scene");
+  assert.ok(acceptedAnyScenePath, "host image paint proof requires a real host-accepted Scene");
   assert.ok(Number.isSafeInteger(requiredHostImageCount) && requiredHostImageCount > 0 && requiredHostImageCount <= 96,
     "host image paint count must be bounded and positive");
 }
@@ -232,13 +246,26 @@ try {
     let receiptBytes;
     let receipt;
     let isolation;
-    if (acceptedScenePath) {
-      const accepted = JSON.parse(await readFile(acceptedScenePath, "utf8"));
-      assert.equal(accepted.protocol_version, "chaptera.live-accepted-guest-scene.v1");
+    if (acceptedAnyScenePath) {
+      const accepted = JSON.parse(await readFile(acceptedAnyScenePath, "utf8"));
+      if (acceptedEditorScenePath) {
+        assert.equal(accepted.protocol_version, "chaptera.live-accepted-temp-editor-scene.v1");
+        assert.match(accepted.session_id, /^tempedit:[0-9a-f]{32}$/);
+        assert.equal(accepted.isolated_editor_scene_count, 1,
+          "SBDC R1 requires one genuine isolated current Editor projection");
+        assert.equal(accepted.revision_cursor, 1, "SBDC must be exactly one accepted revision");
+        assert.match(accepted.editor_revision_id, /^sha256:[0-9a-f]{64}$/);
+        assert.equal(accepted.scene?.revision_id, accepted.editor_revision_id);
+        assert.notEqual(accepted.editor_revision_id, accepted.baseline_revision_id,
+          "edited scene cannot be the immutable R0");
+      } else {
+        assert.equal(accepted.protocol_version, "chaptera.live-accepted-guest-scene.v1");
+        assert.equal(accepted.isolated_guest_scene_count, 1,
+          "HTTPS service must prove one isolated worker");
+        assert.match(accepted.session_id, /^guest:[a-zA-Z0-9_-]{16,}$/);
+      }
       assert.equal(accepted.source_sha256, fixture.sha256);
       assert.equal(accepted.source_byte_len, fixture.bytes);
-      assert.equal(accepted.isolated_guest_scene_count, 1, "HTTPS service must prove one isolated worker");
-      assert.match(accepted.session_id, /^guest:[a-zA-Z0-9_-]{16,}$/);
       assert.ok(["supported", "partial"].includes(accepted.classification));
       assert.equal(accepted.scene?.document_id, accepted.session_id);
       assert.equal(accepted.scene?.source_hash, fixture.sha256);
@@ -311,7 +338,7 @@ try {
         classification: receipt.classification,
         terminal_code: receipt.terminal_code ?? null,
         rendered: false,
-        worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct",
+        worker_receipt_sha256: acceptedAnyScenePath ? null : sha256(receiptBytes), scene_source: sceneOrigin,
         filesystem_confinement: true,
         network_policy: isolation.network_policy,
         screenshots: []
@@ -626,6 +653,64 @@ try {
         capture_state_after: captureStateAfter
       });
     }
+    if (ephemeralTextGeometryPath) {
+      assert.equal(fixturePages, 1,
+        "source-private per-line comparison requires a single page");
+      const measured = await page.locator("#pages svg.page").first().evaluate((svg) => {
+        const pageBounds = svg.getBoundingClientRect();
+        return [...svg.querySelectorAll('text[data-text-authority="server-shared-resolved"]')]
+          .map((line) => {
+            const bounds = line.getBoundingClientRect();
+            // SVG advance is in the local text viewport CSS user units.
+            // Do not publish per-span widths, text, node IDs or positions.
+            const spans = [...line.querySelectorAll("tspan[data-measured-width-emu]")];
+            const sources = spans.length ? spans : [line];
+            const advanceChecks = sources
+              .filter((element) => (element.textContent ?? "").replaceAll(String.fromCharCode(0x200b), "").trim())
+              .map((element) => ({
+                cohort: spans.length ? "mixed_span" : "uniform_line",
+                reader_width_emu: Number(element.getAttribute("data-measured-width-emu")),
+                chromium_width_emu: element.getComputedTextLength() * 9525
+              }));
+            return {
+              text: line.textContent ?? "",
+              x: bounds.x - pageBounds.x,
+              y: bounds.y - pageBounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              advance_checks: advanceChecks
+            };
+          });
+      });
+      const hashed = measured.map((line) => {
+        const normalized = line.text.replaceAll("\u200B", "").normalize("NFC")
+          .replace(/\s+/gu, " ").trim();
+        if (!normalized) return null;
+        const geometry = Object.fromEntries(["x", "y", "width", "height"]
+          .map((key) => [key, line[key]]));
+        for (const [key, value] of Object.entries(geometry)) {
+          assert.ok(Number.isFinite(value) &&
+            value >= (key === "width" || key === "height" ? 0 : -10000),
+            "painted text box has non-finite geometry");
+        }
+        return { text_sha256: sha256(Buffer.from(normalized, "utf8")), ...geometry };
+      }).filter(Boolean);
+      assert.ok(hashed.length > 0, "R1 source shared text has no measurable browser lines");
+      const privateAdvanceChecks = measured.flatMap((line) => line.advance_checks);
+      assert.ok(privateAdvanceChecks.length > 0,
+        "no physical Chromium text advances in accepted R1");
+      for (const record of privateAdvanceChecks) {
+        assert.ok((record.cohort === "uniform_line" || record.cohort === "mixed_span") &&
+          Number.isSafeInteger(record.reader_width_emu) && record.reader_width_emu >= 0 &&
+          Number.isFinite(record.chromium_width_emu) && record.chromium_width_emu >= 0,
+        "invalid R1 source/Chromium text advances");
+      }
+      await writeFile(ephemeralTextGeometryPath, JSON.stringify({
+        schema: "chaptera.private-r1-chromium-text-line-geometry.v1",
+        dpi: referenceRasterDpi, lines: hashed,
+        private_advance_checks: privateAdvanceChecks
+      }));
+    }
     const nonempty = painted.filter((line) => line.text.trim());
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
     if (scene.stacking_fidelity === "source_back_to_front") {
@@ -668,7 +753,7 @@ try {
       shared_line_height_px: nonempty.length > 0
         ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
         : null,
-      worker_receipt_sha256: acceptedScenePath ? null : sha256(receiptBytes), scene_source: acceptedScenePath ? "accepted_https_guest_service" : "isolated_worker_direct", scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
+      worker_receipt_sha256: acceptedAnyScenePath ? null : sha256(receiptBytes), scene_source: sceneOrigin, scene_sha256: sceneSha256, filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
     console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
@@ -681,9 +766,11 @@ try {
   }
   await writeFile(join(output, "receipt.json"), JSON.stringify({ protocol: "chaptera.cloud-reader-real-scene-browser.v1",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(),
-    scope: acceptedScenePath
-      ? "pinned PUB -> real HTTPS guest service (OIDC/quarantine/isolated-worker/host-admitted preview) -> ephemeral Scene snapshot -> controlled HTTP -> browser; Publisher comparison separate"
-      : "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
+    scope: acceptedEditorScenePath
+      ? "pinned PUB -> real HTTPS temporary EditorSession R1 and isolated ReaderScene -> controlled HTTP -> Chromium; own PDF compared independently"
+      : acceptedScenePath
+        ? "pinned PUB -> real HTTPS guest service (OIDC/quarantine/isolated-worker/host-admitted preview) -> ephemeral Scene snapshot -> controlled HTTP -> browser; Publisher comparison separate"
+        : "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
     source_pub_bytes_emitted: false, results, errors, foreign }, null, 2) + "\n");
 } finally {
   if (browser) await browser.close();

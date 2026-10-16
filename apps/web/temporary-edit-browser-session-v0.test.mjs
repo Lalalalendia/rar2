@@ -1,4 +1,5 @@
 import test from "node:test";
+import { BrowserObservabilityV1, traceHeadersV1 } from "./observability-v1.mjs";
 import assert from "node:assert/strict";
 import {
   TemporaryEditBrowserSessionV0,
@@ -37,6 +38,19 @@ const response = (body, status = 200) =>
     status, headers: { "content-type": "application/json" },
   });
 
+function traceFixture() {
+  let counter = 0;
+  const recorder = new BrowserObservabilityV1({
+    sessionIncarnation: "tab:guest-fixture-12345678",
+    browserFamily: "chromium",
+    idFactory: prefix => prefix + ":" + String(++counter).padStart(8, "0"),
+  });
+  return {
+    recorder, headersFor: traceHeadersV1,
+    interactionId: "interaction:guest-flow-12345678",
+  };
+}
+
 function storage() {
   const map = new Map();
   return {
@@ -54,6 +68,31 @@ function flow({ issued = issue, uploaded = stored, open = opened } = {}) {
   };
   return { calls, fetchImpl };
 }
+
+test("anonymous upload and open reuse canonical trace headers without leaking source", async () => {
+  const store = storage(), trace = traceFixture();
+  const {fetchImpl, calls} = flow();
+  const client = new TemporaryEditBrowserSessionV0({
+    storage: store, fetchImpl, csrfToken, trace,
+  });
+  await client.start(file);
+  assert.equal(calls.length, 3);
+  const ids = new Set(calls.map(call => call.opts.headers["x-chaptera-trace-id"]));
+  assert.equal(ids.size, 1);
+  for (const {url, opts} of calls) {
+    assert.equal(opts.headers["x-chaptera-trace-version"], "chaptera.trace-context.v1");
+    assert.equal(opts.headers["x-chaptera-operation-class"], "open");
+    assert.equal(opts.headers["x-chaptera-interaction-id"], trace.interactionId);
+    assert.equal(opts.headers["x-chaptera-reader-session"] === token,
+      url !== "/v1/editor/temporary-sessions");
+  }
+  const receipt = trace.recorder.receipt([...ids][0]);
+  assert.equal(receipt.span_count, 3);
+  assert.equal(receipt.contains_document_payload, false);
+  assert.equal(receipt.semantic_authority, false);
+  assert.ok(!JSON.stringify(receipt).includes(token));
+  assert.ok(!JSON.stringify(receipt).includes(sha));
+});
 
 test("temporary upload uses only same-origin paths, private header and no credentials", async () => {
   const store = storage();
@@ -294,8 +333,149 @@ test("one in-flight operation blocks another write and restore", async () => {
   assert.equal(calls.length, 3);
 });
 
+test("delete uses only bearer headers and clears capability after physical 204 receipt", async () => {
+  const store = storage();
+  await new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: flow().fetchImpl,
+  }).start(file);
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: async (url, opts) => {
+      calls.push({url, opts});
+      return new Response(null, {status: 204, headers: {"cache-control": "no-store"}});
+    },
+  });
+  assert.equal(await client.deleteSession(), true);
+  assert.equal(store.getItem(TEMPORARY_EDIT_STORAGE_KEY), null);
+  assert.equal(client.hasSavedSession(), false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/v1/editor/temporary-sessions/" + id);
+  assert.equal(calls[0].opts.method, "DELETE");
+  assert.equal(calls[0].opts.headers["x-chaptera-reader-session"], token);
+  assert.equal(calls[0].opts.headers["x-csrf-token"], csrfToken);
+  assert.equal(calls[0].opts.cache, "no-store");
+  assert.equal(calls[0].opts.credentials, "omit");
+  assert.equal(calls[0].opts.redirect, "error");
+  assert.ok(!calls[0].url.includes(token));
+});
+
+test("unconfirmed delete keeps the private capability for recovery, never claims purge", async () => {
+  const store = storage();
+  await new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store, fetchImpl: flow().fetchImpl,
+  }).start(file);
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async () => new Response(JSON.stringify({error: token}), {status: 500}),
+  });
+  await assert.rejects(client.deleteSession(), e =>
+    e.code === "temporary_delete_not_confirmed" && e.status === 500 && !e.message.includes(token));
+  assert.equal(client.hasSavedSession(), true);
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).access_token, token);
+});
+
 test("constructor rejects malformed CSRF token", () => {
   assert.throws(() => new TemporaryEditBrowserSessionV0({
     csrfToken: "bad", fetchImpl: async () => response(issue),
   }), /temporary_client_config_invalid/);
+});
+
+
+test("200 truncated open body recovers through one bound GET Scene, never another write", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push({url, opts});
+      switch (calls.length) {
+        case 1: return response(issue);
+        case 2: return response(stored);
+        case 3: return new Response('{"protocol_version":"truncated', {
+          status: 200, headers: {"content-type": "application/json"},
+        });
+        case 4: return response(opened);
+        default: throw Error("unexpected second mutation or unbounded open retry");
+      }
+    },
+  });
+  const result = await client.start(file);
+  assert.equal(result.source_sha256, sha);
+  assert.equal(result.expires_at_ms, stored.expires_at_ms);
+  assert.equal(client.hasSavedSession(), true);
+  assert.deepEqual(calls.map(c => [c.url, c.opts.method]), [
+    ["/v1/editor/temporary-sessions", "POST"],
+    [path + "content", "PUT"],
+    [path + "open", "POST"],
+    [path + "scene", "GET"],
+  ]);
+  assert.equal(calls[3].opts.body, undefined);
+  assert.equal(calls[3].opts.headers["x-chaptera-reader-session"], token);
+  assert.equal(calls[3].opts.credentials, "omit");
+  assert.equal(calls[3].opts.redirect, "error");
+  for (const c of calls) assert.ok(!c.url.includes(token));
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).expires_at_ms, stored.expires_at_ms);
+});
+
+test("HTTP 200 malformed open object must re-admit a real Scene with matching identity", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      if (calls.length === 3) return response([]);
+      return response({...opened, session_id: "tempedit:" + "f".repeat(32)});
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "temporary_response_identity_mismatch");
+  assert.deepEqual(calls, [
+    ["/v1/editor/temporary-sessions", "POST"],
+    [path + "content", "PUT"],
+    [path + "open", "POST"],
+    [path + "scene", "GET"],
+  ]);
+  assert.equal(client.hasSavedSession(), true);
+  assert.equal(JSON.parse(store.getItem(TEMPORARY_EDIT_STORAGE_KEY)).source_sha256, null);
+});
+
+test("malformed open error status 5xx never gets reinterpreted as accepted", async () => {
+  const calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: storage(),
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      return new Response("malformed proxy error body", {
+        status: 503, headers: {"content-type": "text/html"},
+      });
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "temporary_response_invalid" && error.status === 503);
+  assert.equal(calls.length, 3, "5xx must not schedule second POST or a false 200 Scene recovery");
+});
+
+test("failed non-renewing GET Scene retains recovery capability without asserting success", async () => {
+  const store = storage(), calls = [];
+  const client = new TemporaryEditBrowserSessionV0({
+    csrfToken, storage: store,
+    fetchImpl: async (url, opts) => {
+      calls.push([url, opts.method]);
+      if (calls.length === 1) return response(issue);
+      if (calls.length === 2) return response(stored);
+      // A syntactically valid {} is not a truncated /open response. Force the
+      // HTTP 200 JSON parse failure that authorizes one private Scene read-back.
+      if (calls.length === 3) return new Response("{truncated", {
+        status: 200, headers: {"content-type": "application/json"},
+      });
+      return response({ error: "guest_scene_not_ready" }, 409);
+    },
+  });
+  await assert.rejects(client.start(file), error =>
+    error.code === "guest_scene_not_ready" && error.status === 409);
+  assert.equal(client.hasSavedSession(), true);
+  assert.deepEqual(calls.map(x => x[1]), ["POST", "PUT", "POST", "GET"]);
 });

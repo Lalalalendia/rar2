@@ -30,6 +30,18 @@ ALLOWED_PATTERNS = (
     "vendor/producer-a/crates/*/tests/**/*.rs",
 )
 
+# Only standalone, non-authority UI modules may board a Web Editor train.
+# The same exact mapping determines admission and the hosted workflow evidence.
+# In particular, Guest session/token, commit, shared canvas and release files
+# are deliberately NOT here; they keep their ordinary individually owned PRs.
+WEB_TRAIN_WORKFLOW_BY_PATH = {
+    "apps/web/editor-comfort-v1.mjs": "web-editor-comfort-01.yml",
+    "apps/web/editor-comfort-v1.test.mjs": "web-editor-comfort-01.yml",
+    "apps/web/reader-scene-editor-interaction-v1.mjs": "web-editor-http-seam.yml",
+    "apps/web/reader-scene-editor-interaction-v1.test.mjs": "web-editor-http-seam.yml",
+}
+
+
 FORBIDDEN_PATTERNS = (
     ".github/**",
     "tools/ci/**",
@@ -145,7 +157,40 @@ def is_allowed_path(path: str) -> bool:
         return False
     if any(fnmatch.fnmatchcase(path, pattern) for pattern in FORBIDDEN_PATTERNS):
         return False
-    return any(fnmatch.fnmatchcase(path, pattern) for pattern in ALLOWED_PATTERNS)
+    return path in WEB_TRAIN_WORKFLOW_BY_PATH or any(
+        fnmatch.fnmatchcase(path, pattern) for pattern in ALLOWED_PATTERNS
+    )
+
+
+def web_train_workflow_families(paths: Sequence[str]) -> list[str]:
+    """Bind each admitted Web module to its real, path-triggered hosted CI owner.
+
+    Fail closed if a workflow stops watching a selected module: a train must
+    never claim aggregate evidence that its integration SHA will not run.
+    """
+    workflows = sorted({
+        WEB_TRAIN_WORKFLOW_BY_PATH[path]
+        for path in paths
+        if path in WEB_TRAIN_WORKFLOW_BY_PATH
+    })
+    for workflow in workflows:
+        workflow_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / workflow
+        try:
+            source = workflow_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise TrainError(f"Web train workflow {workflow} unavailable: {exc}") from exc
+        trigger = "  pull_request:\n    paths:\n"
+        if trigger not in source:
+            raise TrainError(f"Web train workflow {workflow} has no bounded PR paths")
+        watched_lines = source.split(trigger, 1)[1].split("\n  workflow_dispatch:", 1)[0].splitlines()
+        for path in paths:
+            if WEB_TRAIN_WORKFLOW_BY_PATH.get(path) != workflow:
+                continue
+            if f'      - "{path}"' not in watched_lines:
+                raise TrainError(
+                    f"Web train workflow {workflow} does not list admitted path {path}"
+                )
+    return [f"web_workflow:{workflow.removesuffix('.yml')}" for workflow in workflows]
 
 
 def load_reader_fanout_module():
@@ -165,7 +210,10 @@ def heavy_evidence_for_paths(paths: Sequence[str]) -> tuple[list[str], list[str]
         set(),
         visual_neutral_paths=set(),
     )
-    required = sorted(scope for scope in HEAVY_SCOPES if scopes.get(scope, False))
+    required = sorted(
+        {scope for scope in HEAVY_SCOPES if scopes.get(scope, False)}
+        | set(web_train_workflow_families(paths))
+    )
 
     effective_jobs = set(required)
     if scopes.get("visual_oracle", False):

@@ -78,8 +78,12 @@ fn main() -> ExitCode {
         move_x_emu,
         move_y_emu,
         story_intent_json,
+        resize_intent_json,
+        create_shape_intent_json,
+        create_textbox_intent_json,
         scene_revision_id,
         scene_baseline_revision_id,
+        editable_export_target,
     } = &cli.command
     {
         let move_intent = move_node_id.as_ref().and_then(|node_id| {
@@ -107,6 +111,10 @@ fn main() -> ExitCode {
             move_intent,
             scene_intent,
             story_intent_json.as_deref(),
+            editable_export_target.as_deref(),
+            resize_intent_json.as_deref(),
+            create_shape_intent_json.as_deref(),
+            create_textbox_intent_json.as_deref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

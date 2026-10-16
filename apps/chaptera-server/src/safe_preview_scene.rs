@@ -327,19 +327,27 @@ pub(crate) fn admit_host_reencoded_previews(
         {
             return Err("safe_preview_receipt_mismatch");
         }
+        // The hash is of the fresh host-encoded SafePreview derivative;
+        // never reuse the source PUB container or an untrusted worker URL.
+        let artifact_sha256 = preview.receipt.encoded_artifact_sha256.clone();
+        let derivative_id = format!("safe-preview:{}", preview.receipt.encode_spec_sha256);
+        let byte_len = preview.bytes.len();
         let url = format!(
             "data:{};base64,{}",
             preview.receipt.mime,
-            BASE64.encode(preview.bytes)
+            BASE64.encode(&preview.bytes)
         );
-        admitted_urls.push((index, url));
+        admitted_urls.push((index, url, artifact_sha256, derivative_id, byte_len));
     }
 
     let mut admitted_count = 0usize;
-    for (index, url) in admitted_urls {
+    for (index, url, artifact_sha256, derivative_id, byte_len) in admitted_urls {
         let old = scene["resources"][index].clone();
         scene["resources"][index]["availability"] = json!("inline_data_url");
         scene["resources"][index]["inline_data_url"] = json!(url);
+        scene["resources"][index]["encoded_artifact_sha256"] = json!(artifact_sha256);
+        scene["resources"][index]["derivative_id"] = json!(derivative_id);
+        scene["resources"][index]["byte_len"] = json!(byte_len);
         let serialized =
             serde_json::to_vec(&*scene).map_err(|_| "safe_preview_scene_serialization_failed")?;
         // Leave headroom for the final partial-fidelity diagnostic.
@@ -454,6 +462,26 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
+        let data_url = scene["resources"][0]["inline_data_url"].as_str().unwrap();
+        let encoded = BASE64.decode(data_url.split_once(',').unwrap().1).unwrap();
+        let artifact_sha256 = sha256_hex(&encoded);
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"].as_str(),
+            Some(artifact_sha256.as_str())
+        );
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"].as_str(),
+            Some(candidates[0].encoded_artifact_sha256.as_str())
+        );
+        let derivative = format!("safe-preview:{}", candidates[0].encode_spec_sha256);
+        assert_eq!(
+            scene["resources"][0]["derivative_id"].as_str(),
+            Some(derivative.as_str())
+        );
+        assert_eq!(
+            scene["resources"][0]["byte_len"].as_u64(),
+            Some(encoded.len() as u64)
+        );
         assert_eq!(scene["fidelity"]["state"], "partial");
         assert!(
             scene["fidelity"]["reasons"]
@@ -462,6 +490,122 @@ mod tests {
                 .iter()
                 .any(|r| r == PREVIEW_COLOR_REASON)
         );
+    }
+
+    #[test]
+    fn synthetic_adobe_cmyk_one_resource_four_frames_passes_worker_host_boundary() {
+        // Generated 2x2 synthetic Adobe-CMYK JPEG (no ICC or user image bytes).
+        // Reproduces the SBDC storage topology: one picture resource, four
+        // separate page placements. It does NOT substitute for a real-PUB proof.
+        let source = BASE64.decode("/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwACAQECAQECAgICAgICAgMFAwMDAwMGBAQDBQcGBwcHBgcHCAkLCQgICggHBwoNCgoLDAwMDAcJDg8NDA4LDAwM/8AAFAgAAgACBEMRAE0RAFkRAEsRAP/EABQAAQAAAAAAAAAAAAAAAAAAAAn/xAAdEAABBQEBAQEAAAAAAAAAAAACAQMEBQYHCQgA/9oADgRDAE0AWQBLAAA/ADu9NvTb6SwXpJ9B0VF9B9wpaSl6Vo4FfXwN1aRosCO1aSQaZaaB9AbbABERAURBRERERE/G96E+hPfeCffXcMLhe4dgxeJxfQL6iz2eotlY11VRV0WxkMRoUSMy8LTEdlkAbbabEQAAERRERE/G96E+hPfeCffXcMLhe4dgxeJxfQL6iz2eotlY11VRV0WxkMRoUSMy8LTEdlkAbbabEQAAERRERE/MZ5k6y13vm38+Xt7Z2F1d3XNc5PsLCfIOTKnyHauMbrzrpqpuOGZERGSqpKqqqqq/v//Z").unwrap();
+        let (candidates, audit) = collect_worker_preview_samples_with_audit(std::iter::once((
+            "star-image".to_owned(),
+            "image/jpeg",
+            source.as_slice(),
+        )));
+        assert_eq!(audit.input_resources, 1);
+        assert_eq!(audit.eligible_mime_resources, 1);
+        assert_eq!(audit.decoded_resources, 1);
+        assert_eq!(audit.encoded_candidates, 1);
+        assert!(audit.reject_codes.is_empty());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].decoded.source_sample_model, "jpeg_adobe_cmyk");
+        assert_eq!(candidates[0].decoded.decoded_sample_model, "rgb");
+        assert!(
+            candidates[0]
+                .decoded
+                .color_disposition_ref
+                .contains("adobe-cmyk0-unprofiled-rgb-v1")
+        );
+
+        let frames = (0..4)
+            .map(|i| {
+                json!({
+                    "node_id": format!("picture-frame-{i}"),
+                    "page_id": "page-1",
+                    "kind": "picture_frame",
+                    "resource_id": "star-image",
+                    "bounds": {
+                        "x": (i % 2) * 500_000 + 100_000,
+                        "y": (i / 2) * 550_000 + 100_000,
+                        "width": 190_000,
+                        "height": 180_000
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut scene = json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "document_id": "synthetic-four-cmyk-frames",
+            "source_hash": "a".repeat(64),
+            "revision_id": "synthetic-r0",
+            "scene_authority": "unit-test-only",
+            "stacking_fidelity": "source_back_to_front",
+            "fidelity": {"state": "partial", "reasons": ["image_resource_not_inline"]},
+            "pages": [{
+                "page_id": "page-1",
+                "order": 0,
+                "width_emu": 1_500_000,
+                "height_emu": 1_500_000
+            }],
+            "nodes": frames,
+            "stories": [],
+            "resources": [{
+                "resource_id": "star-image",
+                "mime": "image/jpeg",
+                "availability": "descriptor_only"
+            }],
+            "fonts": [],
+            "diagnostics": []
+        });
+        let original_nodes = scene["nodes"].clone();
+        admit_host_reencoded_previews(&mut scene, &candidates).unwrap();
+        assert_eq!(scene["nodes"], original_nodes);
+        assert_eq!(scene["nodes"].as_array().unwrap().len(), 4);
+        assert!(
+            scene["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["resource_id"] == "star-image")
+        );
+        assert_eq!(scene["resources"].as_array().unwrap().len(), 1);
+        assert_eq!(scene["resources"][0]["availability"], "inline_data_url");
+        let url = scene["resources"][0]["inline_data_url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        let derivative_bytes = BASE64.decode(url.split_once(',').unwrap().1).unwrap();
+        assert_ne!(derivative_bytes, source);
+        assert_eq!(
+            scene["resources"][0]["encoded_artifact_sha256"],
+            sha256_hex(&derivative_bytes)
+        );
+        assert!(
+            scene["resources"][0]["derivative_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("safe-preview:")
+        );
+        assert_eq!(scene["fidelity"]["state"], "partial");
+        assert!(
+            scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == PREVIEW_COLOR_REASON)
+        );
+        assert!(
+            !scene["fidelity"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "image_resource_not_inline")
+        );
+
+        // In the hosted browser workflow only, hand the resulting *synthetic*
+        // host-owned derivative directly to Chromium. Never output user assets.
+        if let Ok(path) = std::env::var("CHAPTERA_SYNTHETIC_CMYK_SCENE_OUT") {
+            std::fs::write(path, serde_json::to_vec(&scene).unwrap()).unwrap();
+        }
     }
 
     #[test]

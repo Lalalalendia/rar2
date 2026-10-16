@@ -5,14 +5,17 @@ use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedText, BoundedShapingRuntime,
     font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{EMU_PER_POINT, LengthEmu, NodeId};
+use pub_model::{
+    AuthorityClass, EMU_PER_POINT, LengthEmu, NodeId, ReadConfidence, SourceDescriptor, SourceRef,
+    SourceRole,
+};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
 };
 use pub_pdf::{
     FixedFontResource, FixedImagePlacement, FixedImageResource, FixedNodePaint, FixedPdfResources,
-    FixedStroke, FixedTextRun, PdfTargetProfile, render_bounded_pdf,
+    FixedStroke, FixedTextRun, PdfPaintTraceKindV1, PdfTargetProfile, render_bounded_pdf,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -61,6 +64,24 @@ fn shaped_glyph_sequence_hash(glyphs: &[pub_layout::BoundedShapedGlyph]) -> Resu
     sha256_json_id(&serde_json::json!(normalized))
 }
 
+fn authoritative_source_refs<'a>(
+    references: &'a [SourceRef],
+    primary_source: &SourceDescriptor,
+) -> Vec<&'a SourceRef> {
+    references
+        .iter()
+        .filter(|reference| {
+            reference.validate_primary_source(primary_source).is_ok()
+                && reference.authority == AuthorityClass::Authoritative
+                && reference.confidence == Some(ReadConfidence::Exact)
+                && matches!(
+                    reference.role,
+                    SourceRole::Semantic | SourceRole::Projection
+                )
+        })
+        .collect()
+}
+
 fn report_path_label(path: &Path, fallback: &str) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -76,6 +97,39 @@ fn fixed_image_placement_has_output_semantics(
     placement.content_rotation_degrees.is_some()
         || (mime == "image/gif"
             && (placement.source_window.is_some() || placement.recolor.is_some()))
+}
+
+fn image_placement_transfer_status(
+    viewer: Option<&pub_viewer::ViewerImagePlacementV1>,
+    output: Option<&FixedImagePlacement>,
+) -> &'static str {
+    let Some(viewer) = viewer else {
+        return if output.is_some() {
+            "pdf_has_unmatched_placement"
+        } else {
+            "no_explicit_viewer_placement"
+        };
+    };
+    let source_crop = viewer.source_window.is_some();
+    let output_crop = output.is_some_and(|value| value.source_window_present);
+    if source_crop && !output_crop {
+        return "viewer_crop_not_forwarded";
+    }
+    if !source_crop && output_crop {
+        return "pdf_crop_not_in_viewer";
+    }
+    let source_recolor = viewer.recolor.is_some();
+    let output_recolor = output.is_some_and(|value| value.recolor_present);
+    if source_recolor && !output_recolor {
+        return "viewer_recolor_not_forwarded";
+    }
+    if !source_recolor && output_recolor {
+        return "pdf_recolor_not_in_viewer";
+    }
+    if viewer.content_rotation_degrees != output.and_then(|value| value.content_rotation_degrees) {
+        return "viewer_rotation_not_forwarded";
+    }
+    "placement_fields_forwarded"
 }
 
 fn retain_scene_node_ids(
@@ -106,11 +160,14 @@ pub fn convert_pdf(
     let pub_bytes = admitted.bytes();
     let font_bytes = fs::read(fallback_font)
         .with_context(|| format!("read explicit fallback font {}", fallback_font.display()))?;
-    let (artifact, report, summary) = build_pdf_artifact(
+    // Explicit opt-in; no provenance geometry in default public receipts.
+    let trace_requested = std::env::var("CHAPTERA_PDF_PAINT_TRACE").as_deref() == Ok("1");
+    let (artifact, report, summary, paint_trace_receipt) = build_pdf_artifact(
         &pub_bytes,
         report_path_label(input, "input.pub"),
         &font_bytes,
         report_path_label(fallback_font, "fallback-font.ttf"),
+        trace_requested,
     )?;
 
     if let Some(parent) = output
@@ -136,6 +193,18 @@ pub fn convert_pdf(
         .commit_derived_output(&report_text_path, summary.as_bytes())
         .with_context(|| format!("commit PDF loss summary {}", report_text_path.display()))?;
 
+    if let Some(receipt) = paint_trace_receipt {
+        // This diagnostic exposes NodeId and page geometry, which may reveal
+        // private publication structure. Never upload it as a public CI artifact.
+        let trace_path = sidecar_path(output, ".paint-trace.json");
+        admitted
+            .commit_derived_output(
+                &trace_path,
+                &serde_json::to_vec_pretty(&receipt).context("serialize private paint trace")?,
+            )
+            .with_context(|| format!("commit private paint trace {}", trace_path.display()))?;
+    }
+
     Ok(PdfConversionResult {
         report,
         report_json_path,
@@ -148,7 +217,8 @@ fn build_pdf_artifact(
     source_label: String,
     fallback_font_bytes: &[u8],
     fallback_label: String,
-) -> Result<(Vec<u8>, Value, String)> {
+    trace_requested: bool,
+) -> Result<(Vec<u8>, Value, String, Option<Value>)> {
     let classification = pub_viewer::classify_pub_family(pub_bytes);
     let source_profile_id = match classification.route {
         pub_viewer::PubReaderRoute::Mature2c => "pub-mature-0x2c-v0.1",
@@ -451,6 +521,11 @@ fn build_pdf_artifact(
             }
             Some(FixedNodePaint {
                 node_id: paint.node_id,
+                // The standalone CLI owns a separate pinned byte-exact PDF
+                // oracle (SampleNewsletter). It remains on its existing
+                // rectangle-only v0.1 profile until independent acceptance
+                // authorizes richer primitives for that product surface.
+                preset_shape: None,
                 fill_rgb: paint.solid_fill_rgb,
                 stroke: paint.solid_line.as_ref().map(|line| FixedStroke {
                     rgb: line.rgb,
@@ -602,7 +677,140 @@ fn build_pdf_artifact(
         summary
     };
 
-    Ok((rendered.bytes, report, summary))
+    let paint_trace_receipt = trace_requested.then(|| {
+        let pdf_sha256 = Sha256::digest(&rendered.bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        // The converter already owns the same resolved graph used to build
+        // the Viewer scene. Never reparse PUB or guess by object coordinates.
+        let painted = rendered
+            .paint_trace
+            .iter()
+            .map(|event| event.node_origin)
+            .collect::<BTreeSet<_>>();
+
+        // Compare the exact Viewer image-placement evidence used for this
+        // conversion with the *actual* FixedPdfResources handed to the PDF
+        // backend. A PNG/JPEG crop may be omitted by the bounded adapter:
+        // that omission is reported, not silently described as uncropped.
+        let image_inputs = rendered
+            .paint_trace
+            .iter()
+            .filter(|event| event.kind == PdfPaintTraceKindV1::Image)
+            .map(|event| {
+                let source_images = visual
+                    .images
+                    .iter()
+                    .filter(|image| {
+                        Some(image.resource_id) == event.resource_origin
+                            && image.node_ids.contains(&event.node_origin)
+                    })
+                    .collect::<Vec<_>>();
+                let output_images = resources
+                    .images
+                    .iter()
+                    .filter(|image| {
+                        Some(image.resource_id) == event.resource_origin
+                            && image.node_ids.contains(&event.node_origin)
+                    })
+                    .collect::<Vec<_>>();
+                if source_images.len() != 1 || output_images.len() != 1 {
+                    return serde_json::json!({
+                        "node_origin": event.node_origin,
+                        "resource_origin": event.resource_origin,
+                        "transfer_status": "unmatched_or_ambiguous_image_identity",
+                    });
+                }
+                let viewer_image = source_images[0];
+                let output_image = output_images[0];
+                let viewer_placements = viewer_image
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.node_id == event.node_origin)
+                    .collect::<Vec<_>>();
+                let output_placements = output_image
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.node_id == event.node_origin)
+                    .collect::<Vec<_>>();
+                if viewer_placements.len() > 1 || output_placements.len() > 1 {
+                    return serde_json::json!({
+                        "node_origin": event.node_origin,
+                        "resource_origin": event.resource_origin,
+                        "transfer_status": "ambiguous_placement_records",
+                    });
+                }
+                let viewer_placement = viewer_placements.first().copied();
+                let output_placement = output_placements.first().copied();
+                let source_window_q16 = viewer_placement
+                    .and_then(|placement| placement.source_window.as_ref())
+                    .map(|window| {
+                        [
+                            window.left_q16,
+                            window.top_q16,
+                            window.right_q16,
+                            window.bottom_q16,
+                        ]
+                    });
+                serde_json::json!({
+                    "node_origin": event.node_origin,
+                    "resource_origin": event.resource_origin,
+                    "source_exact": viewer_image.source_exact,
+                    "mime": &viewer_image.mime,
+                    "viewer_placement_present": viewer_placement.is_some(),
+                    "viewer_source_window_q16": source_window_q16,
+                    "viewer_recolor_present": viewer_placement.is_some_and(|p| p.recolor.is_some()),
+                    "viewer_rotation_degrees": viewer_placement.and_then(|p| p.content_rotation_degrees),
+                    "pdf_placement_present": output_placement.is_some(),
+                    "pdf_source_window_present": output_placement.is_some_and(|p| p.source_window_present),
+                    "pdf_recolor_present": output_placement.is_some_and(|p| p.recolor_present),
+                    "pdf_rotation_degrees": output_placement.and_then(|p| p.content_rotation_degrees),
+                    "transfer_status": image_placement_transfer_status(viewer_placement, output_placement),
+                })
+            })
+            .collect::<Vec<_>>();
+        let source_nodes = painted
+            .iter()
+            .map(|node_id| {
+                let source_node = bundle.resolved_graph.nodes.get(node_id);
+                let references = source_node.map_or_else(Vec::new, |node| {
+                    authoritative_source_refs(
+                        &node.header.source_refs,
+                        &bundle.resolved_graph.source,
+                    )
+                });
+                let status = if source_node.is_none() {
+                    "unmapped_projected_node"
+                } else if references.is_empty() {
+                    "no_exact_authoritative_source_ref"
+                } else if references
+                    .iter()
+                    .any(|reference| reference.byte_range.is_some())
+                {
+                    "exact_source_byte_range"
+                } else {
+                    "exact_source_object_only"
+                };
+                serde_json::json!({
+                    "node_origin": node_id,
+                    "status": status,
+                    "source_refs": references,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "schema_version": "chaptera.pdf-paint-trace.v1",
+            "source_sha256": &bundle.resolved_graph.source.source_hash,
+            "candidate_pdf_sha256": pdf_sha256,
+            "pages": &rendered.report.pages,
+            "paint_trace": &rendered.paint_trace,
+            "source_nodes": source_nodes,
+            "image_inputs": image_inputs,
+        })
+    });
+
+    Ok((rendered.bytes, report, summary, paint_trace_receipt))
 }
 
 fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
@@ -614,12 +822,103 @@ fn sidecar_path(output: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        fixed_image_placement_has_output_semantics, report_path_label, retain_scene_node_ids,
+        authoritative_source_refs, fixed_image_placement_has_output_semantics,
+        image_placement_transfer_status, report_path_label, retain_scene_node_ids,
     };
     use pub_model::{CanonicalId, NodeId};
     use pub_viewer::{ViewerImagePlacementV1, ViewerImageRecolorV1, ViewerImageSourceWindowV1};
     use std::collections::BTreeSet;
     use std::path::Path;
+
+    #[test]
+    fn pdf_source_refs_require_validated_exact_primary_authority() {
+        use pub_model::{
+            AuthorityClass, ByteRange, ReadConfidence, Sha256Digest, SourceDescriptor, SourceRef,
+            SourceRole,
+        };
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("2c".into()),
+            adapter_version: "synthetic-v1".into(),
+            source_hash: Sha256Digest::from_bytes([7; 32]),
+        };
+        let exact = SourceRef {
+            format: source.format.clone(),
+            adapter_version: source.adapter_version.clone(),
+            source_hash: source.source_hash,
+            carrier: "PUB/Contents".into(),
+            object_key: Some("synthetic-seq".into()),
+            path: Some("SpContainer/FOPT".into()),
+            byte_range: Some(ByteRange::new(30, 12)),
+            role: SourceRole::Semantic,
+            authority: AuthorityClass::Authoritative,
+            confidence: Some(ReadConfidence::Exact),
+        };
+        let mut stale = exact.clone();
+        stale.source_hash = Sha256Digest::from_bytes([8; 32]);
+        let mut derived = exact.clone();
+        derived.authority = AuthorityClass::Derived;
+        let mut unknown = exact.clone();
+        unknown.confidence = Some(ReadConfidence::Inferred);
+        let mut cache = exact.clone();
+        cache.role = SourceRole::Cache;
+        let mut overflowing = exact.clone();
+        overflowing.byte_range = Some(ByteRange::new(u64::MAX, 1));
+        let candidates = vec![exact, stale, derived, unknown, cache, overflowing];
+        let collected = authoritative_source_refs(&candidates, &source);
+        assert_eq!(collected, vec![&candidates[0]]);
+        assert!(candidates[0].validate_primary_source(&source).is_ok());
+    }
+
+    #[test]
+    fn trace_image_placement_does_not_silently_hide_png_crop_loss() {
+        use pub_pdf::FixedImagePlacement;
+        use pub_viewer::ViewerImagePlacementV1;
+
+        let node = NodeId::from_canonical(CanonicalId::from_bytes([8; 16]));
+        let source = ViewerImagePlacementV1 {
+            node_id: node,
+            source_window: Some(pub_viewer::ViewerImageSourceWindowV1 {
+                left_q16: 8_192,
+                top_q16: 0,
+                right_q16: 57_344,
+                bottom_q16: 65_536,
+            }),
+            content_rotation_degrees: None,
+            recolor: None,
+        };
+        assert!(
+            !fixed_image_placement_has_output_semantics("image/png", &source),
+            "current bounded PDF adapter drops standalone PNG crop metadata"
+        );
+        assert_eq!(
+            image_placement_transfer_status(Some(&source), None),
+            "viewer_crop_not_forwarded"
+        );
+        let passed = FixedImagePlacement {
+            node_id: node,
+            content_rotation_degrees: None,
+            source_window_present: true,
+            recolor_present: false,
+        };
+        assert_eq!(
+            image_placement_transfer_status(Some(&source), Some(&passed)),
+            "placement_fields_forwarded"
+        );
+        let pure_rotation = ViewerImagePlacementV1 {
+            source_window: None,
+            content_rotation_degrees: Some(90),
+            ..source.clone()
+        };
+        assert_eq!(
+            image_placement_transfer_status(Some(&pure_rotation), None),
+            "viewer_rotation_not_forwarded"
+        );
+        assert_eq!(
+            image_placement_transfer_status(None, None),
+            "no_explicit_viewer_placement"
+        );
+    }
 
     #[test]
     fn report_label_drops_parent_directories() {

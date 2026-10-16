@@ -798,6 +798,35 @@ function renderNode(svg, defs, node, resources, fonts, index) {
   svg.appendChild(group);
 }
 
+// Index by effective page identity once, in the original node-array paint order.
+// The ordinal is defined by the legacy page-major traversal, NOT the raw
+// position of a node in payload.nodes (which may interleave different pages).
+// Keeping each page's first ordinal allows later windowed painting to preserve
+// image recolor filter IDs even when earlier pages are not mounted.
+export function indexReaderScenePageNodes(pages, nodes) {
+  const nodesByPage = new Map();
+  for (const node of nodes ?? []) {
+    let bucket = nodesByPage.get(node.page_id);
+    if (!bucket) {
+      bucket = [];
+      nodesByPage.set(node.page_id, bucket);
+    }
+    bucket.push(node);
+  }
+
+  let paintOrdinal = 0;
+  return [...(pages ?? [])].sort((a, b) => a.order - b.order).map((pageModel) => {
+    safeInteger(pageModel.width_emu, "page.width_emu");
+    safeInteger(pageModel.height_emu, "page.height_emu");
+    const validDimensions = pageModel.width_emu > 0 && pageModel.height_emu > 0;
+    const pageNodes = validDimensions ? (nodesByPage.get(pageModel.page_id) ?? []) : [];
+    const firstPaintIndex = paintOrdinal;
+    // Legacy renderer advanced after renderNode even for nodes with zero bounds.
+    paintOrdinal += pageNodes.length;
+    return { pageModel, nodes: pageNodes, firstPaintIndex, validDimensions };
+  });
+}
+
 export async function renderReaderScene(host, payload, options = {}) {
   assertReaderSceneSourceNeutral(payload);
   if (payload?.protocol_version !== "chaptera.reader-scene.v1") {
@@ -813,13 +842,10 @@ export async function renderReaderScene(host, payload, options = {}) {
   const fonts = await installFonts(payload);
   host.replaceChildren();
   const resources = new Map((payload.resources ?? []).map((resource) => [resource.resource_id, resource]));
-  const pages = [...(payload.pages ?? [])].sort((a, b) => a.order - b.order);
-  let nodeIndex = 0;
+  const indexedPages = indexReaderScenePageNodes(payload.pages, payload.nodes);
 
-  for (const pageModel of pages) {
-    safeInteger(pageModel.width_emu, "page.width_emu");
-    safeInteger(pageModel.height_emu, "page.height_emu");
-    if (pageModel.width_emu <= 0 || pageModel.height_emu <= 0) continue;
+  for (const { pageModel, nodes, firstPaintIndex, validDimensions } of indexedPages) {
+    if (!validDimensions) continue;
 
     const naturalWidth = pageModel.width_emu / emuPerCssPx;
     const scale = Math.min(1, maxPageWidth / Math.max(1, naturalWidth));
@@ -845,10 +871,8 @@ export async function renderReaderScene(host, payload, options = {}) {
       fill: "#fff"
     }));
 
-    for (const node of payload.nodes ?? []) {
-      if (node.page_id !== pageModel.page_id) continue;
-      renderNode(svg, defs, node, resources, fonts, nodeIndex);
-      nodeIndex += 1;
+    for (let index = 0; index < nodes.length; index++) {
+      renderNode(svg, defs, nodes[index], resources, fonts, firstPaintIndex + index);
     }
     host.appendChild(svg);
   }

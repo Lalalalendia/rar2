@@ -147,6 +147,12 @@ impl ReaderObservabilityV1 {
                 | "reader.structural_scan"
                 | "reader.scene"
                 | "reader.cleanup"
+                | "temporary.session_create"
+                | "temporary.current"
+                | "temporary.commit"
+                | "temporary.scene"
+                | "temporary.export"
+                | "temporary.delete"
         ) || !matches!(outcome, "success" | "error" | "rejected" | "unknown")
         {
             return;
@@ -275,6 +281,40 @@ mod tests {
             "token",
         ] {
             assert!(!labels.contains_key(prohibited));
+        }
+    }
+
+    #[test]
+    fn temporary_guest_traces_reuse_bounded_reader_event_contract() {
+        let recorder = ReaderObservabilityV1::default();
+        let mut request = headers();
+        request.insert(OPERATION_CLASS_HEADER, HeaderValue::from_static("commit"));
+        let context = ReaderObservabilityV1::context_from_headers(&request).unwrap();
+        for stage in [
+            "temporary.session_create",
+            "temporary.current",
+            "temporary.commit",
+            "temporary.scene",
+            "temporary.export",
+            "temporary.delete",
+        ] {
+            recorder.record(stage, Some(&context), "success", Duration::from_millis(3));
+        }
+        recorder.record(
+            "temporary.unbounded-custom-stage",
+            Some(&context),
+            "success",
+            Duration::from_millis(1),
+        );
+        let events = recorder.receipt(&context.trace_id);
+        assert_eq!(events.len(), 6);
+        for event in events {
+            let value = serde_json::to_value(event).unwrap();
+            assert_eq!(value["interaction_id"], "interaction:12345678");
+            assert_eq!(value["metric_labels"]["operation_class"], "commit");
+            assert_eq!(value["metric_labels"].as_object().unwrap().len(), 6);
+            assert!(value.get("token").is_none());
+            assert!(value.get("source_sha256").is_none());
         }
     }
 

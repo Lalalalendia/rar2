@@ -21,7 +21,9 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use pub_editor::{
-    EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest, StoryId, open_mature_0x2c_editor,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapeRuntimeV1,
+    AuthoredShapeTransformV1, EditOperation, EditorProject, LengthEmu, NodeId, Sha256Digest,
+    StoryId, open_mature_0x2c_editor,
 };
 use pub_reader::PubResolvedGraph;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -38,15 +40,19 @@ use crate::{
         IsolatedMoveNodeIntentV1, IsolatedProductReplayProducer, IsolatedReaderSceneIntentV1,
         IsolatedStoryRangeIntentV1, ProductReplayWorkerError,
     },
-    reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
+    reader_scene_v1::{
+        MAX_SCENE_BYTES, ReaderLineV1, ReaderNodeV1, ReaderPaintV1, ReaderPreviewTextStyleV1,
+        ReaderRectV1, ReaderSceneV1, ReaderTransformV1, from_viewer_geometry,
+    },
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_HISTORY_EVENT_SCHEMA_V1,
         EDITOR_HISTORY_EVENT_SEMANTIC_SCHEMA_VERSION, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorHistoryEventV1, EditorRevisionEventV1,
         ExactRevisionMaterializer, ExactSourceLoader, PubEditorReplayEngine,
-        RevisionMaterializerError, append_event_operation, decode_editor_history_event_v1,
-        decode_editor_revision_event_v1, encode_editor_history_event_v1,
-        encode_editor_revision_event_v1, project_sha256, undo_event_operation,
+        RevisionMaterializerError, append_event_operation, cloud_replay_requires_local_identity,
+        decode_editor_history_event_v1, decode_editor_revision_event_v1,
+        encode_editor_history_event_v1, encode_editor_revision_event_v1, project_sha256,
+        undo_event_operation,
     },
     safe_preview_scene::{WorkerSafePreviewSamplesV1, collect_worker_preview_samples},
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
@@ -478,6 +484,15 @@ fn project_reader_scene_from_exact_source(
     )
 }
 
+struct AuthoredTextFrameReaderV1 {
+    node_id: String,
+    story_id: String,
+    page_id: String,
+    bounds: ReaderRectV1,
+    text: String,
+    font_size_emu: i64,
+}
+
 fn project_reader_scene_with_worker_samples(
     document_id: String,
     source_sha256: String,
@@ -495,6 +510,9 @@ fn project_reader_scene_with_worker_samples(
             )
         })?;
 
+    let mut authored_rectangles = Vec::<AuthoredShapeRuntimeV1>::new();
+    let mut authored_text_frames = Vec::<AuthoredTextFrameReaderV1>::new();
+    let mut authored_text_frame_ids = Vec::new();
     if revision_id != baseline_revision_id {
         let source_hash = Sha256Digest::from_str(&source_sha256).map_err(|_| {
             ProductApiError::internal(
@@ -508,7 +526,17 @@ fn project_reader_scene_with_worker_samples(
                 format!("canonical editor could not open durable source for scene replay: {error}"),
             )
         })?;
-        session.apply_project(project).map_err(|error| {
+        // Cloud semantic RevisionStream excludes the local ProjectId lineage.
+        // Rehydrate only the transient EditorSession identity for versions
+        // that require it, exactly as materializer and confined Product worker
+        // replay already do; never change the canonical Cloud project/hash.
+        let mut local_replay = project.clone();
+        if local_replay.identity.is_none()
+            && cloud_replay_requires_local_identity(&local_replay.schema_version)
+        {
+            local_replay.identity = session.project().identity;
+        }
+        session.apply_project(&local_replay).map_err(|error| {
             ProductApiError::internal(
                 "reader_scene_editor_replay_failed",
                 format!("canonical editor could not replay exact scene revision: {error}"),
@@ -516,17 +544,92 @@ fn project_reader_scene_with_worker_samples(
         })?;
 
         let mut moved_node_ids = Vec::new();
+        let mut resized_node_ids = Vec::new();
         let mut edited_story_ids = Vec::new();
         for operation in &project.operations {
             match operation {
                 EditOperation::MoveNode { node_id, .. } => moved_node_ids.push(*node_id),
+                EditOperation::ResizeNode { node_id, .. } => resized_node_ids.push(*node_id),
                 EditOperation::ReplaceStoryRange { story_id, .. } => {
                     edited_story_ids.push(*story_id);
+                }
+                EditOperation::CreateShape { node_id, .. } => {
+                    let shape = session.authored_shape(*node_id).ok_or_else(|| {
+                        ProductApiError::conflict(
+                            "reader_scene_created_rectangle_missing",
+                            "canonical replay lost the created authored rectangle",
+                        )
+                    })?;
+                    authored_rectangles.push(shape.clone());
+                }
+                EditOperation::CreateTextBox {
+                    node_id,
+                    story_id,
+                    page_id,
+                    bounds,
+                    text_preset,
+                } => {
+                    // The server-owned EditorSession is the final authority for
+                    // a synthetic TextFrame/Story. Source-owned empty stories
+                    // are never promoted to an author-created entitlement.
+                    let proof = session
+                        .prove_author_created_story_v1(*story_id)
+                        .map_err(|_| {
+                            ProductApiError::conflict(
+                                "reader_scene_authored_story_unproven",
+                                "canonical authored Story identity or ownership is not proven",
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            ProductApiError::conflict(
+                                "reader_scene_authored_story_unproven",
+                                "no canonical CreateTextBox proof for the current Story",
+                            )
+                        })?;
+                    let node = session.graph().nodes.get(node_id).ok_or_else(|| {
+                        ProductApiError::conflict(
+                            "reader_scene_authored_text_frame_missing",
+                            "canonical authored TextFrame disappeared during replay",
+                        )
+                    })?;
+                    let story = session.graph().stories.get(story_id).ok_or_else(|| {
+                        ProductApiError::conflict(
+                            "reader_scene_authored_story_missing",
+                            "canonical authored Story disappeared during replay",
+                        )
+                    })?;
+                    if proof.frame_id != *node_id
+                        || proof.story_id != *story_id
+                        || proof.page_id != *page_id
+                        || proof.text_preset != *text_preset
+                        || node.header.bounds != *bounds
+                        || story.text.len() > 8192
+                        || story.text.chars().any(char::is_control)
+                    {
+                        return Err(ProductApiError::conflict(
+                            "reader_scene_authored_story_identity_mismatch",
+                            "current TextFrame geometry or bounded Story differs from canonical CreateTextBox",
+                        ));
+                    }
+                    authored_text_frame_ids.push(*node_id);
+                    authored_text_frames.push(AuthoredTextFrameReaderV1 {
+                        node_id: node_id.as_canonical().to_string(),
+                        story_id: story_id.as_canonical().to_string(),
+                        page_id: page_id.as_canonical().to_string(),
+                        bounds: ReaderRectV1 {
+                            x: bounds.x.get(),
+                            y: bounds.y.get(),
+                            width: bounds.width.get(),
+                            height: bounds.height.get(),
+                        },
+                        text: story.text.clone(),
+                        font_size_emu: text_preset.font_size_emu.get(),
+                    });
                 }
                 _ => {
                     return Err(ProductApiError::conflict(
                         "reader_scene_revision_operation_unsupported",
-                        "rich Reader scene replay admits only canonical MoveNode and plain StoryRange revisions",
+                        "rich Reader scene replay admits only canonical MoveNode, ResizeNode, CreateShape, CreateTextBox and plain StoryRange revisions",
                     ));
                 }
             }
@@ -551,14 +654,37 @@ fn project_reader_scene_with_worker_samples(
                 continue;
             }
             let bounds = authored_node.header.bounds;
+            // ResizeNode may preserve x/y. MoveNode rejects a no-op at
+            // mutation time, while capability checks only verify eligibility.
+            // Accepted ResizeNode therefore uses its own canonical resize gate.
+            let resize_admitted = resized_node_ids.contains(&scene_node.origin)
+                && session.can_resize_node(scene_node.origin).is_ok();
             if session
                 .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
                 .is_ok()
+                || resize_admitted
             {
                 scene_node.bounds = bounds;
             }
         }
 
+        // Refreshing the authored Story creates a StoryFrame binding. That
+        // binding is invalid unless its canonical page-owned node is also in
+        // the Viewer physical scene. Use the existing guarded Viewer sync,
+        // not a second synthetic node injected after Reader projection.
+        bundle
+            .geometry
+            .sync_editor_created_text_box_scene_nodes(
+                session.graph(),
+                &authored_text_frame_ids,
+                &std::collections::BTreeSet::new(),
+            )
+            .map_err(|_| {
+                ProductApiError::conflict(
+                    "reader_scene_authored_text_frame_sync_failed",
+                    "canonical authored TextFrame could not enter the current Viewer scene",
+                )
+            })?;
         bundle
             .geometry
             .refresh_text_projection_from_resolved(session.graph())
@@ -579,6 +705,15 @@ fn project_reader_scene_with_worker_samples(
                     "current canonical graph lost a durable StoryRange target",
                 ));
             };
+            // AuthorCreatedStory is not in the immutable source Viewer:
+            // its exact, proven content is appended below as a bounded
+            // server-authored partial-fidelity Reader TextFrame.
+            if authored_text_frames.iter().any(|frame| {
+                frame.story_id == edited_story_id.as_canonical().to_string()
+                    && frame.text == authored_story.text
+            }) {
+                continue;
+            }
             let projected_text = bundle
                 .geometry
                 .document
@@ -613,9 +748,28 @@ fn project_reader_scene_with_worker_samples(
                 ));
             }
         }
+        for resized_node_id in resized_node_ids {
+            let Some(authored_node) = session.graph().nodes.get(&resized_node_id) else {
+                return Err(ProductApiError::internal(
+                    "reader_scene_resize_node_missing",
+                    "current canonical graph lost a durable ResizeNode target",
+                ));
+            };
+            let represented = bundle.geometry.scene.nodes.iter().any(|scene_node| {
+                scene_node.origin == resized_node_id
+                    && scene_node.parent_origin == authored_node.header.parent_id
+                    && scene_node.bounds == authored_node.header.bounds
+            });
+            if !represented {
+                return Err(ProductApiError::conflict(
+                    "reader_scene_resize_projection_unavailable",
+                    "current ResizeNode revision cannot be represented by the admitted rich Viewer scene",
+                ));
+            }
+        }
     }
 
-    let scene = from_viewer_geometry(
+    let mut scene = from_viewer_geometry(
         document_id,
         source_sha256,
         revision_id,
@@ -628,6 +782,8 @@ fn project_reader_scene_with_worker_samples(
             format!("source-neutral Reader scene projection failed: {error}"),
         )
     })?;
+    append_authored_rectangles_to_reader_scene(&mut scene, &authored_rectangles)?;
+    admit_projected_authored_text_frames_in_reader_scene(&mut scene, &authored_text_frames)?;
 
     // Only the syscall-confined worker may decode immutable PUB image bytes.
     // The server receives decoded samples, not original PNG/JPEG containers.
@@ -654,6 +810,267 @@ fn project_reader_scene_with_worker_samples(
     }
 
     Ok(scene)
+}
+
+const MAX_AUTHORED_TEXT_FRAMES_PER_READER_SCENE: usize = 128;
+
+/// Consume only already-resolved, EditorSession-proven TextFrames. The Viewer
+/// must have synced the exact author-created node before projecting Story text;
+/// a missing or inconsistent physical Reader node is a hard failure, never a
+/// cue to synthesize a second node or make up source paint order.
+fn admit_projected_authored_text_frames_in_reader_scene(
+    scene: &mut ReaderSceneV1,
+    authored: &[AuthoredTextFrameReaderV1],
+) -> Result<(), ProductApiError> {
+    if authored.len() > MAX_AUTHORED_TEXT_FRAMES_PER_READER_SCENE {
+        return Err(ProductApiError::conflict(
+            "reader_scene_authored_text_frame_limit",
+            "too many author-created TextFrames for one bounded Reader scene",
+        ));
+    }
+    for frame in authored {
+        let page = scene
+            .pages
+            .iter()
+            .find(|page| page.page_id == frame.page_id)
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "reader_scene_authored_text_frame_page_missing",
+                    "canonical authored TextFrame is not attached to a Reader page",
+                )
+            })?;
+        let b = &frame.bounds;
+        if b.x < 0
+            || b.y < 0
+            || b.width <= 0
+            || b.height <= 0
+            || b.x
+                .checked_add(b.width)
+                .is_none_or(|right| right > page.width_emu)
+            || b.y
+                .checked_add(b.height)
+                .is_none_or(|bottom| bottom > page.height_emu)
+            || frame.font_size_emu != 114_300
+            || frame.text.len() > 8192
+            || frame.text.chars().any(char::is_control)
+            || frame.node_id == frame.story_id
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_invalid",
+                "author-created TextFrame geometry, Story or identity is outside the guarded scene contract",
+            ));
+        }
+        if scene
+            .nodes
+            .iter()
+            .filter(|n| n.node_id == frame.node_id)
+            .count()
+            != 1
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_duplicate",
+                "Reader Scene contains an ambiguous authored TextFrame identity",
+            ));
+        }
+        let Some(node) = scene
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == frame.node_id)
+        else {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_unprojected",
+                "canonical TextFrame was not resolved by the source-neutral Viewer",
+            ));
+        };
+        if node.page_id != frame.page_id
+            || node.kind != "text_frame"
+            || node.bounds.x != b.x
+            || node.bounds.y != b.y
+            || node.bounds.width != b.width
+            || node.bounds.height != b.height
+            || node.text.as_deref().unwrap_or("") != frame.text
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_mismatch",
+                "Reader TextFrame does not equal the canonical authored node and Story",
+            ));
+        }
+        let exact_stories = scene
+            .stories
+            .iter()
+            .filter(|story| story.story_id == frame.story_id && story.text == frame.text)
+            .count();
+        if exact_stories != 1
+            || scene
+                .stories
+                .iter()
+                .filter(|story| story.story_id == frame.story_id)
+                .count()
+                != 1
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_story_projection_mismatch",
+                "Reader Scene did not resolve the exact canonical authored Story",
+            ));
+        }
+        if node.preview_text_style.is_none() {
+            node.preview_text_style = Some(ReaderPreviewTextStyleV1 {
+                font_size_emu: Some(frame.font_size_emu),
+                color_rgb: Some([0, 0, 0]),
+            });
+        }
+    }
+    if !authored.is_empty() {
+        scene.stacking_fidelity = "unknown";
+        scene.fidelity.state = "partial";
+        for reason in [
+            "authored_text_frame_preview_only",
+            "authored_text_frame_mixed_order_unsupported",
+        ] {
+            if !scene.fidelity.reasons.contains(&reason) {
+                scene.fidelity.reasons.push(reason);
+            }
+        }
+        if serde_json::to_vec(scene)
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "reader_scene_projection_failed",
+                    "bounded authored TextFrame Scene serialization failed",
+                )
+            })?
+            .len()
+            > MAX_SCENE_BYTES
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_text_frame_size_limit",
+                "author-created TextFrame Reader scene exceeds the byte cap",
+            ));
+        }
+    }
+    Ok(())
+}
+
+const MAX_AUTHORED_RECTANGLES_PER_READER_SCENE: usize = 128;
+
+/// Convert only canonical, EditorSession-replayed authored Rectangles into
+/// the source-neutral rich Reader scene. Imported Viewer geometry is unchanged.
+/// Mixed imported/authored draw order is explicitly Partial and never guessed.
+fn append_authored_rectangles_to_reader_scene(
+    scene: &mut ReaderSceneV1,
+    authored: &[AuthoredShapeRuntimeV1],
+) -> Result<(), ProductApiError> {
+    if authored.len() > MAX_AUTHORED_RECTANGLES_PER_READER_SCENE {
+        return Err(ProductApiError::conflict(
+            "reader_scene_authored_rectangles_limit",
+            "too many authored rectangles for one bounded Viewer scene",
+        ));
+    }
+    for shape in authored {
+        let node_id = shape.node_id.as_canonical().to_string();
+        let page_id = shape.page_id.as_canonical().to_string();
+        let page = scene
+            .pages
+            .iter()
+            .find(|page| page.page_id == page_id)
+            .ok_or_else(|| {
+                ProductApiError::conflict(
+                    "reader_scene_authored_page_missing",
+                    "the authored rectangle belongs to no admitted Reader page",
+                )
+            })?;
+        let bounds = shape.bounds;
+        if shape.parent_id != shape.page_id
+            || shape.shape_kind != AuthoredShapeKindV1::Rectangle
+            || shape.transform != AuthoredShapeTransformV1::Identity
+            || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || bounds.x.get() < 0
+            || bounds.y.get() < 0
+            || bounds.width.get() <= 0
+            || bounds.height.get() <= 0
+            || bounds.right().is_none_or(|x| x.get() > page.width_emu)
+            || bounds.bottom().is_none_or(|y| y.get() > page.height_emu)
+            || scene.nodes.iter().any(|node| node.node_id == node_id)
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_rectangle_invalid",
+                "canonical authored Rectangle cannot be represented on its exact source page",
+            ));
+        }
+        let fill = &shape.paint.fill;
+        let stroke = &shape.paint.stroke;
+        scene.nodes.push(ReaderNodeV1 {
+            node_id,
+            origin_node_id: None,
+            page_id,
+            parent_node_id: None,
+            kind: "shape",
+            bounds: ReaderRectV1 {
+                x: bounds.x.get(),
+                y: bounds.y.get(),
+                width: bounds.width.get(),
+                height: bounds.height.get(),
+            },
+            text_bounds: None,
+            transform: ReaderTransformV1 {
+                a: "1".to_owned(),
+                b: "0".to_owned(),
+                c: "0".to_owned(),
+                d: "1".to_owned(),
+                tx: 0,
+                ty: 0,
+            },
+            paint: Some(ReaderPaintV1 {
+                preset_shape: None,
+                fill_rgb: fill
+                    .visible
+                    .then_some([fill.color.r, fill.color.g, fill.color.b]),
+                line: stroke.visible.then_some(ReaderLineV1 {
+                    rgb: [stroke.color.r, stroke.color.g, stroke.color.b],
+                    width_emu: stroke.width_emu,
+                }),
+            }),
+            decorative_border: None,
+            resource_id: None,
+            image_source_window: None,
+            image_content_rotation_degrees: None,
+            image_recolor: None,
+            table: None,
+            text: None,
+            text_layout: None,
+            preview_text_style: None,
+        });
+    }
+    if !authored.is_empty() {
+        scene.stacking_fidelity = "unknown";
+        scene.fidelity.state = "partial";
+        if !scene
+            .fidelity
+            .reasons
+            .contains(&"authored_rectangle_mixed_order_unsupported")
+        {
+            scene
+                .fidelity
+                .reasons
+                .push("authored_rectangle_mixed_order_unsupported");
+        }
+        if serde_json::to_vec(scene)
+            .map_err(|_| {
+                ProductApiError::internal(
+                    "reader_scene_projection_failed",
+                    "authored Reader scene could not be serialized",
+                )
+            })?
+            .len()
+            > MAX_SCENE_BYTES
+        {
+            return Err(ProductApiError::conflict(
+                "reader_scene_authored_size_limit",
+                "authored Reader scene exceeds its public byte cap",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Called only inside the already confined product worker after post-read
@@ -1238,10 +1655,13 @@ async fn commit_history_transition(
                     "the current revision has no undoable canonical operation",
                 )
             })?;
-        if !matches!(operation, EditOperation::MoveNode { .. }) {
+        if !matches!(
+            operation,
+            EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+        ) {
             return Err(ProductApiError::conflict(
                 "undo_operation_unsupported",
-                "bounded history admits Undo only for the latest MoveNode",
+                "bounded history admits Undo only for the latest MoveNode or plain StoryRange",
             ));
         }
         let resulting_project =
@@ -1274,10 +1694,13 @@ async fn commit_history_transition(
             ));
         }
         let operation = undone.operation;
-        if !matches!(operation, EditOperation::MoveNode { .. }) {
+        if !matches!(
+            operation,
+            EditOperation::MoveNode { .. } | EditOperation::ReplaceStoryRange { .. }
+        ) {
             return Err(ProductApiError::conflict(
                 "redo_operation_unsupported",
-                "bounded Redo admits only the immediately preceding MoveNode",
+                "bounded Redo admits only the immediately preceding MoveNode or plain StoryRange",
             ));
         }
         let resulting_project =
@@ -1286,6 +1709,7 @@ async fn commit_history_transition(
         (operation, resulting_project)
     };
     let before_project_sha256 = materialized.receipt.project_sha256.clone();
+    let history_uses_text_authority = matches!(operation, EditOperation::ReplaceStoryRange { .. });
     let after_project_sha256 =
         project_sha256(&resulting_project).map_err(ProductApiError::Materializer)?;
     let identities = derive_history_revision_identities(
@@ -1357,17 +1781,30 @@ async fn commit_history_transition(
         canonical_revision_id: canonical_child,
         bound_at_ms: now,
     };
-    let committed = state
-        .committer
-        .commit_geometry_revision(
-            &source.tenant_id,
-            &principal.principal_id,
-            edge,
-            binding,
-            now,
-        )
-        .await
-        .map_err(ProductApiError::Authz)?;
+    let committed = if history_uses_text_authority {
+        state
+            .committer
+            .commit_text_revision(
+                &source.tenant_id,
+                &principal.principal_id,
+                edge,
+                binding,
+                now,
+            )
+            .await
+    } else {
+        state
+            .committer
+            .commit_geometry_revision(
+                &source.tenant_id,
+                &principal.principal_id,
+                edge,
+                binding,
+                now,
+            )
+            .await
+    }
+    .map_err(ProductApiError::Authz)?;
 
     accepted_history_from_receipt(&state, &source, committed, false).await
 }
@@ -1822,6 +2259,420 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn authored_reader_rectangles_preserve_identity_and_paint_but_not_fabricated_z_order() {
+        use crate::reader_scene_v1::{READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1};
+        use pub_editor::{
+            AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, PageId, RectEmu,
+            Srgb8V1,
+        };
+        let page_id = "019a2d80-1112-7001-8001-aabbccddee02";
+        let node_id = "019a2d80-1112-7001-8001-aabbccddee01";
+        let page: PageId = serde_json::from_value(json!(page_id)).unwrap();
+        let node: NodeId = serde_json::from_value(json!(node_id)).unwrap();
+        let mut scene = ReaderSceneV1 {
+            protocol_version: READER_SCENE_V1,
+            document_id: "tempedit:0123456789abcdef0123456789abcdef".into(),
+            source_hash: "a".repeat(64),
+            revision_id: format!("sha256:{}", "b".repeat(64)),
+            scene_authority: "server_viewer_projection",
+            stacking_fidelity: "source_back_to_front",
+            fidelity: ReaderFidelityV1 {
+                state: "supported",
+                reasons: Vec::new(),
+            },
+            pages: vec![ReaderPageV1 {
+                page_id: page_id.into(),
+                order: 0,
+                width_emu: 2_000_000,
+                height_emu: 2_000_000,
+            }],
+            nodes: Vec::new(),
+            stories: Vec::new(),
+            resources: Vec::new(),
+            fonts: Vec::new(),
+            text_layout_fallback_counts: std::collections::BTreeMap::new(),
+            diagnostics: Vec::new(),
+        };
+        let shape = AuthoredShapeRuntimeV1 {
+            node_id: node,
+            page_id: page,
+            parent_id: page,
+            shape_kind: AuthoredShapeKindV1::Rectangle,
+            bounds: RectEmu::new(
+                LengthEmu::new(100_000),
+                LengthEmu::new(200_000),
+                LengthEmu::new(300_000),
+                LengthEmu::new(400_000),
+            ),
+            transform: AuthoredShapeTransformV1::Identity,
+            paint: AuthoredShapePaintV1 {
+                fill: AuthoredSolidFillV1 {
+                    visible: true,
+                    color: Srgb8V1 {
+                        r: 18,
+                        g: 52,
+                        b: 86,
+                    },
+                },
+                stroke: AuthoredSolidStrokeV1 {
+                    visible: true,
+                    color: Srgb8V1 {
+                        r: 170,
+                        g: 187,
+                        b: 204,
+                    },
+                    width_emu: 12_700,
+                },
+                provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+            },
+            provenance: AuthoredEntityProvenanceV1::AuthorCreated,
+        };
+        assert!(
+            append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape))
+                .is_ok()
+        );
+        assert_eq!(scene.nodes.len(), 1);
+        assert_eq!(scene.nodes[0].node_id, node_id);
+        assert_eq!(scene.nodes[0].page_id, page_id);
+        assert_eq!(scene.nodes[0].kind, "shape");
+        assert_eq!(scene.nodes[0].bounds.x, 100_000);
+        assert_eq!(scene.nodes[0].bounds.height, 400_000);
+        assert_eq!(
+            scene.nodes[0].paint.as_ref().unwrap().fill_rgb,
+            Some([18, 52, 86])
+        );
+        assert_eq!(
+            scene.nodes[0]
+                .paint
+                .as_ref()
+                .unwrap()
+                .line
+                .as_ref()
+                .unwrap()
+                .width_emu,
+            12_700
+        );
+        assert_eq!(scene.stacking_fidelity, "unknown");
+        assert_eq!(scene.fidelity.state, "partial");
+        assert!(
+            scene
+                .fidelity
+                .reasons
+                .contains(&"authored_rectangle_mixed_order_unsupported")
+        );
+        // Duplicate ID or a non-existent PageId is never represented.
+        assert!(
+            append_authored_rectangles_to_reader_scene(&mut scene, std::slice::from_ref(&shape))
+                .is_err()
+        );
+        scene.nodes.clear();
+        let mut malformed = shape;
+        malformed.bounds = RectEmu::new(
+            LengthEmu::new(1_900_000),
+            LengthEmu::new(100),
+            LengthEmu::new(300_000),
+            LengthEmu::new(400_000),
+        );
+        assert!(append_authored_rectangles_to_reader_scene(&mut scene, &[malformed]).is_err());
+    }
+
+    #[test]
+    fn real_pub_reader_scene_reopens_new_canonical_textbox_and_edited_story() {
+        // Regression for a physical Chromium CreateTextBox POST returning 200,
+        // followed by a failed Reader Scene: text projection included the
+        // StoryFrame, but the Viewer physical scene had no corresponding NodeId.
+        let source_bytes = sample3_pub();
+        let source_hash = fixture_hash(&source_bytes);
+        let source_digest = Sha256Digest::from_str(&source_hash).unwrap();
+        let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
+        let baseline_revision = format!("sha256:{}", "b".repeat(64));
+        let document_id = "document-sample3-authored-textbox".to_string();
+        let baseline = project_reader_scene_from_exact_source(
+            document_id.clone(),
+            source_hash.clone(),
+            baseline_revision.clone(),
+            &baseline_revision,
+            &source_bytes,
+            &crate::revision_materializer::cloud_revision_project(&session.project()),
+        )
+        .expect("real PUB baseline Reader Scene");
+        let page_string = &baseline
+            .pages
+            .first()
+            .expect("source has Reader page")
+            .page_id;
+        let page_id: pub_editor::PageId = serde_json::from_value(json!(page_string)).unwrap();
+        let page = session.graph().pages.get(&page_id).expect("source page");
+        let width = page.size.width.get();
+        let height = page.size.height.get();
+        assert!(width > 2_000_000 && height > 2_000_000);
+        let bounds = pub_editor::RectEmu::new(
+            LengthEmu::new(width / 8),
+            LengthEmu::new(height / 8),
+            LengthEmu::new(width / 2),
+            LengthEmu::new(height / 4),
+        );
+        let node_string = "019a2d80-1112-7001-8001-aabbccddee11";
+        let story_string = "019a2d80-1112-7001-8001-aabbccddee12";
+        let node_id: NodeId = serde_json::from_value(json!(node_string)).unwrap();
+        let story_id: StoryId = serde_json::from_value(json!(story_string)).unwrap();
+        let preset = pub_editor::AuthoringTextPresetV1 {
+            resource_id: "chaptera.desktop.fallback-font.ubuntu-light.v1".into(),
+            font_fingerprint_sha256:
+                "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70".into(),
+            face_index: 0,
+            font_size_emu: LengthEmu::new(114_300),
+            line_height_emu: LengthEmu::new(142_875),
+        };
+        assert!(matches!(
+            session
+                .create_text_box(node_id, story_id, page_id, bounds, preset)
+                .expect("canonical authored CreateTextBox"),
+            EditOperation::CreateTextBox { .. }
+        ));
+        let r1 = project_reader_scene_from_exact_source(
+            document_id.clone(),
+            source_hash.clone(),
+            format!("sha256:{}", "c".repeat(64)),
+            &baseline_revision,
+            &source_bytes,
+            &crate::revision_materializer::cloud_revision_project(&session.project()),
+        )
+        .expect("new empty Story must have a Reader physical node");
+        let created = r1
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_string)
+            .expect("created TextFrame in source-neutral Reader Scene");
+        assert_eq!(created.kind, "text_frame");
+        assert_eq!(created.page_id, *page_string);
+        assert_eq!(created.bounds.x, bounds.x.get());
+        assert!(created.text.as_deref().unwrap_or("").is_empty());
+        assert_eq!(r1.fidelity.state, "partial");
+        assert!(
+            r1.stories
+                .iter()
+                .any(|story| story.story_id == story_string && story.text.is_empty())
+        );
+
+        let marker = "ChapteraNewTextBoxProof42";
+        assert!(matches!(
+            session
+                .replace_story_range(story_id, 0, 0, "", marker)
+                .expect("author-created empty Story accepts canonical text"),
+            EditOperation::ReplaceStoryRange { .. }
+        ));
+        let r2 = project_reader_scene_from_exact_source(
+            document_id,
+            source_hash,
+            format!("sha256:{}", "d".repeat(64)),
+            &baseline_revision,
+            &source_bytes,
+            &crate::revision_materializer::cloud_revision_project(&session.project()),
+        )
+        .expect("edited authored Story must survive real PUB Reader projection");
+        let updated = r2
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_string)
+            .expect("same canonical TextFrame persisted");
+        assert_eq!(updated.text.as_deref(), Some(marker));
+        assert_eq!(updated.page_id, *page_string);
+        assert!(
+            r2.stories
+                .iter()
+                .any(|story| story.story_id == story_string && story.text == marker)
+        );
+        assert_eq!(r2.stacking_fidelity, "unknown");
+        assert_eq!(r2.fidelity.state, "partial");
+        assert_eq!(session.graph().source.source_hash, source_digest);
+    }
+
+    #[test]
+    fn authored_reader_textbox_requires_real_viewer_projection_and_partial_fidelity() {
+        use crate::reader_scene_v1::{
+            READER_SCENE_V1, ReaderFidelityV1, ReaderPageV1, ReaderStoryV1,
+        };
+        fn empty_scene() -> ReaderSceneV1 {
+            ReaderSceneV1 {
+                protocol_version: READER_SCENE_V1,
+                document_id: "tempedit:0123456789abcdef0123456789abcdef".into(),
+                source_hash: "a".repeat(64),
+                revision_id: format!("sha256:{}", "b".repeat(64)),
+                scene_authority: "server_viewer_projection",
+                stacking_fidelity: "source_back_to_front",
+                fidelity: ReaderFidelityV1 {
+                    state: "supported",
+                    reasons: Vec::new(),
+                },
+                pages: vec![ReaderPageV1 {
+                    page_id: "page-A".into(),
+                    order: 0,
+                    width_emu: 2_000_000,
+                    height_emu: 2_000_000,
+                }],
+                nodes: Vec::new(),
+                stories: Vec::new(),
+                resources: Vec::new(),
+                fonts: Vec::new(),
+                text_layout_fallback_counts: std::collections::BTreeMap::new(),
+                diagnostics: Vec::new(),
+            }
+        }
+        fn frame() -> AuthoredTextFrameReaderV1 {
+            AuthoredTextFrameReaderV1 {
+                node_id: "created-node".into(),
+                story_id: "created-story".into(),
+                page_id: "page-A".into(),
+                bounds: ReaderRectV1 {
+                    x: 100_000,
+                    y: 200_000,
+                    width: 400_000,
+                    height: 300_000,
+                },
+                text: "ChapteraNewTextBoxProof42".into(),
+                font_size_emu: 114_300,
+            }
+        }
+        fn projected(frame: &AuthoredTextFrameReaderV1) -> ReaderSceneV1 {
+            let mut scene = empty_scene();
+            let b = &frame.bounds;
+            scene.nodes.push(ReaderNodeV1 {
+                node_id: frame.node_id.clone(),
+                origin_node_id: None,
+                page_id: frame.page_id.clone(),
+                parent_node_id: None,
+                kind: "text_frame",
+                bounds: ReaderRectV1 {
+                    x: b.x,
+                    y: b.y,
+                    width: b.width,
+                    height: b.height,
+                },
+                text_bounds: None,
+                transform: ReaderTransformV1 {
+                    a: "1".into(),
+                    b: "0".into(),
+                    c: "0".into(),
+                    d: "1".into(),
+                    tx: 0,
+                    ty: 0,
+                },
+                paint: None,
+                decorative_border: None,
+                resource_id: None,
+                image_source_window: None,
+                image_content_rotation_degrees: None,
+                image_recolor: None,
+                table: None,
+                text: (!frame.text.is_empty()).then_some(frame.text.clone()),
+                text_layout: None,
+                preview_text_style: None,
+            });
+            scene.stories.push(ReaderStoryV1 {
+                story_id: frame.story_id.clone(),
+                text: frame.text.clone(),
+                text_fidelity: "partial",
+            });
+            scene
+        }
+        let original = frame();
+        let mut scene = projected(&original);
+        admit_projected_authored_text_frames_in_reader_scene(&mut scene, &[original]).unwrap();
+        assert_eq!(
+            scene.nodes.len(),
+            1,
+            "must consume, not append a duplicate node"
+        );
+        assert_eq!(scene.nodes[0].kind, "text_frame");
+        assert_eq!(scene.nodes[0].node_id, "created-node");
+        assert_eq!(scene.nodes[0].page_id, "page-A");
+        assert_eq!(
+            scene.nodes[0].text.as_deref(),
+            Some("ChapteraNewTextBoxProof42")
+        );
+        assert!(
+            scene.nodes[0].text_layout.is_none(),
+            "must not fabricate glyph advances"
+        );
+        assert_eq!(
+            scene.nodes[0]
+                .preview_text_style
+                .as_ref()
+                .unwrap()
+                .font_size_emu,
+            Some(114_300)
+        );
+        assert_eq!(scene.stories.len(), 1);
+        assert_eq!(scene.stories[0].text, "ChapteraNewTextBoxProof42");
+        assert_eq!(scene.stories[0].story_id, "created-story");
+        assert_eq!(scene.stories[0].text_fidelity, "partial");
+        assert_eq!(scene.stacking_fidelity, "unknown");
+        assert_eq!(scene.fidelity.state, "partial");
+        assert!(
+            scene
+                .fidelity
+                .reasons
+                .contains(&"authored_text_frame_preview_only")
+        );
+
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(&mut empty_scene(), &[frame()],)
+                .is_err(),
+            "cannot fabricate a missing Viewer node"
+        );
+        let mut duplicate = projected(&frame());
+        duplicate.nodes.push(projected(&frame()).nodes.remove(0));
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(&mut duplicate, &[frame()],)
+                .is_err(),
+            "duplicate scene NodeId"
+        );
+        let mut outside = frame();
+        outside.bounds.x = 1_900_000;
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(
+                &mut projected(&outside),
+                &[outside],
+            )
+            .is_err(),
+            "out-of-page bounds"
+        );
+        let mut missing_parent = frame();
+        missing_parent.page_id = "unbound-page".into();
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(
+                &mut projected(&missing_parent),
+                &[missing_parent],
+            )
+            .is_err(),
+            "nonexistent page"
+        );
+        let mut forged_story = frame();
+        forged_story.text = "private\nsource".into();
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(
+                &mut projected(&forged_story),
+                &[forged_story],
+            )
+            .is_err(),
+            "control characters forbidden"
+        );
+        let mut mismatched = projected(&frame());
+        mismatched.stories[0].text = "untrusted".into();
+        assert!(
+            admit_projected_authored_text_frames_in_reader_scene(&mut mismatched, &[frame()],)
+                .is_err(),
+            "canonical Story mismatch"
+        );
+        let mut blank = frame();
+        blank.text.clear();
+        let mut blank_scene = projected(&blank);
+        admit_projected_authored_text_frames_in_reader_scene(&mut blank_scene, &[blank]).unwrap();
+        assert_eq!(blank_scene.stories[0].text, "");
+    }
+
     #[derive(Clone)]
     struct FixtureSourceLoader {
         bytes: Arc<Vec<u8>>,
@@ -2065,6 +2916,80 @@ mod tests {
             }
         });
         assert!(serde_json::from_value::<CommitRequestV1>(value).is_err());
+    }
+
+    #[test]
+    fn reader_scene_reprojects_canonical_resize_without_fake_move() {
+        let source_bytes = sample3_pub();
+        let source_sha256 = fixture_hash(&source_bytes);
+        let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
+        let mut session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
+        let baseline_revision_id = format!("sha256:{}", "b".repeat(64));
+        let baseline_project =
+            crate::revision_materializer::cloud_revision_project(&session.project());
+        let initial_scene = project_reader_scene_from_exact_source(
+            "document-sample3-resize".to_owned(),
+            source_sha256.clone(),
+            baseline_revision_id.clone(),
+            &baseline_revision_id,
+            &source_bytes,
+            &baseline_project,
+        )
+        .expect("source-backed baseline must render as a canonical Reader Scene");
+        let (node_id, before) = session
+            .graph()
+            .nodes
+            .iter()
+            .find(|(node_id, _)| {
+                let key = serde_json::to_value(**node_id)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned));
+                session.can_resize_node(**node_id).is_ok()
+                    && key.is_some_and(|id| initial_scene.nodes.iter().any(|n| n.node_id == id))
+            })
+            .map(|(node_id, node)| (*node_id, node.header.bounds))
+            .expect("Sample3 contains an eligible directly page-owned visible resize node");
+        let after = pub_editor::RectEmu::new(
+            before.x,
+            before.y,
+            LengthEmu::new(before.width.get() + 12_700),
+            before.height,
+        );
+        assert!(
+            session.move_node_to(node_id, before.x, before.y).is_err(),
+            "a pure resize must not masquerade as a MoveNode"
+        );
+        assert!(matches!(
+            session.resize_node_to(node_id, after).unwrap(),
+            EditOperation::ResizeNode { .. }
+        ));
+        let project = crate::revision_materializer::cloud_revision_project(&session.project());
+        let accepted_revision = format!("sha256:{}", "c".repeat(64));
+        let scene = project_reader_scene_from_exact_source(
+            "document-sample3-resize".to_owned(),
+            source_sha256.clone(),
+            accepted_revision.clone(),
+            &baseline_revision_id,
+            &source_bytes,
+            &project,
+        )
+        .expect("current Reader Scene must materialize the canonical ResizeNode");
+        let key = serde_json::to_value(node_id)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let resized = scene
+            .nodes
+            .iter()
+            .find(|n| n.node_id == key)
+            .expect("resized source node stays visible");
+        assert_eq!(resized.bounds.x, after.x.get());
+        assert_eq!(resized.bounds.y, after.y.get());
+        assert_eq!(resized.bounds.width, after.width.get());
+        assert_eq!(resized.bounds.height, after.height.get());
+        assert_eq!(scene.revision_id, accepted_revision);
+        assert_eq!(scene.source_hash, source_sha256);
     }
 
     #[test]

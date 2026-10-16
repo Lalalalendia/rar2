@@ -1,0 +1,97 @@
+name: Cloud Reader published release dispatch
+
+on:
+  workflow_run:
+    workflows: ["Cloud Reader Linux release packet"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaptera-reader-release-dispatch-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    # workflow_run events can carry PR/fork activity. Never mint an App token
+    # except after a verified successful rar2/main PUSH workflow completion.
+    if: >-
+      github.repository == 'Lalalalendia/rar2' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == 'Lalalalendia/rar2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Verify immutable release and protected main provenance
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          dir="$(mktemp -d)"
+          trap 'rm -rf "${dir}"' EXIT
+          gh api "repos/Lalalalendia/rar2/releases/tags/cloud-reader-${RELEASE_SHA}" > "${dir}/release.json"
+          gh api 'repos/Lalalalendia/rar2/releases?per_page=30' > "${dir}/releases.json"
+          gh api "repos/Lalalalendia/rar2/compare/${RELEASE_SHA}...main" > "${dir}/compare.json"
+          result="$(python3 tools/ci/cloud_reader_release_dispatch_guard.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --release "${dir}/release.json" \
+            --releases "${dir}/releases.json" \
+            --compare "${dir}/compare.json")"
+          [[ "${result}" == "${RELEASE_SHA}" ]]
+          echo "sha=${RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "Verified latest immutable release from protected main"
+
+      - name: Check dedicated GitHub App provisioning
+        id: config
+        shell: bash
+        env:
+          APP_CLIENT_ID: ${{ vars.CHAPTERA_DEPLOY_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.CHAPTERA_DEPLOY_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_CLIENT_ID}" || -z "${APP_PRIVATE_KEY}" ]]; then
+            echo "::warning::CI-READER-RELEASE-EVENT-DEPLOY-01 disabled until dedicated Actions:write GitHub App is provisioned in rar2"
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "Release verified; dispatch NOT enabled. Site cron fallback remains." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          client-id: ${{ vars.CHAPTERA_DEPLOY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHAPTERA_DEPLOY_APP_PRIVATE_KEY }}
+          owner: Lalalalendia
+          repositories: chaptera-site
+          permission-actions: write
+
+      - name: Dispatch protected site backend deployment by exact SHA
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          gh api --method POST \
+            "repos/Lalalalendia/chaptera-site/actions/workflows/deploy-reader-backend.yml/dispatches" \
+            -f ref=main \
+            -f "inputs[release_sha]=${RELEASE_SHA}" \
+            -f "inputs[release_mode]=published"
+          echo "Dispatched trusted protected site deploy for ${RELEASE_SHA}"
