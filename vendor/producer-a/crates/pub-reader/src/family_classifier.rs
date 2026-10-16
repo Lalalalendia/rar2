@@ -1,4 +1,10 @@
 use pub_contents::{ContentsFamily, ContentsReadError};
+
+// Keep registry routing beside the PUB family classifier rather than in the crate root.
+pub fn format_profile() -> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
+    pub_format_registry::resolve(super::PUB_FORMAT_PROFILE_ID)
+}
+
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 

@@ -2,6 +2,8 @@
 
 use super::{PubBridgeDiagnostic, ViewerDiagnostic, ViewerDiagnosticSeverity};
 
+// Reusable text-flow diagnostics belong to the diagnostics module, not the root.
+
 pub(super) fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
     use PubBridgeDiagnostic::*;
 
@@ -278,3 +280,35 @@ mod tests {
         assert_eq!(existing.severity, ViewerDiagnosticSeverity::FidelityWarning);
     }
 }
+
+pub(super) fn viewer_fallback_flow_metrics_diagnostic() -> ViewerDiagnostic {
+    ViewerDiagnostic {
+        code: "viewer.text.fallback_flow_metrics".to_owned(),
+        severity: ViewerDiagnosticSeverity::FidelityWarning,
+        message: "Visible text fragments use Viewer fallback font metrics for bounded frame flow while admitted source font sizes may affect sizing. Their frame ownership is grounded, but line breaks and fragment boundaries are not claimed to match Publisher typography.".to_owned(),
+    }
+}
+
+pub(super) fn viewer_paragraph_flow_policy_applied_diagnostic(count: usize) -> ViewerDiagnostic {
+    ViewerDiagnostic {
+        code: "viewer.text.paragraph_flow_policy_applied".to_owned(),
+        severity: ViewerDiagnosticSeverity::Info,
+        message: format!(
+            "{count} explicit source paragraph-flow constraint(s) participate in bounded fallback linked-frame allocation. Fallback font metrics remain non-authoritative for Publisher-exact line breaks."
+        ),
+    }
+}
+
+pub(super) fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
+    matches!(
+        code,
+        "viewer.text.flow_not_explicit"
+            | "viewer.text.flow_partial"
+            | "viewer.text.fallback_overset"
+            | "viewer.text.frame_capacity_partial"
+            | "viewer.text.fallback_metrics_unavailable"
+            | "viewer.text.fallback_flow_metrics"
+            | "viewer.text.paragraph_flow_policy_applied"
+    )
+}
+

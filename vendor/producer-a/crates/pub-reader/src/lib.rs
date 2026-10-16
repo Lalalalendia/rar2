@@ -93,7 +93,7 @@ pub use failure_intake::{
 };
 pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
-    PubReaderRoute, classify_pub_family,
+    PubReaderRoute, classify_pub_family, format_profile,
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
@@ -285,10 +285,6 @@ use direct_transform::{
     bounded_direct_image_transform, bounded_direct_story_transform,
 };
 
-pub fn format_profile()
--> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
-    pub_format_registry::resolve(PUB_FORMAT_PROFILE_ID)
-}
 pub const CONTENTS_STREAM_PATH: &str = "/Contents";
 pub const QUILL_STREAM_PATH: &str = "/Quill/QuillSub/CONTENTS";
 pub const ESCHER_STREAM_PATH: &str = "/Escher/EscherStm";

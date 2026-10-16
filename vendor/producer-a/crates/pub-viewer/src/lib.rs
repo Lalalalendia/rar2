@@ -32,7 +32,10 @@ pub use borderart::{
     ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
     ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
 };
-use bridge_diagnostics::map_bridge_diagnostic;
+use bridge_diagnostics::{
+    is_refreshable_text_flow_diagnostic, map_bridge_diagnostic,
+    viewer_fallback_flow_metrics_diagnostic, viewer_paragraph_flow_policy_applied_diagnostic,
+};
 pub use images::{
     VIEWER_IMAGE_SOURCE_Q16_ONE, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageRecolorV1,
     ViewerImageSourceWindowV1,
@@ -296,8 +299,8 @@ pub struct ViewerGeometryDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub legacy_character_style_runs: Vec<ViewerLegacyCharacterStyleRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_line_spacings: Vec<ViewerParagraphLineSpacingRun>,
@@ -2582,37 +2585,6 @@ fn viewer_fallback_text_flow_environment_v0_1() -> BoundedTextFlowEnvironment {
             line_height: LengthEmu::new(VIEWER_FALLBACK_LINE_HEIGHT_EMU_V0_1),
         }),
     }
-}
-
-fn viewer_fallback_flow_metrics_diagnostic() -> ViewerDiagnostic {
-    ViewerDiagnostic {
-        code: "viewer.text.fallback_flow_metrics".to_owned(),
-        severity: ViewerDiagnosticSeverity::FidelityWarning,
-        message: "Visible text fragments use Viewer fallback font metrics for bounded frame flow while admitted source font sizes may affect sizing. Their frame ownership is grounded, but line breaks and fragment boundaries are not claimed to match Publisher typography.".to_owned(),
-    }
-}
-
-fn viewer_paragraph_flow_policy_applied_diagnostic(count: usize) -> ViewerDiagnostic {
-    ViewerDiagnostic {
-        code: "viewer.text.paragraph_flow_policy_applied".to_owned(),
-        severity: ViewerDiagnosticSeverity::Info,
-        message: format!(
-            "{count} explicit source paragraph-flow constraint(s) participate in bounded fallback linked-frame allocation. Fallback font metrics remain non-authoritative for Publisher-exact line breaks."
-        ),
-    }
-}
-
-fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
-    matches!(
-        code,
-        "viewer.text.flow_not_explicit"
-            | "viewer.text.flow_partial"
-            | "viewer.text.fallback_overset"
-            | "viewer.text.frame_capacity_partial"
-            | "viewer.text.fallback_metrics_unavailable"
-            | "viewer.text.fallback_flow_metrics"
-            | "viewer.text.paragraph_flow_policy_applied"
-    )
 }
 
 fn resolve_viewer_text_fragments(
