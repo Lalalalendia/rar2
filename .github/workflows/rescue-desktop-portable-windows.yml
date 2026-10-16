@@ -1,0 +1,98 @@
+name: Rescue Desktop Portable Windows V1
+
+on:
+  pull_request:
+    paths:
+      - 'apps/chaptera-rescue/src/batch_ui.rs'
+      - 'tools/rescue_engine_entrypoint.py'
+      - 'tools/test_rescue_engine_entrypoint.py'
+      - 'tools/probe_rescue_portable_windows.py'
+      - '.github/workflows/rescue-desktop-portable-windows.yml'
+      - 'tools/rescue_desktop_batch_v1.py'
+      - 'tools/rescue_salvage_bundle_v1.py'
+      - 'tools/rescue_cfb_stream_export.py'
+      - 'tools/verify_rescue_cfb_stream_export.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  portable-windows:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt
+      - name: Offline entrypoint and existing batch/salvage tests
+        shell: pwsh
+        run: |
+          python -m unittest tools.test_rescue_engine_entrypoint tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity -v
+          python -m py_compile tools/rescue_engine_entrypoint.py tools/probe_rescue_portable_windows.py
+      - name: Build frozen existing Python engine
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller==6.16.0
+          python -m PyInstaller --noconfirm --clean --onedir --console --name rescue-engine --distpath dist --workpath build/pyinstaller --specpath build/pyinstaller --paths . --hidden-import tools.rescue_desktop_batch_v1 --hidden-import tools.rescue_salvage_bundle_v1 --hidden-import tools.rescue_cfb_stream_export --hidden-import tools.verify_rescue_cfb_stream_export --hidden-import tools.corpus.cfb_physical tools/rescue_engine_entrypoint.py
+      - name: Build Rescue GUI and native image exporter
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path apps/chaptera-rescue/Cargo.toml -- --check
+          cargo test --manifest-path apps/chaptera-rescue/Cargo.toml
+          cargo build --manifest-path apps/chaptera-rescue/Cargo.toml --release
+          cargo build -p chaptera-pub-cli --release
+          Copy-Item apps/chaptera-rescue/target/release/chaptera-rescue.exe dist/rescue-engine/chaptera-rescue.exe
+          Copy-Item target/release/pub.exe dist/rescue-engine/pub.exe
+      - name: Prove no installed Python is required for real frozen CFB replay
+        shell: pwsh
+        run: |
+          python tools/probe_rescue_portable_windows.py --portable-dir dist/rescue-engine
+      - name: Label unsigned preview and generate SHA-256 inventory
+        shell: pwsh
+        run: |
+          $root = 'dist/rescue-engine'
+          'Unsigned portable technical preview. No native PUB restoration or full-corpus acceptance claim. Extract the entire ZIP together. Private PUB source bytes remain local.' | Set-Content -Encoding utf8 "$root/UNSIGNED-PREVIEW.txt"
+          @'
+          Chaptera Rescue Desktop — portable Windows technical preview
+          Run chaptera-rescue.exe in this folder. Its sibling rescue-engine.exe
+          and _internal/ provide the frozen runtime; pub.exe extracts verified images.
+          No separate Python installation or rar2 checkout is required.
+          Bundle outputs must be in a dedicated folder outside source PUB directories.
+          No network service or automatic upload is used during runtime.
+          This archive is UNSIGNED and has NOT passed all real-corpus/security/release gates.
+          '@ | Set-Content -Encoding utf8 "$root/README.txt"
+          foreach ($name in @('chaptera-rescue.exe', 'rescue-engine.exe', 'pub.exe')) {
+            if (-not (Test-Path (Join-Path $root $name))) { throw "Missing component: $name" }
+          }
+          $rootPath = [System.IO.Path]::GetFullPath($root)
+          $checksums = @(
+            Get-ChildItem $root -Recurse -File |
+              Where-Object { $_.Name -ne 'portable-build.json' } |
+              Sort-Object FullName |
+              ForEach-Object {
+                @{ file = [System.IO.Path]::GetRelativePath($rootPath, $_.FullName).Replace('\', '/');
+                   sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant();
+                   byte_len = $_.Length }
+              }
+          )
+          $manifest = @{ schema_version = 'chaptera.rescue-portable-build.v1'; source_commit = '${{ github.sha }}'; target = 'windows-x64'; signing = 'unsigned_preview'; files = $checksums }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$root/portable-build.json"
+          Compress-Archive -Path "$root/*" -DestinationPath dist/chaptera-rescue-portable-windows-x64.zip -CompressionLevel Optimal
+          Copy-Item "$root/portable-build.json" dist/chaptera-rescue-portable-build.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-rescue-portable-windows-x64-unsigned
+          path: |
+            dist/chaptera-rescue-portable-windows-x64.zip
+            dist/chaptera-rescue-portable-build.json
+          if-no-files-found: error
