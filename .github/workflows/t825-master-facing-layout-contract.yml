@@ -1,0 +1,100 @@
+name: T825 Master Facing Layout Contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/t825-master-facing-layout-contract.yml"
+      - "tools/research-runner/experiments/master-facing-layout-auth-01.packet.json"
+      - "tools/research-runner/operations/publisher_master_facing_layout_auth_01.ps1"
+      - "tools/research-runner/analysis/master_facing_layout_auth_01.py"
+      - "tools/windows/run_master_facing_layout_auth_direct.ps1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t825-master-facing-layout-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Validate T825 packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/research-runner/validate_packet.py --packet tools/research-runner/experiments/master-facing-layout-auth-01.packet.json --expected-environment publisher-2019
+          if ($LASTEXITCODE -ne 0) { throw "T825 packet validation failed." }
+
+      - name: Parse T825 PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "tools/research-runner/operations/publisher_master_facing_layout_auth_01.ps1",
+            "tools/windows/run_master_facing_layout_auth_direct.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              throw "PowerShell parser rejected $path"
+            }
+          }
+
+      - name: Compile T825 analyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m py_compile tools/research-runner/analysis/master_facing_layout_auth_01.py
+          if ($LASTEXITCODE -ne 0) { throw "T825 analyzer compile failed." }
+
+      - name: Enforce exact T825 blobs and fixture contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $expected = @{
+            "tools/research-runner/experiments/master-facing-layout-auth-01.packet.json" = "fc8eaa28b9c133578d6c08444cf655be273fac20"
+            "tools/research-runner/operations/publisher_master_facing_layout_auth_01.ps1" = "a291712cb8814c86c54c173df918c03f16abeecf"
+            "tools/research-runner/analysis/master_facing_layout_auth_01.py" = "e36bd9fb52f97b39294797ccd0f50da3c36ba79b"
+            "tools/windows/run_master_facing_layout_auth_direct.ps1" = "a0a017f52117d973244c5cf1f2cd5066ead1e311"
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = (git hash-object -- $path).Trim()
+            if ($actual -ne $expected[$path]) {
+              throw "T825 exact-blob mismatch for $path expected $($expected[$path]) got $actual"
+            }
+          }
+
+          $packet = Get-Content tools/research-runner/experiments/master-facing-layout-auth-01.packet.json -Raw | ConvertFrom-Json
+          if ([string]$packet.fixture.source -ne "runner-root") { throw "T825 fixture must be runner-root." }
+          if ([string]$packet.fixture.relative_path -ne "pubgen-create-20260923/minimal-blank-v1-generated.pub") {
+            throw "Unexpected T825 fixture relative path."
+          }
+          if ([string]$packet.fixture.sha256 -ne "5bf6057b8b11c8ee4a421d93885ae6e9e7c03a7a42d541e6d0df33497c08c33b") {
+            throw "Unexpected T825 fixture SHA."
+          }
+
+          $launcher = Get-Content tools/windows/run_master_facing_layout_auth_direct.ps1 -Raw
+          foreach ($required in @(
+            "PUB_RESEARCH_FIXTURE_ROOT",
+            "OutputRoot is not empty",
+            "git hash-object",
+            "master-facing-layout-auth-01-blast-radius.json"
+          )) {
+            if (-not $launcher.Contains($required)) {
+              throw "T825 direct launcher missing bounded marker: $required"
+            }
+          }
