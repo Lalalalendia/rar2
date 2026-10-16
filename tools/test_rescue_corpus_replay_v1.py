@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -143,6 +146,42 @@ class ReplayTests(unittest.TestCase):
         r = self.execute(scan_only=True)
         self.assertEqual(r["scan"]["unsafe_symlink"], 1)
         self.assertEqual(r["counts"], {"present_unprocessed": 1})
+
+    def test_output_lock_survives_prior_run_and_rejects_live_contention(self):
+        self.out.mkdir()
+        lock = self.out / ".rescue-replay.lock"
+        with replay.exclusive_output_lock(lock):
+            with self.assertRaisesRegex(replay.Rejected, "output_locked"):
+                with replay.exclusive_output_lock(lock):
+                    pass
+        self.assertTrue(lock.is_file())
+        with replay.exclusive_output_lock(lock):
+            pass
+
+    def test_abrupt_child_exit_does_not_block_resume(self):
+        self.out.mkdir()
+        lock = self.out / ".rescue-replay.lock"
+        code = (
+            "import os,sys; "
+            "from tools.rescue_corpus_replay_v1 import exclusive_output_lock; "
+            "from pathlib import Path; "
+            "with_context = exclusive_output_lock(Path(sys.argv[1])); "
+            "with_context.__enter__(); os._exit(37)"
+        )
+        result = subprocess.run([sys.executable, "-c", code, str(lock)],
+                                cwd=replay.REPO_ROOT, check=False)
+        self.assertEqual(result.returncode, 37)
+        with replay.exclusive_output_lock(lock):
+            pass
+
+    def test_csv_write_is_atomic_when_serialization_fails(self):
+        self.out.mkdir()
+        target = self.out / "entries.csv"
+        target.write_text("previous\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            replay.atomic_csv(target, [{"invalid_col": "value"}])
+        self.assertEqual(target.read_text(encoding="utf-8"), "previous\n")
+        self.assertEqual(list(self.out.glob(".rescue-csv-*.tmp")), [])
 
     def test_sorted_unique_sha_authority_required(self):
         h1 = sha(b"a")

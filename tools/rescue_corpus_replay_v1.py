@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -143,6 +144,69 @@ def atomic_json(path: Path, payload: dict) -> None:
             os.unlink(name)
 
 
+@contextmanager
+def exclusive_output_lock(path: Path):
+    """Use a kernel lock, so a crashed process cannot strand the queue.
+
+    Keep the lock file: unlinking a file while another process is waiting on
+    its inode could admit two simultaneous writers to the same output root.
+    """
+    if path.is_symlink():
+        raise Rejected("unsafe_lock_target")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise Rejected("unsafe_lock_target") from exc
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+                os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise Rejected("output_locked") from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise Rejected("output_locked") from exc
+        locked = True
+        yield
+    finally:
+        try:
+            if locked:
+                if os.name == "nt":
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def atomic_csv(path: Path, rows: list[dict]) -> None:
+    fd, name = tempfile.mkstemp(prefix=".rescue-csv-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def invoke(module: str, args: list[str], timeout: int) -> str | None:
     try:
         p = subprocess.run([sys.executable, "-m", module, *args], cwd=REPO_ROOT,
@@ -232,12 +296,7 @@ def run(roots: list[Path], authority: Path, output: Path, *, scan_only: bool,
     if not bundles.is_dir():
         raise Rejected("invalid_bundles_dir")
     lock_path = output / ".rescue-replay.lock"
-    try:
-        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as exc:
-        raise Rejected("output_locked") from exc
-    try:
-        os.close(fd)
+    with exclusive_output_lock(lock_path):
         available, scan = inventory(roots, set(sha_list), max_bytes)
         digest = hashlib.sha256(("\n".join(sha_list) + "\n").encode("ascii")).hexdigest()
         receipt = {"schema": SCHEMA, "authority_count": len(sha_list),
@@ -263,13 +322,8 @@ def run(roots: list[Path], authority: Path, output: Path, *, scan_only: bool,
             counts = receipt["counts"]
             counts[row["status"]] = counts.get(row["status"], 0) + 1
             atomic_json(output / "summary.json", receipt)  # Durable checkpoint per source.
-        with (output / "entries.csv").open("w", newline="", encoding="utf-8") as stream:
-            writer = csv.DictWriter(stream, fieldnames=FIELDS)
-            writer.writeheader()
-            writer.writerows(receipt["entries"])
+        atomic_csv(output / "entries.csv", receipt["entries"])
         return receipt
-    finally:
-        lock_path.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
