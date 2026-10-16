@@ -508,7 +508,7 @@ fn zip_xml_parts(bytes: &[u8]) -> Result<Vec<(String, String)>, Box<dyn Error>> 
     let mut parts = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let name = entry.name().to_owned();
+        let name = entry.name()?.into_owned();
         if entry.is_dir() || !name.ends_with(".xml") {
             continue;
         }
