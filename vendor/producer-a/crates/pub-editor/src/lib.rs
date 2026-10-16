@@ -3573,8 +3573,8 @@ impl EditorSession {
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_1 && !project.assets.is_empty() {
             return Err(EditorProjectError::LegacyProjectCarriesAssets);
         }
-        if project.schema_version == EDITOR_PROJECT_VERSION_V0_1
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_2
+        if (project.schema_version == EDITOR_PROJECT_VERSION_V0_1
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_2)
             && let Some(index) = project
                 .operations
                 .iter()
