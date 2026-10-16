@@ -12,6 +12,8 @@ on:
       - tools/product_full_cohort_shards_v1.py
       - tools/run_product_oidc_worst_census_acceptance.py
       - tools/run_secure_origin_product_worst_browser.mjs
+      - apps/chaptera-server/src/source_baseline.rs
+      - apps/chaptera-server/src/source_ingress_http.rs
       - tools/product-physical-ingress-phase.mjs
       - tools/product-physical-ingress-phase.test.mjs
       - apps/cloud-reader/product-worst-visual-resources.mjs

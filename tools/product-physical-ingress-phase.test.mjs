@@ -19,6 +19,15 @@ test("known validation errors are fixed enums", () => {
   }
 });
 
+test("baseline worker failures remain fixed public enums", () => {
+  for (const code of ["source_baseline_editor_legacy_low_text","source_baseline_editor_legacy_quill","source_baseline_editor_mature_2c","source_baseline_editor_unknown","source_baseline_editor_assets","source_baseline_worker_cpu_limit","source_baseline_worker_terminated","source_baseline_worker_sandbox_failed"]) {
+    assert.equal(
+      classifyNavigationFailure("Needs attention", true, code),
+      "ingress_reject_" + code,
+    );
+  }
+});
+
 test("unknown/private DOM strings are redacted", () => {
   assert.equal(classifyNavigationFailure("secret book title and private path", false), "ingress_navigation_timeout");
   assert.equal(classifyNavigationFailure(null, false), "ingress_navigation_timeout");

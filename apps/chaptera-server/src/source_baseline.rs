@@ -11,6 +11,7 @@ use chaptera_cdm_model::{
 };
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::EditorProject;
+use pub_reader::{PubReaderRoute, classify_pub_family};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -482,7 +483,7 @@ impl IsolatedSourceBaselineProducer {
 
         if !output.status.success() {
             return Err(SourceBaselineError::new(
-                "source_baseline_worker_failed",
+                classify_isolated_baseline_failure(&output.stdout),
                 "isolated baseline worker rejected or failed",
             ));
         }
@@ -524,6 +525,60 @@ impl IsolatedSourceBaselineProducer {
             canonical_schema_version: receipt.canonical_schema_version,
             canonical_authoring_revision_id: receipt.canonical_authoring_revision_id,
         })
+    }
+}
+
+
+/* Never export the isolated worker's raw stderr, executable args, or PUB bytes.
+ * The seccomp harness emits JSON with fixed status and an optional private
+ * stderr tail. Only literal known error codes may leave this host boundary. */
+fn classify_isolated_baseline_failure(harness_stdout: &[u8]) -> &'static str {
+    const UNKNOWN: &str = "source_baseline_worker_failed";
+    if harness_stdout.len() > 32 * 1024 {
+        return UNKNOWN;
+    }
+    let Ok(harness) = serde_json::from_slice::<serde_json::Value>(harness_stdout) else {
+        return UNKNOWN;
+    };
+    if harness["timed_out"] == true || harness["status"] == "timeout" {
+        return "source_baseline_worker_timeout";
+    }
+    if harness["status"] != "failed" {
+        return UNKNOWN;
+    }
+    if harness["exit_code"].as_i64() == Some(-24) {
+        // SIGXCPU: existing CPU cap; never increase it in response.
+        return "source_baseline_worker_cpu_limit";
+    }
+    if matches!(harness["exit_code"].as_i64(), Some(-9 | -11 | -25)) {
+        return "source_baseline_worker_terminated";
+    }
+    let Some(tail) = harness["stderr_tail"].as_str() else {
+        return UNKNOWN;
+    };
+    if tail.len() > 4096 {
+        return UNKNOWN;
+    }
+    match tail.lines().last().unwrap_or("") {
+        "chaptera: source_baseline_editor_legacy_low_text" => {
+            "source_baseline_editor_legacy_low_text"
+        }
+        "chaptera: source_baseline_editor_legacy_quill" => {
+            "source_baseline_editor_legacy_quill"
+        }
+        "chaptera: source_baseline_editor_mature_2c" => {
+            "source_baseline_editor_mature_2c"
+        }
+        "chaptera: source_baseline_editor_unknown" => {
+            "source_baseline_editor_unknown"
+        }
+        "chaptera: source_baseline_editor_assets" => {
+            "source_baseline_editor_assets"
+        }
+        "chaptera: source_baseline_sandbox_failed" => {
+            "source_baseline_worker_sandbox_failed"
+        }
+        _ => UNKNOWN,
     }
 }
 
@@ -630,7 +685,19 @@ pub fn run_source_baseline_worker(
     let editor = PubEditorReplayEngine;
     let project: EditorProject = editor
         .baseline_project(&source_bytes, expected_source_sha256)
-        .map_err(|error| SourceBaselineError::new(error.code, error.message))?;
+        .map_err(|error| {
+            let code = match error.code {
+                "editor_source_unsupported" => match classify_pub_family(&source_bytes).route {
+                    PubReaderRoute::Legacy22LowText => "source_baseline_editor_legacy_low_text",
+                    PubReaderRoute::Legacy22Quill => "source_baseline_editor_legacy_quill",
+                    PubReaderRoute::Mature2c => "source_baseline_editor_mature_2c",
+                    PubReaderRoute::Unsupported => "source_baseline_editor_unknown",
+                },
+                "editor_asset_replay_unsupported" => "source_baseline_editor_assets",
+                _ => "source_baseline_worker_failed",
+            };
+            SourceBaselineError::new(code, "isolated editor could not admit the verified PUB")
+        })?;
     let project_source = project.source_hash.to_string();
     if project_source != expected_source_sha256 {
         return Err(SourceBaselineError::new(
@@ -808,6 +875,59 @@ mod tests {
 
     const DOCUMENT_ID: &str = "9c2f8d5e-3f1b-4a57-9d40-6a7e2c11b001";
     const SOURCE_SHA: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
+
+    #[test]
+    fn failed_worker_emits_only_fixed_source_neutral_baseline_codes() {
+        for code in [
+            "source_baseline_editor_legacy_low_text",
+            "source_baseline_editor_legacy_quill",
+            "source_baseline_editor_mature_2c",
+            "source_baseline_editor_unknown",
+            "source_baseline_editor_assets",
+            "source_baseline_worker_sandbox_failed",
+        ] {
+            let worker_code = if code == "source_baseline_worker_sandbox_failed" {
+                "source_baseline_sandbox_failed"
+            } else {
+                code
+            };
+            let output = json!({
+                "status": "failed",
+                "exit_code": 1,
+                "timed_out": false,
+                "stderr_tail": format!("chaptera: {worker_code}")
+            })
+            .to_string();
+            assert_eq!(classify_isolated_baseline_failure(output.as_bytes()), code);
+        }
+    }
+
+    #[test]
+    fn failed_worker_never_exposes_untrusted_stderr_or_fake_success() {
+        for output in [
+            "{}".to_owned(),
+            json!({"status":"failed","exit_code":1,"stderr_tail":"private PUB filename"}).to_string(),
+            json!({"status":"success","exit_code":0,
+                "stderr_tail":"chaptera: source_baseline_editor_legacy_quill"}).to_string(),
+            json!({"status":"failed","exit_code":1,"stderr_tail":
+                "chaptera: source_baseline_editor_legacy_quill\nprivate raw text"}).to_string(),
+        ] {
+            assert_eq!(
+                classify_isolated_baseline_failure(output.as_bytes()),
+                "source_baseline_worker_failed"
+            );
+        }
+        let cpu = json!({"status":"failed","exit_code":-24,"timed_out":false}).to_string();
+        assert_eq!(
+            classify_isolated_baseline_failure(cpu.as_bytes()),
+            "source_baseline_worker_cpu_limit"
+        );
+        let timed = json!({"status":"timeout","exit_code":-9,"timed_out":true}).to_string();
+        assert_eq!(
+            classify_isolated_baseline_failure(timed.as_bytes()),
+            "source_baseline_worker_timeout"
+        );
+    }
 
     #[test]
     fn sample_newsletter_baseline_matches_existing_web_and_authoring_goldens() {
