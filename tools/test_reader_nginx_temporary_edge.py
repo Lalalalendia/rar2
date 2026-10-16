@@ -29,7 +29,7 @@ BASE = "/v1/editor/temporary-sessions"
 GUEST_API = [
     BASE, BASE + "/" + SID,
     *(BASE + "/" + SID + "/" + part for part in (
-        "current", "scene", "move-node", "create-shape",
+        "current", "scene", "move-node", "create-shape", "create-textbox",
         "exports/idml", "exports/odg", "exports/pdf",
     )),
 ]
@@ -44,6 +44,7 @@ BLOCKED = [
     "/v1/auth/session",
     "/v1/editor/temporary-sessions/" + "b" * 32,
     BASE + "/" + SID + "/other",
+    BASE + "/" + SID + "/create-textbox/extra",
     BASE + "/" + SID + "/exports/unknown",
     BASE + "/" + SID + "/exports/idml/extra",
     BASE + "/" + SID + "/../../projects",
