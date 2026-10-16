@@ -1,4 +1,4 @@
-name: PR2790 exact-EMU authored Rectangle oracle (synthetic)
+name: PR2790 exact-EMU authored Rectangle oracle (synthetic and pinned real PUB)
 
 on:
   push:
@@ -94,7 +94,8 @@ jobs:
           mkdir -p "$PR2790_GEOMETRY_DIR"
           cargo --version
           cargo test --manifest-path vendor/producer-a/Cargo.toml \
-            -p pub-editor --test pr2790_export_gap_v1 -- --nocapture
+            -p pub-editor --test pr2790_export_gap_v1 \
+            actual_chaptera_adapters_export_three_shapes_and_overlay_move_gap_is_confirmed -- --exact --nocapture
           python3 - "$PR2790_GEOMETRY_DIR/gap.json" <<'PY'
           import json,sys
           with open(sys.argv[1],encoding='utf-8') as f:
@@ -115,6 +116,55 @@ jobs:
             echo 'The current authored-shapes MoveNodes replay gap was reproduced as an expected fail-closed diagnostic.'
             echo 'Real Chaptera-exported IDML and ODG packages passed the 3-shape exact-EMU oracle at baseline.'
             echo '**This is NOT a passing MoveNodes implementation or real PUB/Chromium acceptance.**'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fetch pinned public Apache POI original Publisher fixture
+        env:
+          PR2790_PUBLIC_REAL_PUB: ${{ runner.temp }}/pr2790-public-source/SampleNewsletter.pub
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PR2790_PUBLIC_REAL_PUB")"
+          curl --fail --location --retry 4 --retry-delay 2 --max-time 60 \
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" \
+            --output "$PR2790_PUBLIC_REAL_PUB"
+          printf '%s  %s\n' \
+            '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf' \
+            "$PR2790_PUBLIC_REAL_PUB" | sha256sum -c -
+          test "$(stat -c %s "$PR2790_PUBLIC_REAL_PUB")" -eq 291840
+
+      - name: Reopen original pinned PUB, replay three rectangles, export real IDML and ODG
+        env:
+          PR2790_PUBLIC_REAL_PUB: ${{ runner.temp }}/pr2790-public-source/SampleNewsletter.pub
+          PR2790_GEOMETRY_DIR: ${{ runner.temp }}/pr2790-adapter
+          CARGO_INCREMENTAL: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --test pr2790_export_gap_v1 \
+            pinned_public_real_pub_three_shapes_replay_and_export -- --exact --nocapture
+          python3 - "$PR2790_GEOMETRY_DIR/gap-real.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          d=json.loads(Path(sys.argv[1]).read_text())
+          assert d['source_sha256']=='6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf'
+          assert d['status']=='GAP_CONFIRMED' and d['canonical_project_replay'] is True
+          assert d['create_undo_redo'] is True and d['created_shapes']==3
+          assert d['author_created_move_nodes_implemented'] is False
+          PY
+          for target in idml odg; do
+            python3 tools/verify_temporary_guest_move_nodes_export.py \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-real.$target" \
+              --target "$target" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-real-baseline.json" \
+              --source "$PR2790_PUBLIC_REAL_PUB" \
+              | tee "$PR2790_GEOMETRY_DIR/$target-real-adapter-receipt.json"
+          done
+          {
+            echo '## Original SHA-pinned public PUB acceptance (before MoveNodes)'
+            echo 'Actual publisher reader, canonical 3xCreateShape project replay, 3x Undo/Redo and IDML/ODG adapter package exact geometry verified.'
+            echo '**Authored MoveNodes remains intentionally proven unsupported; no Guest browser mutation claimed.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install native file consumers
@@ -156,6 +206,34 @@ jobs:
             echo '**No real source PUB, changed MoveNodes or browser mutation was exercised.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify real-source authored rectangles in native Scribus and LibreOffice
+        env:
+          PR2790_GEOMETRY_DIR: ${{ runner.temp }}/pr2790-adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in idml odg; do
+            python3 tools/ci/pr2790_native_shape_probe.py \
+              --artifact "$PR2790_GEOMETRY_DIR/actual-real.$target" \
+              --target "$target" \
+              --witness "$PR2790_GEOMETRY_DIR/witness-real-baseline.json" \
+              | tee "$PR2790_GEOMETRY_DIR/$target-real-native-receipt.json"
+            python3 - "$PR2790_GEOMETRY_DIR/$target-real-native-receipt.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1], encoding='utf-8') as f:
+              d=json.load(f)
+          assert d['status']=='PASS' and d['geometry_exact_emu'] is True
+          assert d['source_sha256']=='6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf'
+          assert d['verified_shape_count']==3 and d['individual_native_shape_retention_verified'] is True
+          assert d['native_document_reopen']['matched_shape_count']==3
+          assert d['native_document_reopen']['matching_tolerance_emu']==12700
+          PY
+          done
+          {
+            echo 'Imported pinned-real-PUB Chaptera exports in Scribus/LibreOffice: separate three authored rectangles survive third-party serialization.'
+            echo '**Strict 1-EMU geometry comes from original Chaptera packages, never from rounded third-party native placements.**'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload source-free synthetic and real-adapter receipts
         uses: actions/upload-artifact@v4
         with:
@@ -168,5 +246,11 @@ jobs:
             ${{ runner.temp }}/pr2790-adapter/odg-adapter-receipt.json
             ${{ runner.temp }}/pr2790-adapter/idml-native-receipt.json
             ${{ runner.temp }}/pr2790-adapter/odg-native-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/witness-real-baseline.json
+            ${{ runner.temp }}/pr2790-adapter/gap-real.json
+            ${{ runner.temp }}/pr2790-adapter/idml-real-adapter-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/odg-real-adapter-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/idml-real-native-receipt.json
+            ${{ runner.temp }}/pr2790-adapter/odg-real-native-receipt.json
           if-no-files-found: error
           retention-days: 7
