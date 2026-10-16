@@ -624,9 +624,34 @@ try {
   // session by clicking the actual user Delete button. 204 is not simulated.
   page.once("dialog", dialog => dialog.accept());
   await page.locator("#temporary-delete").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#temporary-status")?.textContent.includes(
-      "Сессия удалена с сервера"), null, {timeout:45000});
+  // A rejected DELETE is not a timeout or success. Report only bounded
+  // response status codes and an allowlisted UI state, never source data,
+  // bearer, session identity, path or page text.
+  const deleteEvidence = async () => {
+    const message = await page.locator("#temporary-status").textContent().catch(() => null);
+    const uiState = message?.includes("Сессия удалена с сервера") ? "confirmed"
+      : message?.includes("Удаление не подтверждено сервером") ? "unconfirmed"
+      : message?.includes("Удаляется временная сессия") ? "pending" : "other";
+    const requests = observed.requests.filter(x =>
+      x.method === "DELETE" && /^\\/v1\\/editor\\/temporary-sessions\\/tempedit:[0-9a-f]{32}$/.test(x.path));
+    const statuses = observed.responses.filter(x =>
+      x.path === "/v1/editor/temporary-sessions/{session}").map(x => x.status);
+    return JSON.stringify({ui_state: uiState, delete_requests: requests.length,
+      delete_http_statuses: statuses});
+  };
+  try {
+    await page.waitForFunction(() => {
+      const message = document.querySelector("#temporary-status")?.textContent ?? "";
+      return message.includes("Сессия удалена с сервера") ||
+        message.includes("Удаление не подтверждено сервером");
+    }, null, {timeout:45000});
+  } catch {
+    throw Error("real browser DELETE terminal receipt absent: " + await deleteEvidence());
+  }
+  const deleteState = await page.locator("#temporary-status").textContent();
+  if (!deleteState?.includes("Сессия удалена с сервера")) {
+    throw Error("real browser DELETE not confirmed: " + await deleteEvidence());
+  }
   const deletedBase = "/v1/editor/temporary-sessions/" + oldHead.document_id;
   assert.equal(observed.requests.filter(x =>
     x.path === deletedBase && x.method === "DELETE").length,1,
