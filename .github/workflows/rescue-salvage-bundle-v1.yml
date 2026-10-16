@@ -1,0 +1,69 @@
+name: Rescue Salvage Bundle V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_salvage_bundle_v1.py'
+      - 'tools/test_rescue_salvage_bundle_v1.py'
+      - '.github/workflows/rescue-salvage-bundle-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  local-bundle:
+    name: source-safe-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit contracts and independently verified physical CFB replay
+        shell: bash
+        run: |
+          python -m unittest tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity -v
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          from tools.test_rescue_cfb_stream_identity import collision_fixture
+          from tools.rescue_salvage_bundle_v1 import UnsafeInput, execute, read_bundle_report, sha_file
+          with tempfile.TemporaryDirectory() as directory:
+              root = Path(directory)
+              source = root / 'physical-source.pub'
+              data = collision_fixture()
+              source.write_bytes(data)
+              out = root / 'out'
+              status, report = execute(source, out, retain_original=True)
+              assert status == 'created'
+              assert report['physical']['status'] == 'verified'
+              assert report['physical']['stream_count'] == 2
+              assert report['text']['status'] == 'not_implemented'
+              assert report['source_immutable'] is True
+              assert source.read_bytes() == data
+              _, reused = execute(source, out, retain_original=True)
+              assert reused == report
+              bundle = out / sha_file(source)
+              paths = sorted((bundle / 'physical' / 'streams').iterdir())
+              assert len(paths) == 2 and paths[0].name != paths[1].name
+              paths[0].write_bytes(b'corrupted artifact')
+              try:
+                  read_bundle_report(source, bundle, 30)
+              except UnsafeInput:
+                  pass
+              else:
+                  raise AssertionError('tamper was not rejected')
+              assert source.read_bytes() == data
+              print({'fixture_sha256': sha_file(source), 'streams_verified': 2,
+                     'reuse': True, 'tamper_fail_closed': True, 'source_immutable': True})
+          PY
