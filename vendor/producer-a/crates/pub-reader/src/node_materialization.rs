@@ -637,34 +637,33 @@ pub(super) fn materialize_mature_nodes(
                 ReadConfidence::Exact,
             ));
         }
-        if paint_context_uses_officeart_scheme_color(shape, dgg_defaults) {
-            if let Some(color_scheme) = color_scheme {
-                source_refs.push(source_ref(
-                    &graph.source,
-                    &color_scheme.scheme.source,
-                    Some(contents_object_key(color_scheme.seq_num)),
-                    Some("OplSccm/current-color-scheme".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
+        if paint_context_uses_officeart_scheme_color(shape, dgg_defaults)
+            && let Some(color_scheme) = color_scheme
+        {
+            source_refs.push(source_ref(
+                &graph.source,
+                &color_scheme.scheme.source,
+                Some(contents_object_key(color_scheme.seq_num)),
+                Some("OplSccm/current-color-scheme".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
         }
         if effective_paint
             .as_ref()
             .is_some_and(effective_paint_has_dgg_authority)
+            && let Some(dgg_defaults) = dgg_defaults
         {
-            if let Some(dgg_defaults) = dgg_defaults {
-                source_refs.push(source_ref(
-                    &graph.source,
-                    &dgg_defaults.source,
-                    Some("escher/dgg/default-options".into()),
-                    Some("DggContainer/FOPT-defaults".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ));
-            }
+            source_refs.push(source_ref(
+                &graph.source,
+                &dgg_defaults.source,
+                Some("escher/dgg/default-options".into()),
+                Some("DggContainer/FOPT-defaults".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
         }
         for (depth, span) in grouped_sources.iter().enumerate() {
             source_refs.push(source_ref(

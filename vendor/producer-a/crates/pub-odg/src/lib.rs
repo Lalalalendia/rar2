@@ -377,10 +377,11 @@ fn validate_written_odg(bytes: &[u8]) -> Result<(), OdgWriteError> {
 
     {
         let mut mimetype = archive.by_index(0)?;
-        if mimetype.name() != ODG_MIMETYPE_PATH {
+        let first_name = mimetype.name()?.into_owned();
+        if first_name != ODG_MIMETYPE_PATH {
             return Err(OdgWriteError::InvalidWrittenArchive(format!(
                 "first entry is {}, expected mimetype",
-                mimetype.name()
+                first_name
             )));
         }
         if mimetype.compression() != CompressionMethod::Stored {
@@ -494,7 +495,14 @@ mod tests {
         assert_eq!(first, second);
 
         let mut archive = ZipArchive::new(Cursor::new(first)).unwrap();
-        assert_eq!(archive.by_index(0).unwrap().name(), ODG_MIMETYPE_PATH);
+        assert_eq!(
+            archive
+                .by_index(0)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            ODG_MIMETYPE_PATH
+        );
         assert!(archive.by_name(ODG_MANIFEST_PATH).is_ok());
         assert!(archive.by_name(ODG_CONTENT_PATH).is_ok());
     }

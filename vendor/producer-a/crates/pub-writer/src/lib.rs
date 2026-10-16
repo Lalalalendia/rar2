@@ -495,7 +495,7 @@ fn boundary_splits_surrogate(units: &[u16], boundary: usize) -> bool {
 }
 
 fn utf16le_units(bytes: &[u8]) -> Result<Vec<u16>, String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err("Quill Story содержит нечётное число UTF-16LE байтов".into());
     }
     Ok(bytes

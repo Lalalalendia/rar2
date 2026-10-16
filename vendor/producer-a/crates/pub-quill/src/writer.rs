@@ -949,7 +949,7 @@ fn changed_ranges(stream: StreamPath, before: &[u8], after: &[u8]) -> Vec<RawSpa
 }
 
 fn utf16_units(bytes: &[u8]) -> Result<Vec<u16>, QuillStoryWriteError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(QuillStoryWriteError::OutputValidationFailed(
             "odd UTF-16LE byte count".into(),
         ));

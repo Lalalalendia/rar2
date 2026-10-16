@@ -111,7 +111,7 @@ pub(super) fn materialize_story_catalogs(
 }
 
 pub(super) fn decode_utf16le_strict(bytes: &[u8]) -> Result<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bail!("UTF-16LE byte length is odd: {}", bytes.len());
     }
     let units = bytes

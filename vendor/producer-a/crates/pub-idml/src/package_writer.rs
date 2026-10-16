@@ -188,10 +188,11 @@ fn validate_written_ucf(bytes: &[u8]) -> Result<(), IdmlPackageWriteError> {
 
     {
         let mut first = archive.by_index(0)?;
-        if first.name() != IDML_MIMETYPE_PATH {
+        let first_name = first.name()?.into_owned();
+        if first_name != IDML_MIMETYPE_PATH {
             return Err(IdmlPackageWriteError::InvalidWrittenArchive(format!(
                 "first entry is {}, expected mimetype",
-                first.name()
+                first_name
             )));
         }
         if first.compression() != CompressionMethod::Stored {
@@ -275,7 +276,10 @@ mod tests {
         assert_eq!(archive.len(), 5);
 
         let mut mimetype = archive.by_index(0).expect("mimetype at index zero");
-        assert_eq!(mimetype.name(), IDML_MIMETYPE_PATH);
+        assert_eq!(
+            mimetype.name().expect("decode emitted ZIP entry name"),
+            IDML_MIMETYPE_PATH
+        );
         assert_eq!(mimetype.compression(), CompressionMethod::Stored);
         let mut mime_text = String::new();
         mimetype.read_to_string(&mut mime_text).unwrap();
@@ -303,14 +307,46 @@ mod tests {
         let bytes = write_idml_ucf(&logical).expect("write sorted package");
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
 
-        assert_eq!(archive.by_index(0).unwrap().name(), "mimetype");
         assert_eq!(
-            archive.by_index(1).unwrap().name(),
+            archive
+                .by_index(0)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            "mimetype"
+        );
+        assert_eq!(
+            archive
+                .by_index(1)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
             "META-INF/container.xml"
         );
-        assert_eq!(archive.by_index(2).unwrap().name(), "a.xml");
-        assert_eq!(archive.by_index(3).unwrap().name(), "designmap.xml");
-        assert_eq!(archive.by_index(4).unwrap().name(), "z.xml");
+        assert_eq!(
+            archive
+                .by_index(2)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            "a.xml"
+        );
+        assert_eq!(
+            archive
+                .by_index(3)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            "designmap.xml"
+        );
+        assert_eq!(
+            archive
+                .by_index(4)
+                .unwrap()
+                .name()
+                .expect("decode emitted ZIP entry name"),
+            "z.xml"
+        );
     }
 
     #[test]

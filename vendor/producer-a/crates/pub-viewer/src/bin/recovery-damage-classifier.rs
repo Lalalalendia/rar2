@@ -1,12 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_reader::reader_evidence_disposition;
 use pub_viewer::{
-    build_reader_partial_source_graph, classify_failure_candidate, classify_pub_family,
-    open_pub_or_salvage, probe_reader_salvage_candidate,
-    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
     FailureIntakeClass, ReaderPartialSourceFact, ReaderPartialSourceGap,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageTrigger,
-    ViewerProductOpenOutcome,
+    ViewerProductOpenOutcome, build_reader_partial_source_graph, classify_failure_candidate,
+    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
+    probe_reader_salvage_candidate_with_trigger, viewer_geometry_environment_v0_1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -340,10 +339,10 @@ fn load_rescue_evidence(path: Option<&Path>) -> Result<BTreeMap<String, RescueEv
                 row.product_validation_sha256.as_deref(),
             ),
         ] {
-            if let Some(digest) = digest {
-                if !is_sha256_hex(digest) {
-                    bail!("invalid rescue evidence {field} {digest:?} for {sha}");
-                }
+            if let Some(digest) = digest
+                && !is_sha256_hex(digest)
+            {
+                bail!("invalid rescue evidence {field} {digest:?} for {sha}");
             }
         }
         if row.fabricated_bytes.is_some_and(|value| value != 0) {
@@ -479,10 +478,10 @@ fn classify(bytes: &[u8], rescue_evidence: Option<&RescueEvidenceRow>) -> Classi
                 source_modified: false,
             };
             // A repair receipt never overrides an ordinary successful Reader open.
-            if let Some(evidence) = rescue_evidence {
-                if evidence.promotion_gap.is_some() {
-                    row.promotion_gap = evidence.promotion_gap.clone();
-                }
+            if let Some(evidence) = rescue_evidence
+                && evidence.promotion_gap.is_some()
+            {
+                row.promotion_gap = evidence.promotion_gap.clone();
             }
             row
         }
