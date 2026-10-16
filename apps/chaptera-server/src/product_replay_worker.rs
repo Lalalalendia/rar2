@@ -15,7 +15,8 @@ use std::{
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
-    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, EditOperation,
+    AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, AuthoredSolidFillV1,
+    AuthoredSolidStrokeV1, EditOperation, validate_authored_shape_runtime_v1,
     EditorEditableTarget, EditorProject, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, Srgb8V1,
     StoryId, open_mature_0x2c_editor,
 };
@@ -2031,6 +2032,96 @@ pub fn run_product_replay_worker(
 
 /// Production-side adapter. Inputs are selected and authorized by the main
 /// server; this adapter never resolves tenant, blob IDs, or access grants.
+
+/// Independently validate the source-neutral authored Rectangle state admitted
+/// by an exact canonical base project. This is a HOST receipt verifier, not a
+/// second geometry/mutation authority: EditorSession remains the sole writer.
+///
+/// Source graph.nodes contains imported nodes only. We therefore reconstruct
+/// current authored bounds exclusively from the *authorized base project's*
+/// CreateShape and prior MoveNodes operations, never from an untrusted scene.
+fn verified_authored_move_nodes_inputs_v1(
+    project: &EditorProject,
+    page_id: PageId,
+    admitted: &std::collections::BTreeSet<NodeId>,
+) -> Result<std::collections::BTreeMap<NodeId, RectEmu>, ProductReplayWorkerError> {
+    let invalid = || ProductReplayWorkerError::new(
+        "product_replay_receipt_invalid",
+        "MoveNodes selected Rectangle history is not canonical author-created geometry",
+    );
+    let mut shapes = std::collections::BTreeMap::<NodeId, AuthoredShapeRuntimeV1>::new();
+    for operation in &project.operations {
+        match operation {
+            EditOperation::CreateShape {
+                node_id, page_id: created_page, parent_id, shape_kind, bounds,
+                transform, paint, provenance,
+            } if admitted.contains(node_id) => {
+                let shape = AuthoredShapeRuntimeV1 {
+                    node_id: *node_id, page_id: *created_page, parent_id: *parent_id,
+                    shape_kind: *shape_kind, bounds: *bounds,
+                    transform: *transform, paint: paint.clone(), provenance: *provenance,
+                };
+                if *created_page != page_id
+                    || validate_authored_shape_runtime_v1(&shape).is_err()
+                    || shapes.insert(*node_id, shape).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
+            EditOperation::MoveNodes { page_id: moved_page, entries }
+                if entries.iter().any(|entry| admitted.contains(&entry.node_id)) =>
+            {
+                if *moved_page != page_id {
+                    return Err(invalid());
+                }
+                // Verify the whole relevant batch before applying any delta.
+                let mut seen = std::collections::BTreeSet::new();
+                for entry in entries {
+                    if !admitted.contains(&entry.node_id) {
+                        continue;
+                    }
+                    if !seen.insert(entry.node_id) {
+                        return Err(invalid());
+                    }
+                    let shape = shapes.get(&entry.node_id).ok_or_else(invalid)?;
+                    if shape.bounds != entry.before
+                        || entry.before == entry.after
+                        || entry.before.width != entry.after.width
+                        || entry.before.height != entry.after.height
+                    {
+                        return Err(invalid());
+                    }
+                    let mut candidate = shape.clone();
+                    candidate.bounds = entry.after;
+                    if validate_authored_shape_runtime_v1(&candidate).is_err() {
+                        return Err(invalid());
+                    }
+                }
+                for entry in entries {
+                    if admitted.contains(&entry.node_id) {
+                        shapes.get_mut(&entry.node_id)
+                            .ok_or_else(invalid)?.bounds = entry.after;
+                    }
+                }
+            }
+            EditOperation::MoveNode { node_id, .. }
+            | EditOperation::ResizeNode { node_id, .. }
+            | EditOperation::DeleteNode { node_id, .. }
+                if admitted.contains(node_id) => return Err(invalid()),
+            EditOperation::ResizeNodes { entries, .. }
+                if entries.iter().any(|entry| admitted.contains(&entry.node_id)) =>
+            {
+                return Err(invalid());
+            }
+            _ => {}
+        }
+    }
+    if shapes.len() != admitted.len() {
+        return Err(invalid());
+    }
+    Ok(shapes.into_iter().map(|(id, shape)| (id, shape.bounds)).collect())
+}
+
 #[derive(Clone)]
 pub struct IsolatedProductReplayProducer {
     config: SourceBaselineProducerConfig,
@@ -2503,36 +2594,46 @@ impl IsolatedProductReplayProducer {
             ));
         }
         let graph = require_typed_graph(receipt.authoring_graph)?;
-        // The host does not parse source PUB. Reconstruct the source-neutral
-        // BEFORE geometry from the checked batch entries and the unchanged
-        // selected nodes in the exact AFTER graph; then recompute the same
-        // pure EMU law. A compromised worker must not choose arbitrary moves.
+        let source_page = graph.pages.get(page_id).ok_or_else(|| {
+            ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes source page is absent from verified graph",
+            )
+        })?;
+        if admitted.iter().any(|id| graph.nodes.contains_key(id)) {
+            return Err(ProductReplayWorkerError::new(
+                "product_replay_receipt_invalid",
+                "MoveNodes attempted to impersonate a source-backed graph node",
+            ));
+        }
+        // Canonical source-created shape state comes from the exact authorized
+        // BEFORE project, never the unchanged imported graph or browser scene.
+        let bounds_by_id =
+            verified_authored_move_nodes_inputs_v1(base_project, *page_id, &admitted)?;
         let mut source_members = Vec::with_capacity(admitted.len());
         for node_id in &admitted {
-            let node = graph.nodes.get(node_id).ok_or_else(|| {
+            let bounds = bounds_by_id.get(node_id).ok_or_else(|| {
                 ProductReplayWorkerError::new(
                     "product_replay_receipt_invalid",
-                    "MoveNodes receipt omits one of the selected nodes",
+                    "MoveNodes omitted one of the selected authored rectangles",
                 )
             })?;
-            if node.header.parent_id != page_id.into_canonical() {
+            if bounds.x.get() < 0 || bounds.y.get() < 0
+                || bounds.right().is_none_or(|x| x.get() > source_page.size.width.get())
+                || bounds.bottom().is_none_or(|y| y.get() > source_page.size.height.get())
+            {
                 return Err(ProductReplayWorkerError::new(
                     "product_replay_receipt_invalid",
-                    "MoveNodes receipt contains a cross-page selected node",
+                    "MoveNodes authored Rectangle lies outside its verified source page",
                 ));
             }
-            let before = entries
-                .iter()
-                .find(|entry| entry.node_id == *node_id)
-                .map(|entry| entry.before)
-                .unwrap_or(node.header.bounds);
             source_members.push(crate::exact_emu_align_distribute_v1::Member {
                 node_id: node_id.as_canonical().to_string(),
                 bounds: crate::exact_emu_align_distribute_v1::RectEmu {
-                    x: before.x.get(),
-                    y: before.y.get(),
-                    width: before.width.get(),
-                    height: before.height.get(),
+                    x: bounds.x.get(),
+                    y: bounds.y.get(),
+                    width: bounds.width.get(),
+                    height: bounds.height.get(),
                 },
             });
         }
@@ -2569,19 +2670,19 @@ impl IsolatedProductReplayProducer {
                 ));
             }
         }
+        // There is intentionally no authored Rectangle in graph.nodes.
+        // The independently rebuilt BEFORE state plus exact operation append,
+        // canonical pure geometry law, and worker's full project replay bind
+        // the AFTER bounds without manufacturing a fake imported graph node.
         for entry in entries {
-            let after_node = graph.nodes.get(&entry.node_id).ok_or_else(|| {
-                ProductReplayWorkerError::new(
-                    "product_replay_receipt_invalid",
-                    "MoveNodes receipt is missing an admitted shape",
-                )
-            })?;
-            if after_node.header.parent_id != page_id.into_canonical()
-                || after_node.header.bounds != entry.after
+            if bounds_by_id.get(&entry.node_id) != Some(&entry.before)
+                || entry.after.x.get() < 0 || entry.after.y.get() < 0
+                || entry.after.right().is_none_or(|x| x.get() > source_page.size.width.get())
+                || entry.after.bottom().is_none_or(|y| y.get() > source_page.size.height.get())
             {
                 return Err(ProductReplayWorkerError::new(
                     "product_replay_receipt_invalid",
-                    "MoveNodes projected geometry differs from the canonical operation",
+                    "MoveNodes after-bounds differ from independently verified canonical state",
                 ));
             }
         }

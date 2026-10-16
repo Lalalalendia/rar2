@@ -15,6 +15,8 @@ on:
       - vendor/producer-a/crates/pub-editor/src/lib.rs
       - vendor/producer-a/crates/pub-editor/tests/pr2790_export_gap_v1.rs
       - apps/chaptera-server/src/exact_emu_move_nodes_intent_v1.rs
+      - apps/chaptera-server/src/product_replay_worker.rs
+      - apps/chaptera-server/tests/pr2790_isolated_move_nodes_v1.rs
 
 permissions:
   contents: read
@@ -243,6 +245,15 @@ jobs:
             echo 'Actual PUB reader, canonical CreateShape x3 -> MoveNodes, Undo/Redo and exact moved IDML/ODG verified.'
             echo '**Candidate MoveNodes succeeded; Guest browser is not verified.**'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test real Publisher MoveNodes in seccomp worker and independent host verifier
+        env:
+          PR2790_PUBLIC_REAL_PUB: ${{ runner.temp }}/pr2790-public-source/SampleNewsletter.pub
+          CARGO_INCREMENTAL: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server --test pr2790_isolated_move_nodes_v1 -- --nocapture
 
       - name: Install native file consumers
         run: |
