@@ -1,0 +1,89 @@
+name: Rescue Desktop Batch V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_desktop_batch_v1.py'
+      - 'tools/test_rescue_desktop_batch_v1.py'
+      - 'tools/rescue_desktop_batch_v1.md'
+      - '.github/workflows/rescue-desktop-batch-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  batch-engine:
+    name: source-safe-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Source-safe unit tests with actual unsupported PUB worker
+        shell: bash
+        run: |
+          python -m unittest tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity -v
+      - name: Real physical CFB batch, SHA dedup, restart and tamper rejection
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from tools import rescue_desktop_batch_v1 as batch
+          from tools import rescue_salvage_bundle_v1 as salvage
+          from tools.test_rescue_cfb_stream_identity import collision_fixture
+
+          with tempfile.TemporaryDirectory() as t:
+              root = Path(t)
+              inputs = root / 'sources'
+              (inputs / 'nested').mkdir(parents=True)
+              data = collision_fixture()
+              (inputs / 'nested' / 'exact.PUB').write_bytes(data)
+              (inputs / 'duplicate.pub').write_bytes(data)
+              (inputs / 'unsupported.pub').write_bytes(b'not a CFB PUB')
+              output = root / 'out'
+              scanned = batch.scan([inputs], output)
+              assert scanned['unique_sources'] == 2
+              assert scanned['duplicate_paths'] == 1
+              assert scanned['counts'] == {'pending': 2}
+              observed = batch.run(output, workers=2, timeout=30, file_timeout=180)
+              assert observed['counts'] == {'done_partial': 1, 'done_unsupported': 1}, observed
+              assert all(row['attempts'] == 1 for row in observed['entries'])
+              for row in observed['entries']:
+                  bundle = output / 'bundles' / row['sha256']
+                  private = batch.load_queue(output)
+                  source = Path(next(v['paths'][0] for v in private['entries'] if v['sha256'] == row['sha256']))
+                  actual = salvage.read_bundle_report(source, bundle, 30)
+                  assert actual['source_immutable'] is True
+                  if row['status'] == 'done_partial':
+                      assert actual['physical']['stream_count'] == 2
+              assert (inputs / 'duplicate.pub').read_bytes() == data
+              assert (inputs / 'nested' / 'exact.PUB').read_bytes() == data
+              previous = batch.run(output, workers=2, timeout=30)
+              assert {r['attempts'] for r in previous['entries']} == {1}
+              raw_bundle = output / 'bundles' / salvage.sha_file(inputs / 'duplicate.pub')
+              stream = next((raw_bundle / 'physical' / 'streams').iterdir())
+              stream.write_bytes(b'altered')
+              detected = batch.run(output, workers=2, timeout=30)
+              assert detected['counts'] == {'done_unsupported': 1, 'failed': 1}
+              assert any(r['reason'] == 'bundle_integrity' for r in detected['entries'])
+              public = (output / 'summary.json').read_text(encoding='utf-8')
+              assert str(inputs) not in public
+              assert 'duplicate.pub' not in public
+              print(json.dumps({'fixture_sha256': salvage.sha_file(inputs / 'duplicate.pub'),
+                                'unique': 2, 'duplicate': 1, 'partial_verified_streams': 2,
+                                'unsupported_reported': 1, 'resume_skipped_done': True,
+                                'tamper_fail_closed': True, 'source_immutable': True}, sort_keys=True))
+          PY
