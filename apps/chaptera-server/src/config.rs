@@ -204,6 +204,10 @@ pub struct CloudReaderGuestRuntimeConfig {
 #[serde(deny_unknown_fields)]
 pub struct CloudReaderFontResourceConfig {
     pub source_family: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
     pub path: PathBuf,
     pub expected_sha256: String,
     #[serde(default)]
@@ -756,7 +760,8 @@ fn validate_cloud_reader_guest(
             "cloud_reader_guest.font_resources must contain at most 16 configured resources",
         ));
     }
-    let mut font_families = BTreeSet::new();
+    let mut font_faces = BTreeSet::new();
+    let mut physical_faces = BTreeSet::new();
     for font in &guest.font_resources {
         let family = font.source_family.trim().to_lowercase();
         if family.is_empty() || family.len() > 128 {
@@ -765,10 +770,10 @@ fn validate_cloud_reader_guest(
                 "configured Reader font source_family must be 1..=128 characters",
             ));
         }
-        if !font_families.insert(family) {
+        if !font_faces.insert((family, font.bold, font.italic)) {
             return Err(ConfigError::new(
                 "cloud_reader_font_family_duplicate",
-                "configured Reader font source_family entries must be unique",
+                "configured Reader font source_family + bold + italic must be unique",
             ));
         }
         if font.path.as_os_str().is_empty() {
@@ -794,10 +799,18 @@ fn validate_cloud_reader_guest(
                 "configured Reader font expected_sha256 must be 64 lowercase hex characters",
             ));
         }
-        if font.face_index > 31 {
+        // The browser FontFace transport currently paints collection face 0
+        // only. A higher TTC/OTC index would falsely claim exact source glyphs.
+        if font.face_index != 0 {
             return Err(ConfigError::new(
                 "cloud_reader_font_face_index_invalid",
-                "configured Reader font face_index must be <=31",
+                "configured Reader browser fonts currently require face_index=0",
+            ));
+        }
+        if !physical_faces.insert((font.expected_sha256.clone(), font.face_index)) {
+            return Err(ConfigError::new(
+                "cloud_reader_font_physical_face_duplicate",
+                "one physical Reader font face cannot claim multiple source family/style identities",
             ));
         }
         if !matches!(font.mime.as_str(), "font/ttf" | "font/otf") {
@@ -1528,6 +1541,68 @@ client_secret = {secret_source}
         config.validate().unwrap();
         assert_eq!(config.environment, EnvironmentMode::Prod);
         assert_eq!(config.runtime_config().listen, DEFAULT_LISTEN);
+    }
+
+    #[test]
+    fn guest_source_font_styles_are_distinct_and_collection_face_is_bounded() {
+        let font_root = if cfg!(windows) {
+            "C:/chaptera/private-fonts"
+        } else {
+            "/var/lib/chaptera/private-fonts"
+        };
+        let prefix = prod_toml(r#"{ source = "env", name = "OIDC_SECRET" }"#);
+        let source = format!(
+            r#"{prefix}
+[cloud_reader_guest]
+session_ttl_seconds = 600
+max_file_bytes = 8388608
+max_concurrent_uploads = 1
+max_reserved_bytes = 8388608
+rate_subject_secret = {{ source = "env", name = "RATE_SECRET" }}
+
+[[cloud_reader_guest.font_resources]]
+source_family = "Example Serif"
+path = "{font_root}/regular.ttf"
+expected_sha256 = "{regular}"
+
+[[cloud_reader_guest.font_resources]]
+source_family = " example SERIF "
+bold = true
+italic = false
+path = "{font_root}/bold.ttf"
+expected_sha256 = "{bold}"
+"#,
+            regular = "a".repeat(64),
+            bold = "b".repeat(64),
+        );
+        let config: ChapteraConfig = toml::from_str(&source).unwrap();
+        config
+            .validate()
+            .expect("one family can provide separate physical styles");
+        let guest = config.cloud_reader_guest.as_ref().unwrap();
+        assert!(!guest.font_resources[0].bold && !guest.font_resources[0].italic);
+        assert!(guest.font_resources[1].bold && !guest.font_resources[1].italic);
+
+        let duplicate_style = source.replace("bold = true", "bold = false");
+        let config: ChapteraConfig = toml::from_str(&duplicate_style).unwrap();
+        assert_eq!(
+            config.validate().unwrap_err().code,
+            "cloud_reader_font_family_duplicate"
+        );
+
+        let duplicate_physical = source.replace(&"b".repeat(64), &"a".repeat(64));
+        let config: ChapteraConfig = toml::from_str(&duplicate_physical).unwrap();
+        assert_eq!(
+            config.validate().unwrap_err().code,
+            "cloud_reader_font_physical_face_duplicate"
+        );
+
+        let nonzero_face = source.replace("bold = true", "bold = true\nface_index = 1");
+        let config: ChapteraConfig = toml::from_str(&nonzero_face).unwrap();
+        assert_eq!(
+            config.validate().unwrap_err().code,
+            "cloud_reader_font_face_index_invalid"
+        );
     }
 
     #[test]
