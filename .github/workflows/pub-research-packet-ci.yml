@@ -72,6 +72,24 @@ jobs:
             }
           }
 
+      - name: Validate AUTH-WRAP offline binding and exact-source preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Hosted checks exercise contract and native-script preflight only.
+          # A green check is never a Publisher COM / format-semantic receipt.
+          python -m unittest discover -s tools/research-runner/tests -p "test_auth_wrap_*_1188.py" -v
+          if ($LASTEXITCODE -ne 0) { throw "AUTH-WRAP offline contract regressions" }
+          $checkoutSha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutSha -notmatch '^[0-9a-f]{40}$') {
+            throw "Invalid exact checked-out commit SHA for hosted preflight"
+          }
+          pwsh -NoProfile -File tools/research-runner/auth_wrap_direct_1188.ps1 `
+            -TrustedCommitSha $checkoutSha `
+            -OutputRoot (Join-Path $env:RUNNER_TEMP 'auth-wrap-check-only-unused') `
+            -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw "AUTH-WRAP offline CheckOnly preflight failed" }
+
       - name: Validate operation algebra fingerprint helper
         shell: pwsh
         run: |
