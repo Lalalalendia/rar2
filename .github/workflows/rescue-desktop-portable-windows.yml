@@ -56,7 +56,7 @@ jobs:
       - name: Prove no installed Python is required for real frozen CFB replay
         shell: pwsh
         run: |
-          python tools/probe_rescue_portable_windows.py --portable-dir dist/rescue-engine
+          python -m tools.probe_rescue_portable_windows --portable-dir dist/rescue-engine
       - name: Label unsigned preview and generate SHA-256 inventory
         shell: pwsh
         run: |
