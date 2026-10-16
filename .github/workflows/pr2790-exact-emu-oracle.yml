@@ -9,6 +9,8 @@ on:
       - .github/workflows/pr2790-exact-emu-oracle.yml
       - tools/verify_temporary_guest_move_nodes_export.py
       - tools/test_verify_temporary_guest_move_nodes_export.py
+      - tools/ci/pr2790_native_shape_probe.py
+      - tools/ci/test_pr2790_native_shape_probe.py
 
 permissions:
   contents: read
@@ -31,10 +33,15 @@ jobs:
           python3 --version
           python3 -m py_compile \
             tools/verify_temporary_guest_move_nodes_export.py \
-            tools/test_verify_temporary_guest_move_nodes_export.py
+            tools/test_verify_temporary_guest_move_nodes_export.py \
+            tools/ci/pr2790_native_shape_probe.py \
+            tools/ci/test_pr2790_native_shape_probe.py
 
       - name: Execute exact-EMU positive and adversarial regressions
         run: python3 -m unittest discover -s tools -p 'test_verify_temporary_guest_move_nodes_export.py' -v
+
+      - name: Verify native shape retention matcher negative controls
+        run: PYTHONPATH=tools/ci:tools python3 -m unittest discover -s tools/ci -p 'test_pr2790_native_shape_probe.py' -v
 
       - name: Check IDML and ODG CLI receipts using synthetic packages
         shell: bash
@@ -123,15 +130,26 @@ jobs:
         run: |
           set -euo pipefail
           for target in idml odg; do
-            python3 tools/verify_temporary_guest_move_nodes_export.py \
+            python3 tools/ci/pr2790_native_shape_probe.py \
               --artifact "$PR2790_GEOMETRY_DIR/actual.$target" \
               --target "$target" \
               --witness "$PR2790_GEOMETRY_DIR/witness-baseline.json" \
-              --native | tee "$PR2790_GEOMETRY_DIR/$target-native-receipt.json"
+              | tee "$PR2790_GEOMETRY_DIR/$target-native-receipt.json"
+            python3 - "$PR2790_GEOMETRY_DIR/$target-native-receipt.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1],encoding='utf-8') as f:
+              receipt=json.load(f)
+          assert receipt['status']=='PASS' and receipt['geometry_exact_emu'] is True
+          assert receipt['individual_native_shape_retention_verified'] is True
+          assert receipt['native_document_reopen']['matched_shape_count']==3
+          assert receipt['native_document_reopen']['matching_tolerance_emu']==12700
+          PY
           done
           {
-            echo 'Genuine Chaptera adapter IDML/ODG archives reopened in Scribus/LibreOffice.'
-            echo '**Native per-object retention is NOT yet verified; native_document_reopen only checks the document as a whole.**'
+            echo 'Genuine Chaptera IDML/ODG archives reopened in Scribus/LibreOffice;'
+            echo 'all three authored shapes matched separate native objects by four bounding-box fields.'
+            echo '**Native geometry uses <= 1 pt import tolerance; package XML exact-EMU check is independent.**'
+            echo '**No real source PUB, changed MoveNodes or browser mutation was exercised.**'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload source-free synthetic and real-adapter receipts
