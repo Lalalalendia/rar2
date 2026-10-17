@@ -1,11 +1,14 @@
 """Source-free cross-platform checks for real Windows pointer probe geometry."""
 import ctypes
 import os
+from pathlib import Path
+import tempfile
 import unittest
 
 from tools.probe_rescue_gui_pointer_windows import (
     Input, KeyInput, MouseInput, OsInput, SCHEMA, slot_coordinates,
-    validate_scanned_source, validate_completed_source, BATCH_REPORT_SCHEMA,
+    validate_scanned_source, validate_completed_source, wait_engine_unlock,
+    BATCH_REPORT_SCHEMA,
 )
 
 
@@ -173,6 +176,25 @@ class CanonicalReportTests(unittest.TestCase):
     def test_zero_attempts_cannot_claim_completed_run(self):
         with self.assertRaisesRegex(AssertionError, "SID streams"):
             validate_completed_source(self.state("done_partial", attempts=0), self.digest)
+
+
+
+class KernelLockGates(unittest.TestCase):
+    def test_free_batch_lock_completes_without_queue_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wait_engine_unlock(root, timeout=0.5)
+            self.assertTrue((root / ".rescue-batch.lock").is_file())
+            self.assertFalse((root / "queue-private.json").exists())
+
+    def test_running_batch_lock_is_not_confused_with_summary_presence(self):
+        from tools.rescue_desktop_batch_v1 import output_lock
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "summary.json").write_text("{}", encoding="utf-8")
+            with output_lock(root):
+                with self.assertRaisesRegex(AssertionError, "did not release"):
+                    wait_engine_unlock(root, timeout=0.15)
 
 
 if __name__ == "__main__":
