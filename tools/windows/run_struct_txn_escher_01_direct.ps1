@@ -19,11 +19,11 @@ $StructuralModule = Join-Path $RepoRoot "vendor/producer-a/crates/pub-reader/src
 $Runtime = Join-Path $RepoRoot "tools/windows/pub-runtime/PubRuntime.psm1"
 $Finalize = Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1"
 
-$ExpectedPacketBlob = "undefined"
-$ExpectedOperationBlob = "undefined"
-$ExpectedHelperSourceBlob = "59f0cc84f2730fb58249800512abbd13f7f75c79"
+$ExpectedPacketBlob = "1fac96af8893f3706746aaf57dd033a82c949c55"
+$ExpectedOperationBlob = "dba3864aa7afc8c52b7406f3f9daee5768bf8796"
+$ExpectedHelperSourceBlob = "f9b066ad36afe8a969f37aba294fced8d3bdc8be"
 $ExpectedStructuralModuleBlob = "50ae3b989446f07e62838f39bef073c4bbea0c33"
-$ExpectedRuntimeBlob = "fed4c890a34d39401d3b5848cc16d1087f862a27"
+$ExpectedRuntimeBlob = "ffd2309b7a44167a4a456441f7abda56c862c0f5"
 $ExpectedFinalizeBlob = "2a97d6f2c8be1265010a744c015ce8d288eb7e75"
 
 function Assert-GitBlob {
