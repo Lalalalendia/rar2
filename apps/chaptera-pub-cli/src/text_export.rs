@@ -82,7 +82,10 @@ fn add_record(
         .context("text_length_overflow")?;
     ensure!(*total_text <= MAX_TOTAL_TEXT_BYTES, "text_total_limit");
     if let (Some(offset), Some(len)) = (carrier_byte_offset, carrier_byte_len) {
-        ensure!(offset.checked_add(len).is_some(), "invalid_source_carrier_range");
+        ensure!(
+            offset.checked_add(len).is_some(),
+            "invalid_source_carrier_range"
+        );
     }
     records.push(StoryEvidence {
         story_key,
@@ -99,8 +102,14 @@ fn add_record(
     Ok(())
 }
 
-fn mature_story_records(graph: &PubSourceGraph, expected_sha: Sha256Digest) -> Result<Vec<StoryEvidence>> {
-    ensure!(graph.source.source_hash == expected_sha, "mature_source_sha_mismatch");
+fn mature_story_records(
+    graph: &PubSourceGraph,
+    expected_sha: Sha256Digest,
+) -> Result<Vec<StoryEvidence>> {
+    ensure!(
+        graph.source.source_hash == expected_sha,
+        "mature_source_sha_mismatch"
+    );
     let mut records = Vec::new();
     let mut total = 0;
     for story in graph.stories.values() {
@@ -141,10 +150,16 @@ fn mature_story_records(graph: &PubSourceGraph, expected_sha: Sha256Digest) -> R
 
 fn salvage_story_records(bytes: &[u8]) -> Result<Vec<StoryEvidence>> {
     let probe = pub_reader::probe_reader_salvage_candidate(bytes);
-    ensure!(probe.eligibility.is_eligible(), "salvage_source_not_eligible");
+    ensure!(
+        probe.eligibility.is_eligible(),
+        "salvage_source_not_eligible"
+    );
     let graph = pub_reader::build_reader_partial_source_graph(bytes, &probe)
         .map_err(|error| anyhow::anyhow!("salvage_graph_not_admitted: {error}"))?;
-    ensure!(graph.source_sha256 == sha256(bytes), "salvage_source_sha_mismatch");
+    ensure!(
+        graph.source_sha256 == sha256(bytes),
+        "salvage_source_sha_mismatch"
+    );
     let mut records = Vec::new();
     let mut total = 0;
     for fact in graph.facts {
@@ -153,7 +168,8 @@ fn salvage_story_records(bytes: &[u8]) -> Result<Vec<StoryEvidence>> {
             utf16_start,
             utf16_end,
             text,
-        } = fact {
+        } = fact
+        {
             if text.is_empty() {
                 continue;
             }
@@ -191,20 +207,26 @@ fn select_story_records(
     };
     ensure!(!records.is_empty(), "no_confirmed_story_text");
     records.sort_by(|a, b| {
-        (&a.story_key, a.utf16_start, a.utf16_end)
-            .cmp(&(&b.story_key, b.utf16_start, b.utf16_end))
+        (&a.story_key, a.utf16_start, a.utf16_end).cmp(&(&b.story_key, b.utf16_start, b.utf16_end))
     });
     let mut previous: Option<&StoryEvidence> = None;
     let mut seen = BTreeSet::new();
     for record in &records {
         ensure!(
-            seen.insert((record.story_key.as_str(), record.utf16_start, record.utf16_end)),
+            seen.insert((
+                record.story_key.as_str(),
+                record.utf16_start,
+                record.utf16_end
+            )),
             "duplicate_story_text_range"
         );
         if let Some(last) = previous
             && last.story_key == record.story_key
         {
-            ensure!(last.utf16_end <= record.utf16_start, "overlapping_story_text_ranges");
+            ensure!(
+                last.utf16_end <= record.utf16_start,
+                "overlapping_story_text_ranges"
+            );
         }
         previous = Some(record);
     }
@@ -227,13 +249,23 @@ fn render_text(records: &[StoryEvidence]) -> Vec<u8> {
     text.into_bytes()
 }
 
-fn assert_matching_existing(output: &Path, expected_json: &[u8], expected_txt: &[u8]) -> Result<()> {
-    ensure!(output.is_dir() && !output.is_symlink(), "untrusted_existing_story_directory");
+fn assert_matching_existing(
+    output: &Path,
+    expected_json: &[u8],
+    expected_txt: &[u8],
+) -> Result<()> {
+    ensure!(
+        output.is_dir() && !output.is_symlink(),
+        "untrusted_existing_story_directory"
+    );
     let mut names = BTreeSet::new();
     for entry in fs::read_dir(output)? {
         let item = entry?;
         let ty = item.file_type()?;
-        ensure!(ty.is_file() && !ty.is_symlink(), "untrusted_existing_story_artifact");
+        ensure!(
+            ty.is_file() && !ty.is_symlink(),
+            "untrusted_existing_story_artifact"
+        );
         names.insert(item.file_name());
     }
     ensure!(
@@ -250,12 +282,20 @@ fn assert_matching_existing(output: &Path, expected_json: &[u8], expected_txt: &
             actual_size == u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             "story_artifact_size_mismatch"
         );
-        ensure!(fs::read(&path)? == bytes, "story_artifact_integrity_mismatch");
+        ensure!(
+            fs::read(&path)? == bytes,
+            "story_artifact_integrity_mismatch"
+        );
     }
     Ok(())
 }
 
-fn commit_story_outputs(admitted: &AdmittedSource, output: &Path, json: &[u8], txt: &[u8]) -> Result<()> {
+fn commit_story_outputs(
+    admitted: &AdmittedSource,
+    output: &Path,
+    json: &[u8],
+    txt: &[u8],
+) -> Result<()> {
     if output.exists() || output.is_symlink() {
         return assert_matching_existing(output, json, txt);
     }
@@ -276,7 +316,10 @@ fn commit_story_outputs(admitted: &AdmittedSource, output: &Path, json: &[u8], t
             .commit_derived_output(&stage.join("stories.txt"), txt)
             .context("commit_private_story_text")?;
         assert_matching_existing(&stage, json, txt)?;
-        ensure!(!output.exists() && !output.is_symlink(), "story_output_collision");
+        ensure!(
+            !output.exists() && !output.is_symlink(),
+            "story_output_collision"
+        );
         fs::rename(&stage, output).context("commit_story_directory")?;
         Ok(())
     })();
@@ -290,13 +333,19 @@ pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
     let admitted = AdmittedSource::open(file).map_err(anyhow::Error::msg)?;
     let bytes = admitted.bytes();
     let source_hash = super::source_sha256(bytes);
-    ensure!(source_hash.to_string() == admitted.sha256(), "source_snapshot_sha_mismatch");
+    ensure!(
+        source_hash.to_string() == admitted.sha256(),
+        "source_snapshot_sha_mismatch"
+    );
     let (mode, records) = select_story_records(bytes, source_hash)?;
 
     // No private filename/path is recorded; these artifacts live only under
     // the operator-selected local output directory.
     let text_bytes = render_text(&records);
-    ensure!(text_bytes.len() <= MAX_TOTAL_TEXT_BYTES + MAX_RECORDS * 150, "story_txt_limit");
+    ensure!(
+        text_bytes.len() <= MAX_TOTAL_TEXT_BYTES + MAX_RECORDS * 150,
+        "story_txt_limit"
+    );
     let manifest = TextEvidence {
         schema_version: SCHEMA,
         source_sha256: source_hash.to_string(),
@@ -309,9 +358,13 @@ pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
         stories_txt_sha256: sha256(&text_bytes),
         stories: records,
     };
-    let mut json_bytes = serde_json::to_vec_pretty(&manifest).context("serialize_story_manifest")?;
+    let mut json_bytes =
+        serde_json::to_vec_pretty(&manifest).context("serialize_story_manifest")?;
     json_bytes.push(b'\n');
-    ensure!(json_bytes.len() <= MAX_JSON_BYTES, "story_manifest_size_limit");
+    ensure!(
+        json_bytes.len() <= MAX_JSON_BYTES,
+        "story_manifest_size_limit"
+    );
     commit_story_outputs(&admitted, output, &json_bytes, &text_bytes)?;
     Ok(manifest.story_count)
 }
@@ -320,12 +373,7 @@ pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
 mod tests {
     use super::*;
 
-    fn admitted_story(
-        story_key: &str,
-        text: &str,
-        start: u32,
-        end: u32,
-    ) -> Result<StoryEvidence> {
+    fn admitted_story(story_key: &str, text: &str, start: u32, end: u32) -> Result<StoryEvidence> {
         let mut rows = Vec::new();
         add_record(
             &mut rows,
