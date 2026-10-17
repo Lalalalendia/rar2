@@ -1,4 +1,6 @@
 mod batch_ui;
+#[cfg(windows)]
+mod engine_job;
 
 use eframe::egui;
 use pub_reader::{FailureIntakeClass, classify_failure_candidate};
