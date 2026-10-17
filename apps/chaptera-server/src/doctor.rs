@@ -30,7 +30,6 @@ pub fn run(state: &AppState) -> Result<(), RuntimeError> {
     }
 }
 
-
 // Operator diagnostics MUST query the already-running production process,
 // never create RuntimePorts::unconfigured() and mistake that snapshot for
 // the readiness of the instance managed by systemd.
@@ -38,7 +37,10 @@ const MAX_DOCTOR_REPLY: usize = 32 * 1024;
 const DOCTOR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn live_error(code: &'static str) -> RuntimeError {
-    RuntimeError::new(code, "live Reader doctor could not prove the running instance")
+    RuntimeError::new(
+        code,
+        "live Reader doctor could not prove the running instance",
+    )
 }
 
 async fn local_json(
@@ -72,10 +74,12 @@ async fn local_json(
         .windows(4)
         .position(|bytes| bytes == b"\r\n\r\n")
         .ok_or_else(|| live_error("doctor_reply_invalid"))?;
-    let headers = std::str::from_utf8(&raw[..header_end])
-        .map_err(|_| live_error("doctor_reply_invalid"))?;
+    let headers =
+        std::str::from_utf8(&raw[..header_end]).map_err(|_| live_error("doctor_reply_invalid"))?;
     let mut lines = headers.split("\r\n");
-    let status_line = lines.next().ok_or_else(|| live_error("doctor_reply_invalid"))?;
+    let status_line = lines
+        .next()
+        .ok_or_else(|| live_error("doctor_reply_invalid"))?;
     let mut fields = status_line.split_whitespace();
     if !matches!(fields.next(), Some("HTTP/1.1" | "HTTP/1.0")) {
         return Err(live_error("doctor_reply_invalid"));
@@ -89,7 +93,8 @@ async fn local_json(
     }
     let mut declared_length = None;
     for line in lines {
-        let (name, value) = line.split_once(':')
+        let (name, value) = line
+            .split_once(':')
             .ok_or_else(|| live_error("doctor_reply_invalid"))?;
         if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err(live_error("doctor_reply_encoding_not_supported"));
@@ -99,8 +104,10 @@ async fn local_json(
                 return Err(live_error("doctor_reply_duplicate_length"));
             }
             declared_length = Some(
-                value.trim().parse::<usize>()
-                    .map_err(|_| live_error("doctor_reply_invalid_length"))?
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| live_error("doctor_reply_invalid_length"))?,
             );
         }
     }
@@ -128,14 +135,19 @@ async fn probe_live(
     }
     let (ready_status, readiness) = local_json(listener, "/ready").await?;
     let (version_status, version) = local_json(listener, "/version").await?;
-    let components = readiness.get("components").and_then(serde_json::Value::as_object);
+    let components = readiness
+        .get("components")
+        .and_then(serde_json::Value::as_object);
     // FirstVDS Guest-Reader needs actual opened RevisionStream and BlobStore.
     // Preserve the server's own required-ports policy for any other profile.
     let essential_ready = ["revision_stream", "blob_store"].iter().all(|name| {
         components
             .and_then(|items| items.get(*name))
             .is_some_and(|component| {
-                component.get("required").and_then(serde_json::Value::as_bool) == Some(true)
+                component
+                    .get("required")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
                     && component.get("ready").and_then(serde_json::Value::as_bool) == Some(true)
             })
     });
@@ -147,7 +159,10 @@ async fn probe_live(
         && version.get("git_sha").and_then(serde_json::Value::as_str) == Some(expected_git_sha)
         && version.get("version").and_then(serde_json::Value::as_str)
             == Some(crate::build_info::BUILD_IDENTITY);
-    Ok(LiveDoctorResult { runtime_ready, release_match })
+    Ok(LiveDoctorResult {
+        runtime_ready,
+        release_match,
+    })
 }
 
 /// Read-only host doctor: the loopback service answers with its real open
@@ -197,12 +212,22 @@ mod live_doctor_tests {
                             "blob_store": {"required": true, "ready": ready}
                         }
                     });
-                    (if ready { "200 OK" } else { "503 Service Unavailable" }, report)
+                    (
+                        if ready {
+                            "200 OK"
+                        } else {
+                            "503 Service Unavailable"
+                        },
+                        report,
+                    )
                 } else if request.starts_with("GET /version ") {
-                    ( "200 OK", serde_json::json!({
-                        "version": crate::build_info::BUILD_IDENTITY,
-                        "git_sha": git_sha
-                    }))
+                    (
+                        "200 OK",
+                        serde_json::json!({
+                            "version": crate::build_info::BUILD_IDENTITY,
+                            "git_sha": git_sha
+                        }),
+                    )
                 } else {
                     panic!("unexpected local Doctor route");
                 };
@@ -220,21 +245,30 @@ mod live_doctor_tests {
     #[tokio::test]
     async fn live_doctor_proves_ready_running_instance_and_exact_release() {
         let address = server(true, crate::build_info::BUILD_GIT_SHA).await;
-        let result = probe_live(address, crate::build_info::BUILD_GIT_SHA).await.unwrap();
-        assert_eq!(result, LiveDoctorResult {
-            runtime_ready: true,
-            release_match: true
-        });
+        let result = probe_live(address, crate::build_info::BUILD_GIT_SHA)
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            LiveDoctorResult {
+                runtime_ready: true,
+                release_match: true
+            }
+        );
     }
 
     #[tokio::test]
     async fn live_doctor_rejects_unready_or_stale_binary() {
         let unready = server(false, crate::build_info::BUILD_GIT_SHA).await;
-        let result = probe_live(unready, crate::build_info::BUILD_GIT_SHA).await.unwrap();
+        let result = probe_live(unready, crate::build_info::BUILD_GIT_SHA)
+            .await
+            .unwrap();
         assert!(!result.runtime_ready);
         assert!(result.release_match);
         let stale = server(true, "0000000000000000000000000000000000000000").await;
-        let result = probe_live(stale, crate::build_info::BUILD_GIT_SHA).await.unwrap();
+        let result = probe_live(stale, crate::build_info::BUILD_GIT_SHA)
+            .await
+            .unwrap();
         assert!(result.runtime_ready);
         assert!(!result.release_match);
     }
