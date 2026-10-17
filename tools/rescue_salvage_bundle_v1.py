@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 
+from tools import rescue_windows_job_guard as job_guard
+
 SCHEMA = "chaptera.rescue-salvage-bundle.v1"
 ASSET_SCHEMA = "pub-assets-v0.1"
 PHYSICAL_SCHEMA = "chaptera.recovery-cfb-stream-export.v1"
@@ -234,6 +236,12 @@ def execute(source: Path, output: Path, *, timeout: int = 45,
             pub_cli: Path | None = None, retain_original: bool = False) -> tuple[str, dict]:
     if not 1 <= timeout <= 3600:
         raise UnsafeInput("invalid_timeout")
+    # Direct salvage CLI must have the same Windows process-tree guard as
+    # the GUI batch engine before starting its own exporter/verifier/pub CLI.
+    try:
+        job_guard.activate()
+    except job_guard.JobGuardUnavailable as exc:
+        raise UnsafeInput("resource_guard_unavailable") from exc
     digest, length = require_source(source, output)
     output.mkdir(parents=True, exist_ok=True)
     target = output / digest

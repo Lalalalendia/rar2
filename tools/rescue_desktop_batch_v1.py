@@ -27,6 +27,7 @@ import time
 import uuid
 
 from tools import rescue_salvage_bundle_v1 as salvage
+from tools import rescue_windows_job_guard as job_guard
 
 SCHEMA = "chaptera.rescue-desktop-batch.v1"
 REPORT_SCHEMA = "chaptera.rescue-desktop-batch-report.v1"
@@ -407,6 +408,13 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
         if not pub_cli.is_file():
             raise BatchError("pub_cli_unavailable")
     with output_lock(output):
+        # The engine must enter a non-breakaway, aggregate-memory-capped
+        # Windows Job before any untrusted child process can be spawned.
+        # Failure is fatal; never fall back to an unfenced worker.
+        try:
+            job_guard.activate()
+        except job_guard.JobGuardUnavailable as exc:
+            raise BatchError("resource_guard_unavailable") from exc
         state = load_queue(output)
         bundle_root = output / "bundles"
         if bundle_root.is_symlink():
