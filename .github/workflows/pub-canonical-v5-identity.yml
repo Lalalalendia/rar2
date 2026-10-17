@@ -1,0 +1,28 @@
+name: PUB canonical V5 formula receipt offline contract
+on:
+  pull_request:
+    paths:
+      - 'tools/notion/canonical_v5_identity_receipt.py'
+      - 'tools/notion/test_canonical_v5_identity_receipt.py'
+      - 'tools/notion/README-canonical-v5-identity.md'
+      - '.github/workflows/pub-canonical-v5-identity.yml'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline tests only (no Notion credentials)
+        run: |
+          python -m py_compile tools/notion/canonical_v5_identity_receipt.py tools/notion/test_canonical_v5_identity_receipt.py
+          python -m unittest discover -s tools/notion -p 'test_canonical_v5_identity_receipt.py' -v
