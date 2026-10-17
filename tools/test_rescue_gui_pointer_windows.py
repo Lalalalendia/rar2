@@ -1,5 +1,6 @@
 """Source-free cross-platform checks for real Windows pointer probe geometry."""
 import ctypes
+from ctypes import wintypes
 import os
 from pathlib import Path
 import tempfile
@@ -122,6 +123,44 @@ class FocusGuardTests(unittest.TestCase):
     def test_global_clipboard_is_not_a_test_dependency(self):
         self.assertFalse(hasattr(OsInput, "clipboard"))
         self.assertFalse(hasattr(OsInput, "field_equals"))
+
+
+class FakeClickUser(FakeUser):
+    def __init__(self, foreground=13, owner=13, cursor=(100, 200)):
+        super().__init__(foreground)
+        self.owner = owner
+        self.cursor = cursor
+
+    def GetCursorPos(self, out):
+        out._obj.x, out._obj.y = self.cursor
+        return 1
+
+    def WindowFromPoint(self, _point):
+        return 31
+
+    def GetAncestor(self, _child, flag):
+        if flag != 2:
+            raise AssertionError("only GA_ROOT is permitted")
+        return self.owner
+
+
+class PointerTargetTests(unittest.TestCase):
+    def driver(self, owner=13, cursor=(100, 200)):
+        driver = OsInput.__new__(OsInput)
+        driver.hwnd = 13
+        driver.user = FakeClickUser(owner=owner, cursor=cursor)
+        return driver
+
+    def test_click_target_belongs_to_rescue_window(self):
+        self.driver()._assert_click_target(wintypes.POINT(100, 200))
+
+    def test_overlay_window_blocks_global_click(self):
+        with self.assertRaisesRegex(RuntimeError, "does not own"):
+            self.driver(owner=99)._assert_click_target(wintypes.POINT(100, 200))
+
+    def test_cursor_drift_blocks_global_click(self):
+        with self.assertRaisesRegex(RuntimeError, "cursor moved"):
+            self.driver(cursor=(101, 200))._assert_click_target(wintypes.POINT(100, 200))
 
 
 class CanonicalReportTests(unittest.TestCase):
