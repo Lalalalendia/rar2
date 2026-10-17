@@ -522,8 +522,11 @@ def require_private_only_origin(origin: str, config_path: pathlib.Path, app_port
             or parsed.username is not None or parsed.password is not None
             or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
         raise AcceptanceError("private expiry origin is not a bare HTTPS origin")
-    with config_path.open("rb") as handle:
-        configured = tomllib.load(handle)
+    try:
+        with config_path.open("rb") as handle:
+            configured = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        raise AcceptanceError("private expiry config cannot be read") from None
     if origin != configured.get("public_origin"):
         raise AcceptanceError("private expiry origin differs from installed config")
     if configured.get("listen") != f"127.0.0.1:{app_port}":
@@ -704,8 +707,8 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="chaptera-private-origin-") as tmp:
         cfg = pathlib.Path(tmp) / "chaptera.toml"
         cfg.write_text(
-            'public_origin = "https://reader.chaptera.online"\\n'
-            'listen = "127.0.0.1:8080"\\n',
+            'public_origin = "https://reader.chaptera.online"\n'
+            'listen = "127.0.0.1:8080"\n',
             encoding="utf-8",
         )
         require_private_only_origin("https://reader.chaptera.online", cfg, 8080)
