@@ -123,6 +123,9 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertNotIn('"chaptera-worker.service"', harness)
         self.assertNotIn('stderr[-800:]', harness)
         self.assertIn('"host acceptance subprocess failed rc=', harness)
+        self.assertIn("private_cleanup_verified = False", harness)
+        self.assertIn("complete = host_operability_complete and private_cleanup_verified", harness)
+        self.assertIn('"host_private_backing_expiry_not_inspected"', harness)
         self.assertIn("common = guest_mutation_headers(origin, csrf)", harness)
         self.assertIn('"origin": origin', harness)
         result = subprocess.run(

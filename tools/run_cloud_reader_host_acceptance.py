@@ -720,16 +720,27 @@ def main() -> int:
                     rollback["restore_restart_ms"] = restore_restart_ms
                     rollback["restored_reader_probe"] = restored_probe
 
-    complete = bool(
+    host_operability_complete = bool(
         args.exercise_restart
         and args.exercise_rollback
         and rollback.get("exercised")
         and rollback.get("restored_current")
     )
+    # This harness exercises host identity, public Reader, restart, rollback
+    # and capacity; it does not independently inspect private quarantine
+    # generations, expired SQLite rows or upload-admission reservations.
+    # Never label #528 FULLY CLOSED merely because host rollback succeeded.
+    private_cleanup_verified = False
+    complete = host_operability_complete and private_cleanup_verified
 
     receipt = {
         "protocol_version": PROTOCOL,
         "complete": complete,
+        "host_operability_complete": host_operability_complete,
+        "private_cleanup": {
+            "verified": private_cleanup_verified,
+            "reason": "host_private_backing_expiry_not_inspected",
+        },
         "release": {
             "current_target": current_target,
             "current_binary_sha256": binary_sha,
@@ -768,6 +779,8 @@ def main() -> int:
     print(json.dumps({
         "protocol_version": PROTOCOL,
         "complete": complete,
+        "host_operability_complete": host_operability_complete,
+        "private_cleanup_verified": private_cleanup_verified,
         "receipt": str(args.out),
         "classification": initial_probe["classification"],
         "compatibility_state": initial_probe["compatibility_state"],
