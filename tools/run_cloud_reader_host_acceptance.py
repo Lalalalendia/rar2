@@ -795,10 +795,8 @@ def main() -> int:
     listener = loopback_listener_receipt(args.app_port)
     local = local_health(args.app_port)
     edge = edge_receipt(args.origin)
-    private_witness: dict[str, Any] = {}
     initial_probe = guest_probe(
-        args.origin, fixture, fixture_sha, timeout=args.timeout_seconds,
-        witness=private_witness if args.verify_private_expiry else None,
+        args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
     )
     capacity_before = service_snapshot()
     capacity = concurrent_reader_receipt(
@@ -888,17 +886,32 @@ def main() -> int:
         "reason": "private_expiry_not_requested",
     }
     if args.verify_private_expiry:
+        # Use a freshly opened session after the capacity and rollback phases:
+        # an early witness could already be expired before this phase begins.
+        private_witness: dict[str, Any] = {}
+        guest_probe(
+            args.origin, fixture, fixture_sha, timeout=args.timeout_seconds,
+            witness=private_witness,
+        )
         db_path = private_storage_config(args.config)
         private_cleanup = private_expiry_receipt(
             args.origin, db_path, private_witness, timeout=args.timeout_seconds
         )
     private_cleanup_verified = private_cleanup["verified"]
-    complete = host_operability_complete and private_cleanup_verified
+    # The old Chaptera Doctor CLI checks RuntimePorts::unconfigured(), NOT
+    # the running Reader process. Until a truthful production doctor is
+    # implemented, we cannot certify the literal #528 doctor requirement.
+    doctor_verified = False
+    complete = host_operability_complete and private_cleanup_verified and doctor_verified
 
     receipt = {
         "protocol_version": PROTOCOL,
         "complete": complete,
         "host_operability_complete": host_operability_complete,
+        "doctor": {
+            "verified": doctor_verified,
+            "reason": "cli_doctor_not_bound_to_live_runtime",
+        },
         "private_cleanup": private_cleanup,
         "release": {
             "current_target": current_target,
