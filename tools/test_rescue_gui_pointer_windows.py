@@ -3,6 +3,7 @@ import unittest
 
 from tools.probe_rescue_gui_pointer_windows import (
     Input, KeyInput, MouseInput, OsInput, SCHEMA, slot_coordinates,
+    validate_scanned_source, validate_completed_source, BATCH_REPORT_SCHEMA,
 )
 
 
@@ -39,7 +40,7 @@ class FakeUser:
     def __init__(self, foreground):
         self.foreground = foreground
         self.injections = 0
-        self.clipboard_opens = 0
+        self.batches = []
 
     def GetForegroundWindow(self):
         return self.foreground
@@ -48,13 +49,13 @@ class FakeUser:
         self.foreground = hwnd
         return 1
 
-    def SendInput(self, *_args):
-        self.injections += 1
-        return 1
-
-    def OpenClipboard(self, _hwnd):
-        self.clipboard_opens += 1
-        return 1
+    def SendInput(self, count, buffer, _size):
+        self.injections += count
+        self.batches.append([
+            (buffer[i].type, buffer[i].ki.wVk, buffer[i].ki.dwFlags)
+            for i in range(count)
+        ])
+        return count
 
 
 class FocusGuardTests(unittest.TestCase):
@@ -70,11 +71,12 @@ class FocusGuardTests(unittest.TestCase):
             driver._send(Input(type=1, ki=KeyInput(65, 0, 0, 0, 0)))
         self.assertEqual(driver.user.injections, 0)
 
-    def test_clipboard_does_not_open_without_target_foreground(self):
+    def test_unrelated_foreground_blocks_entire_key_combo(self):
         driver = self.native(12)
         with self.assertRaisesRegex(RuntimeError, "not foreground"):
-            driver.clipboard("SYNTHETIC")
-        self.assertEqual(driver.user.clipboard_opens, 0)
+            driver.combo(65)
+        self.assertEqual(driver.user.injections, 0)
+        self.assertEqual(driver.user.batches, [])
 
     def test_exact_target_foreground_accepts_input(self):
         driver = self.native(13)
@@ -87,6 +89,81 @@ class FocusGuardTests(unittest.TestCase):
         self.assertEqual(driver.user.foreground, 13)
         driver._send(Input(type=1, ki=KeyInput(65, 0, 0, 0, 0)))
         self.assertEqual(driver.user.injections, 1)
+
+
+    def test_ctrl_a_sent_as_one_atomic_four_event_batch(self):
+        driver = self.native(13)
+        driver.combo(65)
+        self.assertEqual(len(driver.user.batches), 1)
+        self.assertEqual(driver.user.batches[0], [
+            (1, 0x11, 0), (1, 0x41, 0),
+            (1, 0x41, 2), (1, 0x11, 2),
+        ])
+        self.assertEqual(driver.user.injections, 4)
+
+    def test_unicode_press_release_in_one_batch(self):
+        driver = self.native(13)
+        driver.unicode("A")
+        self.assertEqual(len(driver.user.batches), 1)
+        self.assertEqual(driver.user.batches[0], [(1, 0, 4), (1, 0, 6)])
+
+    def test_global_clipboard_is_not_a_test_dependency(self):
+        self.assertFalse(hasattr(OsInput, "clipboard"))
+        self.assertFalse(hasattr(OsInput, "field_equals"))
+
+
+class CanonicalReportTests(unittest.TestCase):
+    digest = "a" * 64
+
+    def state(self, status="pending", **row_changes):
+        row = {
+            "sha256": self.digest, "status": status,
+            "attempts": 0 if status == "pending" else 1,
+            "outcome": None if status == "pending" else "partial",
+            "reason": None, "stream_count": 0 if status == "pending" else 2,
+        }
+        row.update(row_changes)
+        return {
+            "schema_version": BATCH_REPORT_SCHEMA,
+            "source_free": True,
+            "unique_sources": 1, "duplicate_paths": 0,
+            "rejected_paths": {}, "counts": {status: 1},
+            "entries": [row],
+        }
+
+    def test_correct_scan_is_admitted(self):
+        validate_scanned_source(self.state(), self.digest)
+
+    def test_correct_completed_two_sid_bundle_is_admitted(self):
+        validate_completed_source(self.state(status="done_partial"), self.digest)
+
+    def test_wrong_pub_sha_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "SHA"):
+            validate_scanned_source(self.state(sha256="b" * 64), self.digest)
+
+    def test_missing_source_free_is_rejected(self):
+        state = self.state()
+        state["source_free"] = False
+        with self.assertRaises(AssertionError):
+            validate_scanned_source(state, self.digest)
+
+    def test_forged_counts_are_rejected(self):
+        state = self.state()
+        state["counts"] = {"pending": 0, "done_partial": 1}
+        with self.assertRaises(AssertionError):
+            validate_scanned_source(state, self.digest)
+
+    def test_unverified_sid_count_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "SID streams"):
+            validate_completed_source(self.state("done_partial", stream_count=1), self.digest)
+
+    def test_unverified_outcome_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "SID streams"):
+            validate_completed_source(self.state("done_partial", outcome="unsupported"), self.digest)
+
+    def test_zero_attempts_cannot_claim_completed_run(self):
+        with self.assertRaisesRegex(AssertionError, "SID streams"):
+            validate_completed_source(self.state("done_partial", attempts=0), self.digest)
 
 
 if __name__ == "__main__":
