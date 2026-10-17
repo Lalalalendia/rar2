@@ -215,11 +215,21 @@ fn write_report(
 }
 
 impl RescueApp {
-    fn inspect_source(&mut self) {
-        let path = PathBuf::from(self.source_path.trim());
+    fn invalidate_receipt_proof(&mut self) {
         self.receipt = None;
         self.receipt_status = None;
         self.report_status = None;
+    }
+
+    fn invalidate_source_proof(&mut self) {
+        self.source_sha256 = None;
+        self.source_status = None;
+        self.invalidate_receipt_proof();
+    }
+
+    fn inspect_source(&mut self) {
+        let path = PathBuf::from(self.source_path.trim());
+        self.invalidate_receipt_proof();
 
         if path
             .extension()
@@ -315,11 +325,16 @@ impl RescueApp {
             );
             ui.label(RichText::new("Choose a local .pub file. This operation reads the source and computes its SHA-256; it never edits the file.").color(ui_theme::muted()));
             let width = ui.available_width();
-            ui.add(
-                egui::TextEdit::singleline(&mut self.source_path)
-                    .hint_text("C:\\Documents\\original.pub")
-                    .desired_width(width),
-            );
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.source_path)
+                        .hint_text("C:\\Documents\\original.pub")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.invalidate_source_proof();
+            }
             if ui.button("Inspect source").clicked() {
                 self.inspect_source();
             }
@@ -343,11 +358,16 @@ impl RescueApp {
             );
             ui.label(RichText::new("Only a source-matched canonical Rescue receipt is accepted. An uploaded or unverified result is not evidence.").color(ui_theme::muted()));
             let width = ui.available_width();
-            ui.add(
-                egui::TextEdit::singleline(&mut self.receipt_path)
-                    .hint_text("C:\\Reports\\product-validation.json")
-                    .desired_width(width),
-            );
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.receipt_path)
+                        .hint_text("C:\\Reports\\product-validation.json")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.invalidate_receipt_proof();
+            }
             if ui.button("Load validated receipt").clicked() {
                 self.load_receipt();
             }
@@ -357,7 +377,7 @@ impl RescueApp {
             if let Some(receipt) = &self.receipt {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    ui_theme::pill(ui, "SOURCE MATCHED", ui_theme::accent());
+                    ui_theme::pill(ui, "SHA MATCHED AT LOAD", ui_theme::accent());
                     ui.label(
                         RichText::new(format!("Outcome: {}", receipt.outcome))
                             .color(ui_theme::ink()),
@@ -387,11 +407,16 @@ impl RescueApp {
             );
             ui.label(RichText::new("Export creates a separate JSON report and verifies the original SHA before and after writing.").color(ui_theme::muted()));
             let width = ui.available_width();
-            ui.add(
-                egui::TextEdit::singleline(&mut self.report_path)
-                    .hint_text("C:\\Reports\\rescue-report.json")
-                    .desired_width(width),
-            );
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.report_path)
+                        .hint_text("C:\\Reports\\rescue-report.json")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.report_status = None;
+            }
             if ui
                 .add_enabled(
                     self.receipt.is_some() && self.source_sha256.is_some(),
@@ -783,6 +808,29 @@ mod tests {
         let error = validate_product_receipt(&receipt(&good), &"c".repeat(64))
             .expect_err("mismatch must fail closed");
         assert!(error.contains("does not match"));
+    }
+
+    #[test]
+    fn changing_source_or_receipt_path_revokes_previous_ui_proof() {
+        let sha = "b".repeat(64);
+        let mut app = RescueApp::default();
+        app.source_sha256 = Some(sha.clone());
+        app.source_status = Some("Previous file inspected".to_owned());
+        app.receipt = Some(receipt(&sha));
+        app.receipt_status = Some("Previous receipt matched".to_owned());
+        app.report_status = Some("Previous export succeeded".to_owned());
+
+        app.invalidate_receipt_proof();
+        assert!(app.receipt.is_none());
+        assert!(app.receipt_status.is_none());
+        assert!(app.report_status.is_none());
+        assert_eq!(app.source_sha256.as_deref(), Some(sha.as_str()));
+
+        app.receipt = Some(receipt(&sha));
+        app.invalidate_source_proof();
+        assert!(app.source_sha256.is_none());
+        assert!(app.source_status.is_none());
+        assert!(app.receipt.is_none());
     }
 
     #[test]

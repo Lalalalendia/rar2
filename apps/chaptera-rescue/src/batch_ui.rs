@@ -6,7 +6,7 @@
 
 use eframe::egui;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -48,8 +48,40 @@ struct BatchReport {
     source_free: bool,
     unique_sources: usize,
     duplicate_paths: usize,
+    rejected_paths: BTreeMap<String, usize>,
     counts: BTreeMap<String, usize>,
     entries: Vec<BatchRow>,
+}
+
+/// Only render totals from a structurally consistent source-free engine report.
+/// This is not an independent artifact/stream verification.
+fn report_is_consistent(report: &BatchReport) -> bool {
+    if report.schema_version != BATCH_REPORT_SCHEMA
+        || !report.source_free
+        || report.entries.len() > 10_000
+        || report.unique_sources != report.entries.len()
+    {
+        return false;
+    }
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut hashes = BTreeSet::<&str>::new();
+    for entry in &report.entries {
+        if entry.sha256.len() != 64
+            || !entry
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !hashes.insert(entry.sha256.as_str())
+            || !matches!(
+                entry.status.as_str(),
+                "pending" | "running" | "done_partial" | "done_unsupported" | "failed" | "cancelled"
+            )
+        {
+            return false;
+        }
+        *counts.entry(entry.status.clone()).or_insert(0) += 1;
+    }
+    report.counts == counts
 }
 
 pub struct BatchUi {
@@ -65,6 +97,7 @@ pub struct BatchUi {
     run_token: Option<String>,
     status: String,
     report: Option<BatchReport>,
+    report_warning: Option<String>,
     filter: String,
 }
 
@@ -83,6 +116,7 @@ impl Default for BatchUi {
             run_token: None,
             status: "No local batch has been selected".to_owned(),
             report: None,
+            report_warning: None,
             filter: String::new(),
         }
     }
@@ -271,29 +305,54 @@ impl BatchUi {
     fn refresh_report(&mut self) {
         if self.output_path.trim().is_empty() {
             self.report = None;
+            self.report_warning = None;
             return;
         }
+
         let path = Path::new(self.output_path.trim()).join("summary.json");
-        let Ok(meta) = fs::metadata(&path) else {
-            return;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if self.report.take().is_some() {
+                    self.report_warning =
+                        Some("Queue summary disappeared; cached results are hidden.".to_owned());
+                }
+                return;
+            }
+            Err(_) => {
+                self.report = None;
+                self.report_warning =
+                    Some("Cannot inspect queue summary; previous results are hidden.".to_owned());
+                return;
+            }
         };
-        if meta.len() > MAX_REPORT_BYTES || !meta.is_file() {
-            self.status = "Batch summary exceeds local read limit".to_owned();
+        if !metadata.file_type().is_file() || metadata.len() > MAX_REPORT_BYTES {
+            self.report = None;
+            self.report_warning =
+                Some("Queue summary is unsafe or exceeds the local read limit.".to_owned());
             return;
         }
-        let Ok(raw) = fs::read(&path) else {
-            return;
+
+        let raw = match fs::read(&path) {
+            Ok(raw) => raw,
+            Err(_) => {
+                self.report = None;
+                self.report_warning =
+                    Some("Cannot read queue summary; previous results are hidden.".to_owned());
+                return;
+            }
         };
-        if let Ok(report) = serde_json::from_slice::<BatchReport>(&raw) {
-            if report.source_free
-                && report.schema_version == BATCH_REPORT_SCHEMA
-                && report.entries.len() <= 10000
-                && report.entries.iter().all(|entry| {
-                    entry.sha256.len() == 64
-                        && entry.sha256.bytes().all(|value| value.is_ascii_hexdigit())
-                })
-            {
+        match serde_json::from_slice::<BatchReport>(&raw) {
+            Ok(report) if report_is_consistent(&report) => {
                 self.report = Some(report);
+                self.report_warning = None;
+            }
+            _ => {
+                self.report = None;
+                self.report_warning = Some(
+                    "Queue summary failed source-free consistency checks; no totals are shown."
+                        .to_owned(),
+                );
             }
         }
     }
@@ -423,8 +482,9 @@ impl BatchUi {
                 )
                 .changed()
             {
-                // Never show a cached receipt for another output directory.
+                // Never show a cached receipt or warning for another output directory.
                 self.report = None;
+                self.report_warning = None;
             }
             ui.label(
                 RichText::new("Results go to a separate folder outside the input tree.")
@@ -501,6 +561,10 @@ impl BatchUi {
         });
 
         ui.add_space(14.0);
+        if let Some(warning) = &self.report_warning {
+            ui.label(RichText::new(warning).size(12.0).color(ui_theme::danger()));
+            ui.add_space(8.0);
+        }
         if let Some(report) = &self.report {
             ui_theme::card(ui, |ui| {
                 ui.label(
@@ -510,7 +574,7 @@ impl BatchUi {
                         .color(ui_theme::accent()),
                 );
                 ui.label(
-                    RichText::new("Verified queue overview")
+                    RichText::new("Local queue summary")
                         .size(18.0)
                         .strong()
                         .color(ui_theme::ink()),
@@ -554,12 +618,25 @@ impl BatchUi {
                 );
                 ui.label(
                     RichText::new(format!(
-                        "{finished} of {} files in a terminal state  ·  {} duplicate paths",
+                        "{finished} of {} files completed or stopped  ·  {} duplicate paths",
                         report.unique_sources, report.duplicate_paths,
                     ))
                     .size(11.0)
                     .color(ui_theme::muted()),
                 );
+                let rejected = report
+                    .rejected_paths
+                    .values()
+                    .fold(0usize, |total, count| total.saturating_add(*count));
+                if rejected > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{rejected} source inputs rejected during scan (excluded from unique PUB count)."
+                        ))
+                        .size(12.0)
+                        .color(ui_theme::warning()),
+                    );
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(
@@ -640,7 +717,7 @@ impl BatchUi {
                         .color(ui_theme::ink()),
                 );
                 ui.label(
-                    RichText::new("Run a scan to see verified SHA identities, outcomes, streams and errors. No results are inferred before the local engine reports them.")
+                    RichText::new("Run a scan to see local SHA identities and engine-reported outcomes. No results are inferred before the engine reports them.")
                         .size(12.0).color(ui_theme::muted()),
                 );
             });
@@ -853,12 +930,76 @@ mod tests {
         assert!(surface.command_for("run").is_err());
     }
 
-    #[test]
-    fn source_free_batch_summary_is_only_admitted_schema() {
-        let sample = r#"{"schema_version":"chaptera.rescue-desktop-batch-report.v1","source_free":true,"unique_sources":1,"duplicate_paths":0,"counts":{"pending":1},"entries":[]}"#;
-        let report: BatchReport = serde_json::from_str(sample).expect("known report schema");
-        assert!(report.source_free);
-        assert_eq!(report.schema_version, BATCH_REPORT_SCHEMA);
-        assert_eq!(report.unique_sources, 1);
+    fn sample_report() -> BatchReport {
+        let sample = serde_json::json!({
+            "schema_version": BATCH_REPORT_SCHEMA,
+            "source_free": true,
+            "unique_sources": 1,
+            "duplicate_paths": 0,
+            "rejected_paths": {},
+            "counts": {"pending": 1},
+            "entries": [{
+                "sha256": "a".repeat(64),
+                "status": "pending",
+                "outcome": null,
+                "reason": null,
+                "stream_count": null,
+                "asset_count": null
+            }]
+        });
+        serde_json::from_value(sample).expect("canonical local summary")
     }
+
+    #[test]
+    fn canonical_source_free_summary_has_consistent_counts() {
+        assert!(report_is_consistent(&sample_report()));
+    }
+
+    #[test]
+    fn fabricated_counts_do_not_render() {
+        let mut report = sample_report();
+        report.counts.insert("pending".to_owned(), 2);
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn duplicate_source_hashes_do_not_render() {
+        let mut report = sample_report();
+        report.entries.push(BatchRow {
+            sha256: "a".repeat(64),
+            status: "pending".to_owned(),
+            outcome: None,
+            reason: None,
+            stream_count: None,
+            asset_count: None,
+        });
+        report.unique_sources = 2;
+        report.counts.insert("pending".to_owned(), 2);
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn unknown_status_and_private_report_do_not_render() {
+        let mut report = sample_report();
+        report.entries[0].status = "done_magically".to_owned();
+        report.counts.clear();
+        report.counts.insert("done_magically".to_owned(), 1);
+        assert!(!report_is_consistent(&report));
+        report.source_free = false;
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn vanished_queue_clears_previous_metrics() {
+        let mut surface = BatchUi::default();
+        surface.output_path = std::env::temp_dir()
+            .join(next_run_token())
+            .to_string_lossy()
+            .to_string();
+        surface.report = Some(sample_report());
+        surface.refresh_report();
+        assert!(surface.report.is_none());
+        assert!(surface.report_warning.is_some());
+    }
+
 }
