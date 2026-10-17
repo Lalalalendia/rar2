@@ -1,0 +1,54 @@
+name: PDF-OCR-LAB-01 synthetic native versus raster differential
+
+on:
+  pull_request:
+    paths:
+      - tools/pdf_ocr_differential_lab_v1.py
+      - tools/test_pdf_ocr_differential_lab_v1.py
+      - tools/pdf_ocr_differential_lab_v1.md
+      - .github/workflows/pdf-ocr-differential-lab-v1-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  synthetic-native-ocr-differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install only synthetic research tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+          python -m pip install --disable-pip-version-check --only-binary=:all: PyMuPDF==1.26.7
+      - name: Real Tesseract and synthetic fixture assertions
+        run: |
+          python -m compileall -q tools/pdf_ocr_differential_lab_v1.py tools/test_pdf_ocr_differential_lab_v1.py
+          python -m unittest discover -s tools -p test_pdf_ocr_differential_lab_v1.py -v
+          python tools/pdf_ocr_differential_lab_v1.py --synthetic > "$RUNNER_TEMP/pdf-ocr-synthetic-receipt.json"
+      - name: Verify source-safe four routes
+        run: |
+          python - "$RUNNER_TEMP/pdf-ocr-synthetic-receipt.json" <<'PY'
+          import json, sys
+          receipt = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert receipt['identical_pixels_vector_pair']
+          assert receipt['cases']['native_vector']['route'] == 'NATIVE_TEXT_CORROBORATED'
+          assert receipt['cases']['wrong_tounicode']['route'] == 'UNICODE_CONFLICT_REVIEW'
+          assert receipt['cases']['raster_only']['route'] == 'OCR_REQUIRED'
+          assert receipt['cases']['invisible_wrong_layer']['route'] == 'HIDDEN_TEXT_LAYER_REVIEW'
+          print('PDF_OCR_LAB PASS pixel_identical=true unicode_conflict=true hidden_layer=true raster_only=true')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-ocr-synthetic-receipt
+          path: ${{ runner.temp }}/pdf-ocr-synthetic-receipt.json
+          retention-days: 14
