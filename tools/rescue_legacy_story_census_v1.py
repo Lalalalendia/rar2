@@ -8,9 +8,12 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from zipfile import ZipFile
+
+from tools import verify_rescue_text_evidence_v1 as byte_verifier
 
 CORPUS_SHA = "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e"
 SIDECAR_SHA = "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
@@ -75,12 +78,16 @@ def sha_file(file: Path) -> str:
     return digestor.hexdigest()
 
 
-def census(binary: Path, archive: Path, receipt_dir: Path) -> dict:
+def census(binary: Path, archive: Path, receipt_dir: Path,
+           validate_export: bool = False) -> dict:
     if not binary.is_file() or sha_file(archive) != CORPUS_SHA:
         raise ValueError("missing_binary_or_archive_identity")
     statuses, families, matrix = Counter(), Counter(), Counter()
     rows = []
     ranges = 0
+    export_files = 0
+    export_legacy_files = 0
+    export_ranges = 0
     with ZipFile(archive) as z:
         names = z.namelist()
         members = {m.group(1): name for name in names if (m := MEMBER.fullmatch(name))}
@@ -115,6 +122,29 @@ def census(binary: Path, archive: Path, receipt_dir: Path) -> dict:
                 row = check_probe(parsed, sha, len(payload))
                 if sha_file(source) != sha:
                     raise ValueError("source_mutated_by_probe")
+                if validate_export and row["status"].startswith("verified"):
+                    evidence = Path(temp) / "private-evidence"
+                    argv = [str(binary), "extract-text", str(source),
+                            "--output", str(evidence)]
+                    if row["family"].startswith("legacy_"):
+                        argv.append("--include-legacy")
+                    try:
+                        worker = subprocess.run(
+                            argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=45, check=False)
+                    except (subprocess.TimeoutExpired, OSError) as error:
+                        raise ValueError("legacy_export_worker_failed") from error
+                    if worker.returncode != 0:
+                        raise ValueError("legacy_export_not_admitted")
+                    proof = byte_verifier.verify(source, evidence)
+                    if (proof["source_sha256"] != sha or not proof["byte_verified"]
+                            or proof["story_count"] != row["confirmed_story_ranges"]):
+                        raise ValueError("legacy_export_byte_validation_mismatch")
+                    export_files += 1
+                    export_ranges += proof["story_count"]
+                    if row["family"].startswith("legacy_"):
+                        export_legacy_files += 1
+                    shutil.rmtree(evidence)
                 families[row["family"]] += 1
                 statuses[row["status"]] += 1
                 matrix[(row["family"], row["status"])] += 1
@@ -146,10 +176,17 @@ def census(binary: Path, archive: Path, receipt_dir: Path) -> dict:
             x["confirmed_story_ranges"] for x in rows if x["family"].startswith("legacy_")),
         "baseline_mature_verified_files": 382,
         "baseline_mature_story_ranges": 5506,
+        "verified_private_export_files": export_files if validate_export else None,
+        "verified_private_export_legacy_files": export_legacy_files if validate_export else None,
+        "verified_private_export_story_ranges": export_ranges if validate_export else None,
         "no_native_pub_repair": True,
         "source_immutable": True,
         "independent_semantic_oracle": False,
     }
+    if validate_export and (export_files != sum(1 for row in rows if row["status"].startswith("verified"))
+                            or export_ranges != ranges
+                            or export_legacy_files != summary["legacy_verified_files"]):
+        raise ValueError("real_corpus_export_denominator_mismatch")
     receipt_dir.mkdir(parents=True, exist_ok=True)
     (receipt_dir / "summary.json").write_text(
         json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -166,9 +203,12 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--validate-export", action="store_true",
+                        help="check private source-bound Story exports without publishing text")
     args = parser.parse_args()
     try:
-        census(args.binary, args.archive, args.output)
+        census(args.binary, args.archive, args.output,
+               validate_export=args.validate_export)
     except Exception:
         print(json.dumps({"schema_version": "chaptera.rescue-legacy-story-census.v1",
                           "source_free": True, "state": "rejected",

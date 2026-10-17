@@ -226,5 +226,52 @@ class StoryBatchTests(unittest.TestCase):
         self.assertEqual(salvage.sha_file(self.source), self.digest)
 
 
+    def test_existing_unavailable_row_reprobes_once_with_legacy_profile(self):
+        output = self.root / "legacy-reprobe"
+        batch.scan([self.source], output)
+        with patch.object(text_batch, "run_cli", return_value=False):
+            baseline = batch.run(output, workers=1, pub_cli=self.pub)
+        self.assertEqual(baseline["entries"][0]["text_status"], "unavailable")
+        original_attempts = baseline["entries"][0]["attempts"]
+
+        def supported(_cli, _src, target, *_args):
+            self.make_story(target)
+            return True
+
+        with patch.object(text_batch, "run_cli", side_effect=supported) as worker:
+            upgraded = batch.run(output, workers=1, pub_cli=self.pub,
+                                 legacy_text_v1=True)
+        self.assertEqual(worker.call_count, 1)
+        self.assertTrue(worker.call_args.args[-1])
+        self.assertEqual(upgraded["entries"][0]["text_status"], "verified")
+        self.assertEqual(upgraded["entries"][0]["text_count"], 1)
+        self.assertEqual(upgraded["entries"][0]["auto_tier"], "verified_text")
+        self.assertEqual(upgraded["entries"][0]["attempts"], original_attempts + 1)
+        self.assertEqual(batch.run(output, workers=1, pub_cli=self.pub,
+                                   legacy_text_v1=True)["entries"][0]["attempts"],
+                         original_attempts + 1)
+        self.assertEqual(salvage.sha_file(self.source), self.digest)
+
+    def test_failed_legacy_reprobe_not_retried_at_same_version(self):
+        output = self.root / "legacy-unavailable"
+        batch.scan([self.source], output)
+        with patch.object(text_batch, "run_cli", return_value=False) as worker:
+            batch.run(output, workers=1, pub_cli=self.pub)
+            one = batch.run(output, workers=1, pub_cli=self.pub, legacy_text_v1=True)
+            self.assertEqual(worker.call_count, 2)
+            self.assertEqual(one["entries"][0]["text_status"], "unavailable")
+            attempts = one["entries"][0]["attempts"]
+            two = batch.run(output, workers=1, pub_cli=self.pub, legacy_text_v1=True)
+            self.assertEqual(worker.call_count, 2)
+        self.assertEqual(two["entries"][0]["attempts"], attempts)
+        self.assertEqual(salvage.sha_file(self.source), self.digest)
+
+    def test_legacy_flag_rejects_missing_pub_cli(self):
+        output = self.root / "legacy-invalid"
+        batch.scan([self.source], output)
+        with self.assertRaisesRegex(batch.BatchError, "legacy_text_requires_pub_cli"):
+            batch.run(output, legacy_text_v1=True)
+
+
 if __name__ == "__main__":
     unittest.main()

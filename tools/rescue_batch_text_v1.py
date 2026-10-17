@@ -56,7 +56,7 @@ def _reap(proc: subprocess.Popen, kill_tree) -> None:
 
 
 def run_cli(pub_cli: Path, source: Path, target: Path, deadline: float,
-            abort: threading.Event, kill_tree) -> bool:
+            abort: threading.Event, kill_tree, include_legacy: bool = False) -> bool:
     """Run the exact existing Rust producer in the parent job's process tree.
 
     No stdout or stderr is retained (either stream may contain private data).
@@ -68,10 +68,11 @@ def run_cli(pub_cli: Path, source: Path, target: Path, deadline: float,
         options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
+    argv = [str(pub_cli), "extract-text", str(source), "--output", str(target)]
+    if include_legacy:
+        argv.append("--include-legacy")
     try:
-        proc = subprocess.Popen(
-            [str(pub_cli), "extract-text", str(source), "--output", str(target)],
-            **options)
+        proc = subprocess.Popen(argv, **options)
     except OSError as error:
         raise TextRecoveryError("text_worker_unavailable") from error
     while True:
@@ -176,7 +177,8 @@ def _save_index(output: Path, digest: str, story_count: int) -> None:
 
 
 def admit(source: Path, output: Path, digest: str, *, pub_cli: Path | None,
-          deadline: float, abort: threading.Event, kill_tree) -> tuple[int, str]:
+          deadline: float, abort: threading.Event, kill_tree,
+          include_legacy: bool = False) -> tuple[int, str]:
     """Return (independently verified Story count, typed attempt status).
 
     Existing evidence is always checked, even when --pub-cli is not supplied.
@@ -206,7 +208,7 @@ def admit(source: Path, output: Path, digest: str, *, pub_cli: Path | None,
         if deadline - time.monotonic() <= 0:
             raise TextInterrupted("worker_timeout")
         root.mkdir(parents=True, exist_ok=True)
-        succeeded = run_cli(pub_cli, source, target, deadline, abort, kill_tree)
+        succeeded = run_cli(pub_cli, source, target, deadline, abort, kill_tree, include_legacy)
         if abort.is_set():
             raise TextInterrupted("cancelled")
         if not succeeded:

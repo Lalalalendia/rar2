@@ -7,6 +7,12 @@ on:
     paths:
       - apps/chaptera-pub-cli/src/main.rs
       - apps/chaptera-pub-cli/src/legacy_probe.rs
+      - apps/chaptera-pub-cli/src/text_export.rs
+      - tools/rescue_batch_text_v1.py
+      - tools/rescue_desktop_batch_v1.py
+      - tools/verify_rescue_text_evidence_v1.py
+      - tools/test_verify_rescue_text_evidence_v1.py
+      - tools/test_rescue_batch_text_v1.py
       - tools/rescue_legacy_story_census_v1.py
       - tools/test_rescue_legacy_story_census_v1.py
       - .github/workflows/rescue-legacy-story-diagnostic.yml
@@ -37,8 +43,8 @@ jobs:
           python-version: '3.12'
       - name: Source-free unit and syntax tests
         run: |
-          python -m py_compile tools/rescue_legacy_story_census_v1.py tools/test_rescue_legacy_story_census_v1.py
-          python -m unittest tools.test_rescue_legacy_story_census_v1 -v
+          python -m py_compile tools/rescue_legacy_story_census_v1.py tools/test_rescue_legacy_story_census_v1.py tools/rescue_batch_text_v1.py tools/rescue_desktop_batch_v1.py tools/verify_rescue_text_evidence_v1.py
+          python -m unittest tools.test_rescue_legacy_story_census_v1 tools.test_verify_rescue_text_evidence_v1 tools.test_rescue_batch_text_v1 -v
       - name: Rust formatting, bounded binary tests, Clippy
         run: |
           cargo fmt -p chaptera-pub-cli -- --check
@@ -67,7 +73,8 @@ jobs:
           python -m tools.rescue_legacy_story_census_v1 \
             --binary target/release/pub \
             --archive "$RUNNER_TEMP/physical-pub-corpus.zip" \
-            --output "$RUNNER_TEMP/legacy-source-free"
+            --output "$RUNNER_TEMP/legacy-source-free" \
+            --validate-export
       - uses: actions/upload-artifact@v4
         if: always()
         with:

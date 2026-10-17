@@ -362,7 +362,7 @@ def kill_tree(proc: subprocess.Popen) -> None:
 
 def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int,
                 pub_cli: Path | None, retain_original: bool,
-                abort: threading.Event) -> dict:
+                legacy_text_v1: bool, abort: threading.Event) -> dict:
     source, invalid = choose_source(row)
     if source is None:
         return {"status": "failed", "reason": invalid, "outcome": None,
@@ -454,7 +454,8 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
         # A verified text view does not alter the immutable physical bundle.
         text_count, text_status = text_batch.admit(
             source, bundle_root.parent, row["sha256"], pub_cli=pub_cli,
-            deadline=deadline, abort=abort, kill_tree=kill_tree)
+            deadline=deadline, abort=abort, kill_tree=kill_tree,
+            include_legacy=legacy_text_v1)
     except text_batch.TextInterrupted as error:
         interrupted = str(error) == "cancelled"
         return {"status": "cancelled" if interrupted else "failed",
@@ -472,16 +473,20 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
             "stream_count": receipt["physical"].get("stream_count", 0),
             "asset_count": receipt["images"].get("asset_count", 0),
             "auto_tier": "verified_text" if text_count else promoted["tier"],
-            "text_status": text_status, "text_count": text_count}
+            "text_status": text_status, "text_count": text_count,
+            "text_profile": "legacy_0x22_v1" if legacy_text_v1 else "mature_v1"}
 
 
 def run(output: Path, *, workers: int = 2, timeout: int = 45,
         file_timeout: int = 600, pub_cli: Path | None = None,
-        retain_original: bool = False, run_token: str | None = None) -> dict:
+        retain_original: bool = False, run_token: str | None = None,
+        legacy_text_v1: bool = False) -> dict:
     if not 1 <= workers <= 4 or not 1 <= timeout <= 3600 or not 10 <= file_timeout <= 7200:
         raise BatchError("invalid_worker_limits")
     if run_token is not None and not RUN_TOKEN.fullmatch(run_token):
         raise BatchError("invalid_run_token")
+    if legacy_text_v1 and pub_cli is None:
+        raise BatchError("legacy_text_requires_pub_cli")
     output = safe_root(output)
     if pub_cli is not None:
         no_symlinks(pub_cli)
@@ -513,6 +518,9 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                     physical_outcome = receipt["outcome"]
                     stored_text_status = row.get("text_status", "not_requested")
                     stored_count = row.get("text_count", 0)
+                    stored_profile = row.get("text_profile", "mature_v1")
+                    if stored_profile not in ("mature_v1", "legacy_0x22_v1"):
+                        raise BatchError("invalid_stored_text_profile")
                     if (stored_text_status not in ("not_requested", "unavailable", "verified")
                             or type(stored_count) is not int
                             or not 0 <= stored_count <= 16_384
@@ -553,9 +561,12 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                                text_status="verified" if text_count else stored_text_status,
                                reason=None)
                     # Backfill an old completed row in the cancellable worker pool.
-                    if pub_cli is not None and not text_count and stored_text_status == "not_requested":
+                    if pub_cli is not None and not text_count and (
+                            stored_text_status == "not_requested"
+                            or (legacy_text_v1 and stored_text_status == "unavailable"
+                                and stored_profile != "legacy_0x22_v1")):
                         row.update(status=QUEUED, outcome=None, auto_tier=None,
-                                   text_count=0, text_status=None)
+                                   text_count=0, text_status=None, text_profile=None)
                 except (text_batch.TextRecoveryError, text_batch.TextInterrupted,
                         salvage.UnsafeInput, OSError, ValueError, TypeError, KeyError):
                     row.update(status="failed", reason="text_integrity",
@@ -586,7 +597,8 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                             persist(output, state)
                             future = pool.submit(process_one, dict(row), bundle_root, timeout=timeout,
                                                  file_timeout=file_timeout, pub_cli=pub_cli,
-                                                 retain_original=retain_original, abort=abort)
+                                                 retain_original=retain_original, abort=abort,
+                                                  legacy_text_v1=legacy_text_v1)
                             in_flight[future] = row
                     if not in_flight:
                         break
@@ -617,7 +629,7 @@ def retry(output: Path) -> dict:
             if row["status"] in ("failed", "cancelled"):
                 row.update(status=QUEUED, reason=None, outcome=None,
                            stream_count=0, asset_count=0, auto_tier=None,
-                           text_status=None, text_count=0)
+                           text_status=None, text_count=0, text_profile=None)
         state["run_token"] = None
         persist(output, state)
         return report(state)
@@ -641,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--timeout", type=int, default=45)
     run_cmd.add_argument("--file-timeout", type=int, default=600)
     run_cmd.add_argument("--pub-cli", type=Path)
+    run_cmd.add_argument("--legacy-text-v1", action="store_true",
+                         help="one version-scoped re-probe of unavailable Story evidence")
     run_cmd.add_argument("--retain-original", action="store_true")
     run_cmd.add_argument("--run-token", help="opaque per-GUI-run identity; not an access credential")
     for name in ("status", "retry", "pause", "cancel"):
@@ -655,7 +669,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "run":
             result = run(args.output, workers=args.workers, timeout=args.timeout,
                          file_timeout=args.file_timeout, pub_cli=args.pub_cli,
-                         retain_original=args.retain_original, run_token=args.run_token)
+                         retain_original=args.retain_original, run_token=args.run_token,
+                          legacy_text_v1=args.legacy_text_v1)
         elif args.cmd == "retry":
             result = retry(args.output)
         elif args.cmd in ("pause", "cancel"):

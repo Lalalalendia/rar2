@@ -114,6 +114,47 @@ class SourceExactStoryEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(evidence.StoryEvidenceError, "unverified_mature_story_provenance"):
             evidence.verify(self.source, self.output)
 
+    def legacy_manifest(self, source_class="legacy_0x22_noquill_authoritative_story",
+                        evidence_class="legacy_0x22_noquill_authoritative_exact",
+                        unadmitted=2):
+        self.rows[0].update(
+            evidence_class=evidence_class, carrier="/Contents",
+            carrier_byte_offset=4, carrier_byte_len=12)
+        self.write()
+        target = self.output / "stories.json"
+        manifest = json.loads(target.read_text(encoding="utf-8"))
+        manifest["extraction_class"] = source_class
+        manifest["unadmitted_story_count"] = unadmitted
+        target.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_legacy_noquill_private_text_with_gap_is_byte_verified(self):
+        self.legacy_manifest()
+        verified = evidence.verify(self.source, self.output)
+        self.assertEqual(verified["story_count"], 1)
+        self.assertFalse(verified["semantic_source_independently_decoded"])
+
+    def test_legacy_quill_private_text_is_byte_verified(self):
+        self.legacy_manifest("legacy_0x22_quill_authoritative_story",
+                             "legacy_0x22_quill_authoritative_exact", 0)
+        self.assertEqual(evidence.verify(self.source, self.output)["story_count"], 1)
+
+    def test_cross_family_or_missing_legacy_provenance_fails_closed(self):
+        self.legacy_manifest(evidence_class="legacy_0x22_quill_authoritative_exact")
+        with self.assertRaisesRegex(evidence.StoryEvidenceError, "legacy_story_provenance"):
+            evidence.verify(self.source, self.output)
+        self.legacy_manifest(unadmitted=-1)
+        with self.assertRaisesRegex(evidence.StoryEvidenceError, "invalid_legacy_omitted_count"):
+            evidence.verify(self.source, self.output)
+        self.legacy_manifest()
+        self.rows[0]["carrier_byte_offset"] = None
+        self.write()
+        manifest = json.loads((self.output / "stories.json").read_text(encoding="utf-8"))
+        manifest["extraction_class"] = "legacy_0x22_noquill_authoritative_story"
+        manifest["unadmitted_story_count"] = 0
+        (self.output / "stories.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(evidence.StoryEvidenceError, "legacy_story_provenance"):
+            evidence.verify(self.source, self.output)
+
 
 if __name__ == "__main__":
     unittest.main()
