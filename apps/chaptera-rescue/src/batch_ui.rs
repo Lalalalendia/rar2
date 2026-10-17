@@ -63,10 +63,6 @@ pub struct BatchUi {
     active_process: Option<Child>,
     control_process: Option<Child>,
     run_token: Option<String>,
-    // Closing this GUI-owned handle terminates engine + nested workers, even
-    // when the GUI process crashes without executing Rust Drop.
-    #[cfg(windows)]
-    active_job: Option<EngineJob>,
     status: String,
     report: Option<BatchReport>,
     filter: String,
@@ -85,8 +81,6 @@ impl Default for BatchUi {
             active_process: None,
             control_process: None,
             run_token: None,
-            #[cfg(windows)]
-            active_job: None,
             status: "No local batch has been selected".to_owned(),
             report: None,
             filter: String::new(),
@@ -230,32 +224,22 @@ impl BatchUi {
         if let Some(token) = &token {
             command.arg("--run-token").arg(token);
         }
-        // Spawn on the UI thread and keep Child ownership here. A background
-        // command.status() waiter used to orphan its engine on GUI close.
-        let mut child = match command.spawn() {
+        // The process-wide GUI Job must be installed before CreateProcess, so
+        // neither this child nor its grandchildren have any unguarded launch
+        // window. The existing Python Job adds a nested per-run memory limit.
+        #[cfg(windows)]
+        if !EngineJob::gui_is_guarded() {
+            self.status = "Refusing batch launch without GUI lifetime Job".to_owned();
+            return;
+        }
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(_) => {
                 self.status = "Cannot launch local Rescue engine".to_owned();
                 return;
             }
         };
-        #[cfg(windows)]
-        let job = match EngineJob::attach(&child) {
-            Ok(job) => job,
-            Err(error) => {
-                // Do not leave an unfenced child when assigning its lifetime
-                // Job Object fails (e.g. another incompatible parent job).
-                let _ = child.kill();
-                let _ = child.wait();
-                self.status = error;
-                return;
-            }
-        };
         self.active_process = Some(child);
-        #[cfg(windows)]
-        {
-            self.active_job = Some(job);
-        }
         self.active_action = Some(action);
         self.run_token = token;
         self.status = format!("{action} started in a GUI-owned local process");
@@ -330,12 +314,6 @@ impl BatchUi {
                     let _ = child.kill();
                 }
                 let _ = child.wait();
-            }
-            #[cfg(windows)]
-            {
-                // On normal completion, close the GUI lifetime job and reap
-                // any unexpected grandchild left running by the engine.
-                self.active_job.take();
             }
             self.run_token = None;
             self.status = match result {
@@ -479,12 +457,9 @@ impl Drop for BatchUi {
                 }
             }
         }
-        #[cfg(windows)]
-        {
-            // Closes the last GUI-owned Job handle. Windows terminates the
-            // entire engine/worker tree, even if a worker ignores cancellation.
-            self.active_job.take();
-        }
+        // On Windows the static GUI Job persists until process exit, so all
+        // grandchildren are bounded even if orderly cancellation fails.
+        // The engine's own memory Job closes on engine exit and reaps workers.
         if let Some(mut child) = self.active_process.take() {
             if child.try_wait().ok().flatten().is_none() {
                 let _ = child.kill();
