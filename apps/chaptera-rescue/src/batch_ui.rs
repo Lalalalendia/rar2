@@ -1,8 +1,8 @@
 //! Optional local batch controls for Chaptera Rescue's desktop technical preview.
 //!
-//! The executable intentionally does not bundle a Python runtime yet: the
-//! operator chooses an existing rar2 checkout and interpreter. This delegates
-//! recovery to the existing verified local salvage engine, not to GUI memory.
+//! A matching portable release auto-detects its sibling `rescue-engine.exe`;
+//! a development checkout may explicitly select Python and the rar2 directory.
+//! Both routes call the same source-verified worker, outside GUI memory.
 
 use eframe::egui;
 use serde::Deserialize;
@@ -90,8 +90,26 @@ impl BatchUi {
         Ok(root)
     }
 
+    fn portable_engine() -> Option<PathBuf> {
+        let gui = std::env::current_exe().ok()?;
+        let engine = gui.parent()?.join("rescue-engine.exe");
+        if engine.is_file() && !engine.is_symlink() {
+            Some(engine)
+        } else {
+            None
+        }
+    }
+
     fn command_for(&self, action: &str) -> Result<Command, String> {
-        let root = self.engine_root()?;
+        let packaged = if self.repo_root.trim().is_empty() {
+            Self::portable_engine()
+        } else {
+            None
+        };
+        self.command_for_engine(action, packaged.as_deref())
+    }
+
+    fn command_for_engine(&self, action: &str, packaged: Option<&Path>) -> Result<Command, String> {
         let output = self.output_path.trim();
         if output.is_empty() {
             return Err("Set a dedicated output folder, outside the source tree".to_owned());
@@ -99,20 +117,38 @@ impl BatchUi {
         if !Path::new(output).is_absolute() {
             return Err("Use an absolute output folder path".to_owned());
         }
-        let python = self.python_path.trim();
-        if python.is_empty() {
-            return Err("Set the local Python interpreter".to_owned());
-        }
-        let mut cmd = Command::new(python);
-        cmd.current_dir(root)
-            .arg("-m")
-            .arg("tools.rescue_desktop_batch_v1")
-            .arg(action)
+        let mut cmd = if let Some(engine) = packaged {
+            let mut command = Command::new(engine);
+            if let Some(folder) = engine.parent() {
+                command.current_dir(folder);
+            }
+            command
+        } else {
+            let root = self.engine_root()?;
+            let python = self.python_path.trim();
+            if python.is_empty() {
+                return Err("Set the local Python interpreter".to_owned());
+            }
+            let mut command = Command::new(python);
+            command
+                .current_dir(root)
+                .arg("-m")
+                .arg("tools.rescue_desktop_batch_v1");
+            command
+        };
+        cmd.arg(action)
             .arg("--output")
             .arg(output)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            // Prevent a console flash for each frozen Python worker/control
+            // process spawned by the GUI. Direct CLI users still see output.
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
         match action {
             "scan" => {
                 if self.input_path.trim().is_empty() {
@@ -129,11 +165,19 @@ impl BatchUi {
             "run" => {
                 cmd.arg("--workers")
                     .arg(self.workers.clamp(1, 4).to_string());
-                if !self.asset_cli.trim().is_empty() {
-                    if !Path::new(self.asset_cli.trim()).is_absolute() {
+                let asset_cli = if !self.asset_cli.trim().is_empty() {
+                    Some(PathBuf::from(self.asset_cli.trim()))
+                } else {
+                    packaged.and_then(|engine| {
+                        let bundled_cli = engine.with_file_name("pub.exe");
+                        bundled_cli.is_file().then_some(bundled_cli)
+                    })
+                };
+                if let Some(asset_cli) = asset_cli {
+                    if !asset_cli.is_absolute() {
                         return Err("Use an absolute path to the optional asset CLI".to_owned());
                     }
-                    cmd.arg("--pub-cli").arg(self.asset_cli.trim());
+                    cmd.arg("--pub-cli").arg(asset_cli);
                 }
             }
             "retry" | "pause" | "cancel" => {}
@@ -159,7 +203,7 @@ impl BatchUi {
             let result = command
                 .status()
                 .map(|exit| exit.code().unwrap_or(-1))
-                .map_err(|_| "Cannot launch local Python Rescue engine".to_owned());
+                .map_err(|_| "Cannot launch local Rescue engine".to_owned());
             let _ = sender.send(result);
         });
         self.receiver = Some(receiver);
@@ -266,7 +310,12 @@ impl BatchUi {
         let busy = self.receiver.is_some();
         ui.group(|ui| {
             ui.strong("4. Local batch salvage (preview)");
-            ui.label("Drag a PUB/folder or type a path. Requires a local rar2 checkout and Python; no cloud upload.");
+            if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
+                ui.label("Portable engine detected; Python and rar2 checkout are not required.");
+            } else {
+                ui.label("Development mode: select a rar2 checkout and Python, or install the portable package.");
+            }
+            ui.label("All source data stays local; no cloud upload.");
             ui.horizontal(|ui| {
                 ui.label("PUB / folder");
                 ui.text_edit_singleline(&mut self.input_path);
@@ -364,6 +413,34 @@ mod tests {
         assert!(args.contains(&"--input".to_owned()));
         assert!(args.contains(&"--output".to_owned()));
         assert!(!args.contains(&"--pub-cli".to_owned()));
+    }
+
+    #[test]
+    fn packaged_engine_bypasses_python_and_checkout() {
+        let mut surface = BatchUi::default();
+        surface.output_path = std::env::temp_dir()
+            .join("rescue-portable-output")
+            .to_string_lossy()
+            .to_string();
+        surface.input_path = std::env::temp_dir()
+            .join("test.pub")
+            .to_string_lossy()
+            .to_string();
+        surface.python_path.clear();
+        let engine = std::env::temp_dir()
+            .join("rescuedir")
+            .join("rescue-engine.exe");
+        let command = surface
+            .command_for_engine("scan", Some(&engine))
+            .expect("bundled engine command");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(command.get_program(), engine.as_os_str());
+        assert_eq!(args[0], "scan");
+        assert!(args.contains(&"--output".to_owned()));
+        assert!(!args.contains(&"-m".to_owned()));
     }
 
     #[test]
