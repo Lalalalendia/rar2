@@ -94,3 +94,27 @@ jobs:
           assert {path.name for path in out_a.iterdir()} == expected
           assert {path.name for path in out_b.iterdir()} == expected
           PY
+
+      - name: Falsify and independently verify Story recovery on pinned Publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/stories-private"
+          cargo run --quiet --manifest-path apps/chaptera-pub-cli/Cargo.toml -- \
+            extract-text "$CHAPTERA_SAMPLE_NEWSLETTER" --output "$result"
+          python -m tools.verify_rescue_text_evidence_v1 \
+            "$CHAPTERA_SAMPLE_NEWSLETTER" --output "$result" > "$RUNNER_TEMP/stories-byte-receipt.json"
+          python - "$result" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          manifest = json.loads((Path(sys.argv[1]) / "stories.json").read_text(encoding="utf-8"))
+          assert manifest["story_count"] > 0, "no source-exact Story ranges admitted"
+          assert manifest["native_pub_delivery_allowed"] is False
+          assert manifest["page_geometry_reconstructed"] is False
+          assert manifest["extraction_class"] in (
+              "mature_0x2c_authoritative_story",
+              "eligible_corrupt_source_confirmed_quill",
+          )
+          print("Chaptera private Story fixture acceptance passed; count=" + str(manifest["story_count"]))
+          PY
