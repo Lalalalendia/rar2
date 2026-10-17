@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,7 @@ use crate::engine_job::EngineJob;
 
 const BATCH_REPORT_SCHEMA: &str = "chaptera.rescue-desktop-batch-report.v1";
 const MAX_REPORT_BYTES: u64 = 2 * 1024 * 1024;
+static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // Unique run identity, not a security credential. Controllers must carry this
 // exact token so delayed cancel/pause requests cannot affect a successor run.
@@ -26,7 +28,8 @@ fn next_run_token() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("gui-{:x}-{stamp:x}", std::process::id())
+    let sequence = RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("gui-{:x}-{stamp:x}-{sequence:x}", std::process::id())
 }
 
 #[derive(Debug, Deserialize)]
