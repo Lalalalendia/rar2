@@ -315,13 +315,14 @@ impl BatchUi {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        let received = self.active_process.as_mut().and_then(|child| {
-            match child.try_wait() {
+        let received = self
+            .active_process
+            .as_mut()
+            .and_then(|child| match child.try_wait() {
                 Ok(Some(exit)) => Some(Ok(exit.code().unwrap_or(-1))),
                 Ok(None) => None,
                 Err(_) => Some(Err("Cannot inspect local batch engine".to_owned())),
-            }
-        });
+            });
         if let Some(result) = received {
             let action = self.active_action.take().unwrap_or("command");
             if let Some(mut child) = self.active_process.take() {
@@ -346,13 +347,14 @@ impl BatchUi {
             };
         }
 
-        let controlled = self.control_process.as_mut().and_then(|child| {
-            match child.try_wait() {
+        let controlled = self
+            .control_process
+            .as_mut()
+            .and_then(|child| match child.try_wait() {
                 Ok(Some(exit)) => Some(Ok(exit.code().unwrap_or(-1))),
                 Ok(None) => None,
                 Err(_) => Some(Err("Cannot inspect local control command".to_owned())),
-            }
-        });
+            });
         if let Some(result) = controlled {
             if let Some(mut child) = self.control_process.take() {
                 if result.is_err() {
@@ -449,7 +451,6 @@ impl BatchUi {
         });
     }
 }
-
 
 impl Drop for BatchUi {
     fn drop(&mut self) {
@@ -578,9 +579,11 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
-        assert!(args.windows(2).any(|pair| {
-            pair[0] == "--expected-run-token" && pair[1] == "gui-run-pinned-0001"
-        }));
+        assert!(
+            args.windows(2).any(|pair| {
+                pair[0] == "--expected-run-token" && pair[1] == "gui-run-pinned-0001"
+            })
+        );
     }
 
     #[test]
