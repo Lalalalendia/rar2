@@ -465,20 +465,26 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
         }
         Command::Doctor { live } => {
-            let config = explicit_config.as_ref().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "doctor requires --config to inspect the existing Reader runtime",
-                )
-            })?;
-            if !live {
-                // Preserve startup's secret-authority fail-closed boundary.
-                // Only the explicit operator --live mode skips re-reading
-                // credentials already owned by the running systemd service.
-                let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
-                drop(secrets);
+            if live {
+                let config = explicit_config.as_ref().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "doctor --live requires --config to inspect the running Reader",
+                    )
+                })?;
+                // Operator-only diagnostics inspect the already-running service,
+                // not systemd credentials outside its execution sandbox.
+                doctor::run_live(config.listen, BUILD_GIT_SHA).await?;
+            } else {
+                // Preserve the legacy startup-shell contract for existing CI:
+                // resolve required production credentials before reporting
+                // genuinely unconfigured local producers as runtime_not_ready.
+                if let Some(config) = explicit_config.as_ref() {
+                    let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
+                    drop(secrets);
+                }
+                doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
             }
-            doctor::run_live(config.listen, BUILD_GIT_SHA).await?;
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
