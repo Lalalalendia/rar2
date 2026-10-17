@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import tempfile
 import time
 
 
@@ -120,41 +121,69 @@ class Desktop:
             raise OSError(ctypes.get_last_error(), "WM_CLOSE was not delivered")
 
 
+def _bounded_startup_diagnostic(handle, exe: Path) -> str:
+    """Report only synthetic-run failure details, without ephemeral user paths."""
+    handle.flush()
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    handle.seek(max(0, size - 4096))
+    raw = handle.read(4096).decode("utf-8", errors="replace")
+    for location in (str(exe.parent), os.environ.get("GITHUB_WORKSPACE", ""),
+                     os.environ.get("USERPROFILE", "")):
+        if location:
+            raw = raw.replace(location, "<redacted-path>")
+    # Keep the CI error compact and source-free; no PUB inputs are launched.
+    safe = "".join(char if char.isprintable() or char in "\r\n\t" else "?"
+                   for char in raw).strip()
+    return safe[-1500:] if safe else "(no process stderr)"
+
+
 def exercise_gui(exe: Path, env: dict[str, str], desktop: Desktop, *, force: bool):
-    process = subprocess.Popen([str(exe)], cwd=exe.parent, env=env,
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
-    try:
-        deadline = time.monotonic() + 35
-        hwnd = None
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise AssertionError("Rescue exited before a visible GUI window appeared")
-            hwnd = desktop.window_for(process.pid)
-            if hwnd is not None:
-                break
-            time.sleep(0.2)
-        if hwnd is None:
-            raise AssertionError("Rescue GUI window not visible on Windows runner desktop")
-        if force:
-            process.kill()
-        else:
-            desktop.close(hwnd)
+    with tempfile.TemporaryFile() as diagnostics:
+        process = subprocess.Popen([str(exe)], cwd=exe.parent, env=env,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=diagnostics)
         try:
-            process.wait(timeout=15)
-        except subprocess.TimeoutExpired as error:
-            raise AssertionError("Rescue GUI did not terminate within 15 seconds") from error
-        if not force and process.returncode != 0:
-            raise AssertionError(f"WM_CLOSE exited abnormally: {process.returncode}")
-        deadline = time.monotonic() + 5
-        while desktop.window_for(process.pid) is not None and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if desktop.window_for(process.pid) is not None:
-            raise AssertionError("Rescue left a top-level window after shutdown")
-    finally:
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=10)
+            deadline = time.monotonic() + 35
+            hwnd = None
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    reason = _bounded_startup_diagnostic(diagnostics, exe)
+                    raise AssertionError(
+                        f"Rescue exited before visible GUI, code={process.returncode}, "
+                        f"startup_stderr={reason}"
+                    )
+                hwnd = desktop.window_for(process.pid)
+                if hwnd is not None:
+                    break
+                time.sleep(0.2)
+            if hwnd is None:
+                raise AssertionError(
+                    "Rescue GUI window not visible on Windows runner desktop; "
+                    f"running_pid={process.pid}"
+                )
+            if force:
+                process.kill()
+            else:
+                desktop.close(hwnd)
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError("Rescue GUI did not terminate within 15 seconds") from error
+            if not force and process.returncode != 0:
+                reason = _bounded_startup_diagnostic(diagnostics, exe)
+                raise AssertionError(
+                    f"WM_CLOSE exited abnormally: {process.returncode}; stderr={reason}"
+                )
+            deadline = time.monotonic() + 5
+            while desktop.window_for(process.pid) is not None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if desktop.window_for(process.pid) is not None:
+                raise AssertionError("Rescue left a top-level window after shutdown")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
 
 
 def main(argv: list[str] | None = None) -> int:
