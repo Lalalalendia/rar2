@@ -475,6 +475,16 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    // Install Windows process-lifetime containment before any GUI batch child
+    // can start. Children inherit the Job at CreateProcess time, closing the
+    // otherwise unavoidable spawn-to-attach race. CLI-only operations remain
+    // outside this GUI lifecycle boundary.
+    #[cfg(windows)]
+    if let Err(error) = engine_job::EngineJob::protect_gui_process() {
+        eprintln!("Rescue GUI cannot safely start: {error}");
+        std::process::exit(2);
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 760.0]),
         ..Default::default()
