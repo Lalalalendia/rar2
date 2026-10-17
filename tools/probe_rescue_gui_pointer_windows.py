@@ -220,6 +220,25 @@ def wait_summary(path: Path, predicate, limit: float = 25) -> dict:
     raise AssertionError("GUI pointer action did not produce the canonical batch summary")
 
 
+def wait_engine_unlock(output: Path, *, timeout: float = 15) -> None:
+    """Wait for actual kernel batch lock, not an arbitrary GUI startup delay."""
+    from tools.rescue_desktop_batch_v1 import BatchError, output_lock
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with output_lock(output):
+                # Guard is released on exiting the context; cannot change
+                # private batch state or mistake summary.json for process exit.
+                pass
+            return
+        except BatchError as exc:
+            if str(exc) != "already_running":
+                raise
+        time.sleep(0.08)
+    raise AssertionError("Rescue GUI engine did not release batch kernel lock")
+
+
 def main() -> int:
     if os.name != "nt":
         raise SystemExit("Windows native pointer acceptance only")
@@ -279,9 +298,10 @@ def main() -> int:
             scan = wait_summary(output / "summary.json",
                                 lambda value: value.get("unique_sources") == 1)
             validate_scanned_source(scan, original_hash)
-            # The summary may become visible slightly before the GUI has reaped
-            # the scan subprocess and reenabled the Run button.
-            time.sleep(1.0)
+            # summary.json is persisted before the scan worker exits. Wait for
+            # the actual cross-process queue lock instead of a fixed 1s sleep.
+            wait_engine_unlock(output)
+            time.sleep(0.3)  # eframe polls the finished scan child at 100ms
             native.click(fields["run"])
             report = wait_summary(
                 output / "summary.json",
@@ -289,6 +309,8 @@ def main() -> int:
                                   for row in state.get("entries", [])), limit=35,
             )
             validate_completed_source(report, original_hash)
+            wait_engine_unlock(output)
+            time.sleep(0.3)  # allow GUI's finished worker to be reaped
             if hashlib.sha256(doc.read_bytes()).hexdigest() != original_hash:
                 raise AssertionError("GUI batch modified source bytes")
             desktop.close(hwnd)
