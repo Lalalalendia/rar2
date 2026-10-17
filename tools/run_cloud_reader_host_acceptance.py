@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Physical Cloud Reader host acceptance for CLOUD-READER-SERVER7-HOST-ACCEPTANCE-01.
 
-Runs on the deployed Linux host. It composes existing Chaptera/systemd/Caddy
+Runs on the deployed Linux host. It composes existing Chaptera/systemd/Nginx
 authorities and emits a source-safe receipt. It never deploys, migrates, resets
 the database, or prints guest credentials.
 
@@ -57,17 +57,22 @@ def sha256_file(path: pathlib.Path) -> str:
 
 
 def run(command: list[str], *, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        command,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # Never stringify a subprocess exception: it can contain arguments,
+        # stdout, stderr, source filenames, tokens or other host-only values.
+        raise AcceptanceError("host acceptance subprocess timeout") from None
     if check and completed.returncode != 0:
-        stderr = completed.stderr.strip().replace("\n", " ")
+        # Do not copy arbitrary host command stderr into CI receipts/logs.
         raise AcceptanceError(
-            f"command failed rc={completed.returncode}: {command[0]}: {stderr[-800:]}"
+            f"host acceptance subprocess failed rc={completed.returncode}"
         )
     return completed
 
@@ -523,6 +528,15 @@ def self_test() -> int:
     }
     assert sample_current["state"] == "current"
     assert SERVICES == ("chaptera-reader.service",)
+    try:
+        run([sys.executable, "-c",
+             "import sys; sys.stderr.write('sensitive-test-sentinel'); sys.exit(7)"],
+            timeout=5)
+    except AcceptanceError as exc:
+        assert "sensitive-test-sentinel" not in str(exc)
+        assert "rc=7" in str(exc)
+    else:
+        raise AssertionError("failing subprocess was accepted")
     headers = guest_mutation_headers("https://reader.chaptera.online", "csrf-probe")
     assert headers["origin"] == "https://reader.chaptera.online"
     assert headers["x-csrf-token"] == "csrf-probe"
