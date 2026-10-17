@@ -70,6 +70,13 @@ class OsInput:
     def __init__(self, hwnd: int):
         if os.name != "nt":
             raise RuntimeError("physical pointer test requires Windows")
+        # INPUT must be the 40-byte Win64 ABI expected by SendInput. A 32-bit
+        # Python host is not an admitted Windows x64 physical test driver.
+        if (ctypes.sizeof(ctypes.c_void_p) != 8
+                or ctypes.sizeof(Input) != 40
+                or ctypes.sizeof(KeyInput) != 24
+                or ctypes.sizeof(MouseInput) != 32):
+            raise RuntimeError("Win64 SendInput INPUT ABI mismatch")
         self.hwnd = hwnd
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.user.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int)
@@ -216,7 +223,9 @@ def wait_summary(path: Path, predicate, limit: float = 25) -> dict:
 def main() -> int:
     if os.name != "nt":
         raise SystemExit("Windows native pointer acceptance only")
-    from tools.probe_rescue_gui_window_windows import Desktop, validate_package
+    from tools.probe_rescue_gui_window_windows import (
+        Desktop, validate_package, _bounded_startup_diagnostic,
+    )
     from tools.test_rescue_cfb_stream_identity import collision_fixture
 
     parser = argparse.ArgumentParser()
@@ -236,9 +245,16 @@ def main() -> int:
         doc.write_bytes(source)
         original_hash = hashlib.sha256(source).hexdigest()
         output = tmp / "output"
-        process = subprocess.Popen([str(root / "chaptera-rescue.exe")], cwd=root, env=env,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
+        diagnostics = tempfile.TemporaryFile()
+        try:
+            process = subprocess.Popen(
+                [str(root / "chaptera-rescue.exe")], cwd=root, env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=diagnostics,
+            )
+        except Exception:
+            diagnostics.close()
+            raise
         try:
             deadline = time.monotonic() + 35
             hwnd = None
@@ -248,7 +264,13 @@ def main() -> int:
                     break
                 time.sleep(0.2)
             if hwnd is None:
-                raise AssertionError("real GUI window unavailable for OS pointer acceptance")
+                details = _bounded_startup_diagnostic(
+                    diagnostics, root / "chaptera-rescue.exe",
+                )
+                raise AssertionError(
+                    f"real GUI window unavailable for OS pointer acceptance; "
+                    f"exit_code={process.poll()}; stderr={details}"
+                )
             native = OsInput(hwnd)
             fields = native.coordinates()
             native.set_field(fields["source"], str(inputs))
@@ -272,7 +294,13 @@ def main() -> int:
             desktop.close(hwnd)
             process.wait(timeout=15)
             if process.returncode != 0:
-                raise AssertionError("GUI did not close normally after Scan/Run")
+                details = _bounded_startup_diagnostic(
+                    diagnostics, root / "chaptera-rescue.exe",
+                )
+                raise AssertionError(
+                    f"GUI did not close normally after Scan/Run; "
+                    f"code={process.returncode}; stderr={details}"
+                )
             print(json.dumps({
                 "schema_version": SCHEMA, "source_commit": inventory.get("source_commit"),
                 "physical_windows_mouse_keyboard": True, "source_and_output_fields": True,
@@ -284,9 +312,12 @@ def main() -> int:
                 "source_free": True,
             }, sort_keys=True))
         finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=10)
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=10)
+            finally:
+                diagnostics.close()
     return 0
 
 
