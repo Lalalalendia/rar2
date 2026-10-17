@@ -44,7 +44,12 @@ pub enum Command {
         action: MigrateAction,
     },
     /// Run read-only startup/operator diagnostics.
-    Doctor,
+    Doctor {
+        /// Probe the running loopback service without re-reading systemd
+        /// credentials from outside its unit (operator host audit only).
+        #[arg(long)]
+        live: bool,
+    },
     #[command(name = "untrusted-pub-inspect", hide = true)]
     UntrustedPubInspect {
         #[arg(long)]
@@ -399,7 +404,13 @@ mod tests {
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "doctor"]).unwrap().command,
-            Command::Doctor
+            Command::Doctor { live: false }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["chaptera", "doctor", "--live"])
+                .unwrap()
+                .command,
+            Command::Doctor { live: true }
         ));
         assert!(matches!(
             Cli::try_parse_from([

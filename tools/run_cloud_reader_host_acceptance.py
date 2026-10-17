@@ -577,6 +577,34 @@ def private_only_host_receipt(
     }
 
 
+def validate_live_doctor_receipt(payload: dict[str, Any]) -> dict[str, Any]:
+    # Allowlist only source-neutral readiness booleans, never carry CLI output
+    # (including paths, config, tokens or possible future debug fields).
+    if not isinstance(payload, dict) or not all((
+        payload.get("schema") == "chaptera.doctor-live.v1",
+        payload.get("status") == "ready",
+        payload.get("ready") is True,
+        payload.get("release_match") is True,
+        payload.get("loopback") is True,
+    )):
+        raise AcceptanceError("production live doctor did not verify readiness and SHA")
+    return {"verified": True, "runtime_ready": True, "release_match": True}
+
+
+def live_doctor_receipt(binary: pathlib.Path, config: pathlib.Path) -> dict[str, Any]:
+    result = run(
+        [str(binary), "--config", str(config), "doctor", "--live"],
+        check=False, timeout=12,
+    )
+    if result.returncode != 0:
+        raise AcceptanceError("production live doctor failed")
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        raise AcceptanceError("production live doctor receipt is not JSON") from None
+    return validate_live_doctor_receipt(data)
+
+
 def require_probe_equivalence(baseline: dict[str, Any], candidate: dict[str, Any], label: str) -> None:
     for key in ("classification", "compatibility_state", "page_count"):
         if candidate.get(key) != baseline.get(key):
@@ -724,6 +752,23 @@ def self_test() -> int:
             else:
                 raise AssertionError("wrong private-only origin or listener admitted")
     assert "--private-expiry-only" != "--verify-private-expiry"
+    good_doctor = {
+        "schema": "chaptera.doctor-live.v1",
+        "status": "ready", "ready": True, "release_match": True,
+        "loopback": True,
+    }
+    assert validate_live_doctor_receipt(good_doctor)["verified"]
+    for invalid in [
+        {**good_doctor, "release_match": False},
+        {**good_doctor, "ready": False},
+        {**good_doctor, "status": "not_ready"},
+    ]:
+        try:
+            validate_live_doctor_receipt(invalid)
+        except AcceptanceError:
+            pass
+        else:
+            raise AssertionError("unready doctor was admitted")
     with tempfile.TemporaryDirectory(prefix="chaptera-private-expiry-test-") as tmp:
         db = pathlib.Path(tmp) / "chaptera.sqlite"
         sid = "guest:" + "a" * 32
@@ -1014,20 +1059,18 @@ def main() -> int:
             args.origin, db_path, private_witness, timeout=args.timeout_seconds
         )
     private_cleanup_verified = private_cleanup["verified"]
-    # The old Chaptera Doctor CLI checks RuntimePorts::unconfigured(), NOT
-    # the running Reader process. Until a truthful production doctor is
-    # implemented, we cannot certify the literal #528 doctor requirement.
-    doctor_verified = False
+    # Run the exact installed binary against the actual loopback Reader
+    # service. The new doctor rejects stale running release SHA and unready
+    # required producer ports; this is not inferred from static config.
+    doctor_receipt = live_doctor_receipt(current_binary, args.config)
+    doctor_verified = doctor_receipt["verified"]
     complete = host_operability_complete and private_cleanup_verified and doctor_verified
 
     receipt = {
         "protocol_version": PROTOCOL,
         "complete": complete,
         "host_operability_complete": host_operability_complete,
-        "doctor": {
-            "verified": doctor_verified,
-            "reason": "cli_doctor_not_bound_to_live_runtime",
-        },
+        "doctor": doctor_receipt,
         "private_cleanup": private_cleanup,
         "release": {
             "current_target": current_target,

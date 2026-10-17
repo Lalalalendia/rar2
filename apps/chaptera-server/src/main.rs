@@ -4,6 +4,7 @@ use chaptera_server::{
     auth_runtime::AuthRuntime,
     authz_runtime::SqliteAuthzAuthority,
     blob_runtime::BlobStoreRuntime,
+    build_info::BUILD_GIT_SHA,
     cli::{Cli, Command},
     config::{ChapteraConfig, EnvironmentMode, SecretResolver},
     doctor,
@@ -463,12 +464,28 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 migrate::run(action, &runtime).await?;
             }
         }
-        Command::Doctor => {
-            if let Some(config) = explicit_config.as_ref() {
-                let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
-                drop(secrets);
+        Command::Doctor { live } => {
+            if live {
+                let config = explicit_config.as_ref().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "doctor --live requires --config to inspect the running Reader",
+                    )
+                })?;
+                // Operator-only diagnostics inspect the already-running service,
+                // not systemd credentials outside its execution sandbox.
+                doctor::run_live(config.listen, BUILD_GIT_SHA).await?;
+            } else {
+                // Preserve the legacy startup-shell contract for existing CI:
+                // resolve required production credentials before reporting
+                // genuinely unconfigured local producers as runtime_not_ready.
+                if let Some(config) = explicit_config.as_ref() {
+                    let secrets =
+                        config.resolve_required_secrets(&SecretResolver::from_process())?;
+                    drop(secrets);
+                }
+                doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
             }
-            doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
