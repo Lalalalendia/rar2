@@ -33,6 +33,9 @@ SCHEMA = "chaptera.rescue-desktop-batch.v1"
 REPORT_SCHEMA = "chaptera.rescue-desktop-batch-report.v1"
 CONTROL_SCHEMA = "chaptera.rescue-desktop-batch-control.v1"
 SHA = re.compile(r"[a-f0-9]{64}\Z")
+# Run identity, not an authorization secret. Controls must specify the exact
+# GUI-created run token or they cannot affect that batch incarnation.
+RUN_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}\Z")
 MAX_UNIQUE_SOURCES = 10000
 QUEUED = "pending"
 STATES = frozenset({QUEUED, "running", "done_partial", "done_unsupported", "failed", "cancelled"})
@@ -276,14 +279,20 @@ def choose_source(row: dict) -> tuple[Path | None, str | None]:
     return None, ("source_missing" if missing else "source_drift")
 
 
-def request_action(output: Path, action: str) -> None:
+def request_action(output: Path, action: str, *, expected_run_token: str | None = None) -> None:
     output = safe_root(output)
     if action not in ("pause", "cancel"):
         raise BatchError("invalid_action")
+    if expected_run_token is not None and not RUN_TOKEN.fullmatch(expected_run_token):
+        raise BatchError("invalid_run_token")
     state = load_queue(output)
     token = state.get("run_token")
     if not isinstance(token, str) or not token:
         raise BatchError("no_running_batch")
+    if expected_run_token is not None and token != expected_run_token:
+        raise BatchError("run_token_mismatch")
+    # A late control write contains only the previous run token; a later batch
+    # ignores it even if it is written after that new batch starts.
     json_write(output / "control.json", {"schema_version": CONTROL_SCHEMA,
                                          "run_token": token, "action": action})
 
@@ -399,9 +408,11 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
 
 def run(output: Path, *, workers: int = 2, timeout: int = 45,
         file_timeout: int = 600, pub_cli: Path | None = None,
-        retain_original: bool = False) -> dict:
+        retain_original: bool = False, run_token: str | None = None) -> dict:
     if not 1 <= workers <= 4 or not 1 <= timeout <= 3600 or not 10 <= file_timeout <= 7200:
         raise BatchError("invalid_worker_limits")
+    if run_token is not None and not RUN_TOKEN.fullmatch(run_token):
+        raise BatchError("invalid_run_token")
     output = safe_root(output)
     if pub_cli is not None:
         no_symlinks(pub_cli)
@@ -440,7 +451,7 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
             elif row["status"] == "running":
                 row["status"] = QUEUED
                 row["reason"] = None
-        token = uuid.uuid4().hex
+        token = run_token if run_token is not None else uuid.uuid4().hex
         state["run_token"] = token
         persist(output, state)
         todo = [row for row in state["entries"] if row["status"] == QUEUED]
@@ -515,9 +526,12 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--file-timeout", type=int, default=600)
     run_cmd.add_argument("--pub-cli", type=Path)
     run_cmd.add_argument("--retain-original", action="store_true")
+    run_cmd.add_argument("--run-token", help="opaque per-GUI-run identity; not an access credential")
     for name in ("status", "retry", "pause", "cancel"):
         c = sub.add_parser(name)
         c.add_argument("--output", type=Path, required=True)
+        if name in ("pause", "cancel"):
+            c.add_argument("--expected-run-token", help="reject controls for another run")
     args = cli.parse_args(argv)
     try:
         if args.cmd == "scan":
@@ -525,11 +539,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "run":
             result = run(args.output, workers=args.workers, timeout=args.timeout,
                          file_timeout=args.file_timeout, pub_cli=args.pub_cli,
-                         retain_original=args.retain_original)
+                         retain_original=args.retain_original, run_token=args.run_token)
         elif args.cmd == "retry":
             result = retry(args.output)
         elif args.cmd in ("pause", "cancel"):
-            request_action(args.output, args.cmd)
+            request_action(args.output, args.cmd, expected_run_token=args.expected_run_token)
             print(json.dumps({"schema_version": CONTROL_SCHEMA, "requested": args.cmd}))
             return 0
         else:
