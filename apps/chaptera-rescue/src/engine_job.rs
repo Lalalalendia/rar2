@@ -1,13 +1,12 @@
-//! A GUI-owned Windows Job Object: the engine and its descendants die if the
-//! desktop exits, including a hard crash. The handle is deliberately NOT
-//! inherited by children. The Python engine may create a nested memory-capped
-//! job independently; this job owns lifetime, not memory policy.
+//! A process-wide Windows GUI Job: every subprocess inherits containment at
+//! CreateProcess time, before arbitrary worker code can execute. Its handle
+//! stays non-inheritable and alive until OS process exit; the Python engine
+//! creates a nested memory-bounded Job and cleans its own workers on exit.
 #![cfg(windows)]
 
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::process::Child;
 use std::ptr;
 use std::sync::Mutex;
 
@@ -68,8 +67,8 @@ unsafe extern "system" {
     fn GetCurrentProcess() -> *mut c_void;
 }
 
-/// The GUI alone owns this non-inheritable handle. Dropping it terminates the
-/// attached batch engine and all children inherited into its nested job tree.
+/// Non-inheritable GUI lifetime handle, stored in a static until process exit.
+/// Never close it while the GUI is running: the GUI belongs to this Job too.
 pub struct EngineJob(OwnedHandle);
 
 impl EngineJob {
@@ -118,14 +117,13 @@ impl EngineJob {
         Ok(())
     }
 
-    /// Per-batch job: on normal completion or explicit cancel, immediately
-    /// reap leftover engine descendants without ending the whole GUI process.
-    pub fn attach(child: &Child) -> Result<Self, String> {
-        let job = Self::create()?;
-        if unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
-            return Err("Cannot attach batch engine to GUI lifetime Job Object".to_owned());
-        }
-        Ok(job)
+    /// Fail closed if another entrypoint tries launching BatchUi without
+    /// first activating the process-wide Windows lifetime protection.
+    pub fn gui_is_guarded() -> bool {
+        GUI_LIFETIME_JOB
+            .lock()
+            .map(|state| state.is_some())
+            .unwrap_or(false)
     }
 }
 #[cfg(test)]
@@ -251,76 +249,5 @@ mod tests {
         let _ = fs::remove_file(ready);
     }
 
-    #[test]
-    fn closing_gui_job_reaps_nested_python_engine_and_worker() {
-        // This is a physical Windows test, not an ABI mock. The Python engine
-        // joins its separate 512 MiB Job and creates a grandchild. Closing the
-        // GUI-owned outer Job must kill both. No private PUB bytes are involved.
-        let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let ready = std::env::temp_dir().join(format!(
-            "rescue-gui-job-{}-{nonce}.ready",
-            std::process::id()
-        ));
-        let code = concat!(
-            "import pathlib, subprocess, sys, time\n",
-            "from tools import rescue_windows_job_guard as g\n",
-            "assert g.activate(512)\n",
-            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n",
-            "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n",
-            "time.sleep(30)\n",
-        );
-        let mut engine = Command::new("python")
-            .args(["-u", "-c", code])
-            .arg(&ready)
-            .current_dir(repo)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("launch nested Windows Python guard");
-        let job = EngineJob::attach(&engine).expect("nested Windows GUI/engine jobs");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !ready.exists() && Instant::now() < deadline {
-            assert!(
-                engine.try_wait().unwrap().is_none(),
-                "nested engine crashed"
-            );
-            thread::sleep(Duration::from_millis(25));
-        }
-        assert!(ready.is_file(), "Python engine never spawned the worker");
-        let worker_pid: u32 = fs::read_to_string(&ready)
-            .expect("child pid")
-            .parse()
-            .expect("numeric PID");
-        drop(job);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while engine.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(25));
-        }
-        assert!(
-            engine.try_wait().unwrap().is_some(),
-            "GUI close left engine alive"
-        );
 
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn OpenProcess(access: u32, inherit: i32, id: u32) -> *mut c_void;
-            fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
-            fn CloseHandle(handle: *mut c_void) -> i32;
-        }
-        let handle = unsafe { OpenProcess(0x0010_0000, 0, worker_pid) }; // SYNCHRONIZE
-        if !handle.is_null() {
-            assert_eq!(
-                unsafe { WaitForSingleObject(handle, 5000) },
-                0,
-                "GUI close left a salvage grandchild alive"
-            );
-            unsafe { CloseHandle(handle) };
-        }
-        let _ = fs::remove_file(ready);
-    }
 }
