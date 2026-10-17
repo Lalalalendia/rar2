@@ -12,10 +12,18 @@ path = "src/main.rs"
 [dependencies]
 chaptera-suite-handoff = { path = "../../crates/chaptera-suite-handoff" }
 pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
-eframe = { version = "=0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+
+# Native Windows GUIs must also start without an OpenGL 2.0 driver.
+# Enable the existing eframe wgpu/DX12 backend; WARP is the software adapter.
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "=0.31.1", default-features = false, features = ["default_fonts", "wgpu"] }
+wgpu = { version = "24.0.0", default-features = false, features = ["dx12", "wgsl"] }
+
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "=0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 
 [workspace]
 resolver = "2"

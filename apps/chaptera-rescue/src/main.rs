@@ -464,6 +464,25 @@ fn run_cli(args: &[String]) -> Result<Option<i32>, String> {
     Ok(None)
 }
 
+fn rescue_gui_options() -> eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 760.0]),
+        ..Default::default()
+    };
+    #[cfg(windows)]
+    {
+        // DX12 supports both hardware adapters and WARP (software rendering)
+        // on Windows 10/11; avoid an unconditional OpenGL 2.0 requirement.
+        options.renderer = eframe::Renderer::Wgpu;
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) =
+            &mut options.wgpu_options.wgpu_setup
+        {
+            setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+        }
+    }
+    options
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = env::args().collect();
     match run_cli(&args) {
@@ -485,10 +504,7 @@ fn main() -> eframe::Result<()> {
         std::process::exit(2);
     }
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 760.0]),
-        ..Default::default()
-    };
+    let options = rescue_gui_options();
     eframe::run_native(
         APP_TITLE,
         options,
@@ -519,6 +535,21 @@ mod tests {
                 source_free: true,
                 private_content_serialized: false,
             },
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rescue_gui_selects_dx12_wgpu_instead_of_glow() {
+        let options = rescue_gui_options();
+        assert!(matches!(options.renderer, eframe::Renderer::Wgpu));
+        match options.wgpu_options.wgpu_setup {
+            eframe::egui_wgpu::WgpuSetup::CreateNew(setup) => {
+                assert_eq!(setup.instance_descriptor.backends, eframe::wgpu::Backends::DX12);
+            }
+            eframe::egui_wgpu::WgpuSetup::Existing(_) => {
+                panic!("Rescue GUI must configure a new DX12 device");
+            }
         }
     }
 
