@@ -1,3 +1,5 @@
+mod text_export;
+
 use anyhow::{Context, Result};
 use chaptera_suite_handoff::AdmittedSource;
 use clap::{Parser, Subcommand};
@@ -24,6 +26,15 @@ enum Command {
         /// Emit the canonical manifest JSON to stdout.
         #[arg(long)]
         json: bool,
+    },
+    /// Extract only source-proven semantic Story ranges to local private files.
+    /// This command does not reconstruct page layout or a repaired PUB.
+    ExtractText {
+        /// Exact source PUB file (kept unmodified).
+        file: PathBuf,
+        /// Dedicated directory for private stories.json and stories.txt.
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -74,6 +85,11 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::ExtractAssets { file, output, json } => extract_assets(file, output, json),
+        Command::ExtractText { file, output } => {
+            let count = text_export::extract_text(&file, &output)?;
+            println!("confirmed_story_ranges={count}; native_pub_repair=false");
+            Ok(())
+        }
     }
 }
 
@@ -106,6 +122,26 @@ mod tests {
                 assert_eq!(output, PathBuf::from("assets"));
                 assert!(json);
             }
+            Command::ExtractText { .. } => panic!("must not enter story command"),
+        }
+    }
+
+    #[test]
+    fn cli_accepts_bounded_story_extract_without_source_text_in_stdout() {
+        let cli = Cli::try_parse_from([
+            "pub",
+            "extract-text",
+            "example.pub",
+            "--output",
+            "recovered",
+        ])
+        .expect("CLI shape");
+        match cli.command {
+            Command::ExtractText { file, output } => {
+                assert_eq!(file, PathBuf::from("example.pub"));
+                assert_eq!(output, PathBuf::from("recovered"));
+            }
+            Command::ExtractAssets { .. } => panic!("must not enter asset command"),
         }
     }
 
