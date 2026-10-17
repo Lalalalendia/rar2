@@ -94,7 +94,11 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::ExtractAssets { file, output, json } => extract_assets(file, output, json),
-        Command::ExtractText { file, output, include_legacy } => {
+        Command::ExtractText {
+            file,
+            output,
+            include_legacy,
+        } => {
             let count = text_export::extract_text(&file, &output, include_legacy)?;
             println!("confirmed_story_ranges={count}; native_pub_repair=false");
             Ok(())
@@ -156,7 +160,11 @@ mod tests {
         ])
         .expect("CLI shape");
         match cli.command {
-            Command::ExtractText { file, output, include_legacy } => {
+            Command::ExtractText {
+                file,
+                output,
+                include_legacy,
+            } => {
                 assert_eq!(file, PathBuf::from("example.pub"));
                 assert_eq!(output, PathBuf::from("recovered"));
                 assert!(!include_legacy);
@@ -176,7 +184,8 @@ mod tests {
             "--output",
             "private",
             "--include-legacy",
-        ]).expect("bounded legacy opt-in");
+        ])
+        .expect("bounded legacy opt-in");
         match cli.command {
             Command::ExtractText { include_legacy, .. } => assert!(include_legacy),
             _ => panic!("must enter Story extraction"),

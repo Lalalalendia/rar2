@@ -165,8 +165,8 @@ fn legacy_story_records(
             continue;
         }
         observed_bytes = observed_bytes.saturating_add(story.text.len());
-        let within_limits = observed_stories < MAX_RECORDS
-            && observed_bytes <= MAX_TOTAL_TEXT_BYTES;
+        let within_limits =
+            observed_stories < MAX_RECORDS && observed_bytes <= MAX_TOTAL_TEXT_BYTES;
         observed_stories += 1;
         let exact_text = story.source_refs.iter().find(|source_ref| {
             source_ref.role == SourceRole::Semantic
@@ -177,10 +177,9 @@ fn legacy_story_records(
                     .byte_range
                     .is_some_and(|span| span.length > 0 && span.end().is_some())
         });
-        let (Some(exact_text), Ok(end)) = (
-            exact_text,
-            u32::try_from(story.text.encode_utf16().count()),
-        ) else {
+        let (Some(exact_text), Ok(end)) =
+            (exact_text, u32::try_from(story.text.encode_utf16().count()))
+        else {
             omitted += 1;
             continue;
         };
@@ -280,7 +279,11 @@ fn select_story_records(
                     source_sha,
                     "legacy_0x22_quill_authoritative_exact",
                 )?;
-                ("legacy_0x22_quill_authoritative_story", records, Some(omitted))
+                (
+                    "legacy_0x22_quill_authoritative_story",
+                    records,
+                    Some(omitted),
+                )
             } else if let Ok(build) =
                 pub_reader::build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_sha)
             {
@@ -289,7 +292,11 @@ fn select_story_records(
                     source_sha,
                     "legacy_0x22_noquill_authoritative_exact",
                 )?;
-                ("legacy_0x22_noquill_authoritative_story", records, Some(omitted))
+                (
+                    "legacy_0x22_noquill_authoritative_story",
+                    records,
+                    Some(omitted),
+                )
             } else {
                 (
                     "eligible_corrupt_source_confirmed_quill",
