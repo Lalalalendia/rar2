@@ -827,26 +827,35 @@ export function indexReaderScenePageNodes(pages, nodes) {
   });
 }
 
-export async function renderReaderScene(host, payload, options = {}) {
+// Prepare the shared Reader painter once per admitted Scene. The browser
+// window may mount or evict page SVGs without reinstalling every FontFace.
+export async function prepareReaderScene(payload, options = {}) {
   assertReaderSceneSourceNeutral(payload);
   if (payload?.protocol_version !== "chaptera.reader-scene.v1") {
     throw new Error("renderer requires chaptera.reader-scene.v1");
   }
-
   const emuPerCssPx = finiteNumber(options.emuPerCssPx ?? 9525, "emuPerCssPx");
   const maxPageWidth = finiteNumber(options.maxPageWidth ?? 920, "maxPageWidth");
   if (!(emuPerCssPx > 0) || !(maxPageWidth > 0)) {
     throw new RangeError("renderer view scale must be positive");
   }
-
   const fonts = await installFonts(payload);
-  host.replaceChildren();
-  const resources = new Map((payload.resources ?? []).map((resource) => [resource.resource_id, resource]));
+  const resources = new Map((payload.resources ?? []).map(resource => [resource.resource_id, resource]));
   const indexedPages = indexReaderScenePageNodes(payload.pages, payload.nodes);
+  return Object.freeze({ emuPerCssPx, maxPageWidth, fonts, resources, indexedPages });
+}
 
+// Uses exactly the original SVG drawing functions and page-major paint ordinals.
+// A narrow page set avoids constructing SVGs for every page in a publication.
+export function renderPreparedReaderPages(host, prepared, selectedPageIds = null) {
+  if (!prepared || !Array.isArray(prepared.indexedPages)) {
+    throw new TypeError("prepared Reader Scene required");
+  }
+  const { emuPerCssPx, maxPageWidth, fonts, resources, indexedPages } = prepared;
+  const selection = selectedPageIds === null ? null : new Set(selectedPageIds);
+  host.replaceChildren();
   for (const { pageModel, nodes, firstPaintIndex, validDimensions } of indexedPages) {
-    if (!validDimensions) continue;
-
+    if (!validDimensions || (selection && !selection.has(pageModel.page_id))) continue;
     const naturalWidth = pageModel.width_emu / emuPerCssPx;
     const scale = Math.min(1, maxPageWidth / Math.max(1, naturalWidth));
     const svg = svgNode("svg", {
@@ -876,4 +885,9 @@ export async function renderReaderScene(host, payload, options = {}) {
     }
     host.appendChild(svg);
   }
+}
+
+export async function renderReaderScene(host, payload, options = {}) {
+  const prepared = await prepareReaderScene(payload, options);
+  renderPreparedReaderPages(host, prepared);
 }
