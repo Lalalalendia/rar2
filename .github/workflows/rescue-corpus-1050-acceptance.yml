@@ -1,0 +1,163 @@
+name: Rescue real 1050 PUB corpus gate
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_corpus_1050_acceptance.py'
+      - '.github/workflows/rescue-corpus-1050-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-pub:
+    name: Linux canonical Rust PUB producer
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Source-safe tooling gate
+        run: |
+          python -m py_compile tools/rescue_corpus_1050_acceptance.py
+          python -m unittest tools.test_rescue_batch_text_v1 tools.test_verify_rescue_text_evidence_v1 -v
+      - name: Compile canonical PUB CLI
+        run: cargo build -p chaptera-pub-cli --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-pub-cli-linux
+          path: target/release/pub
+          if-no-files-found: error
+          retention-days: 2
+
+  corpus:
+    name: Real PUB corpus shard ${{ matrix.shard }}/2
+    needs: build-pub
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: canonical-pub-cli-linux
+          path: ${{ runner.temp }}/pub-runtime
+      - name: Restore executable permission
+        shell: bash
+        run: chmod +x "$RUNNER_TEMP/pub-runtime/pub"
+      - name: Fetch pinned real corpus into ephemeral runner only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/11038217075/zip" \
+            -o "$RUNNER_TEMP/chaptera-1050-source.zip"
+          printf '%s  %s\n' \
+            "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e" \
+            "$RUNNER_TEMP/chaptera-1050-source.zip" | sha256sum --check --status
+      - name: Run real 525-PUB Story/CFB/AutoRestore shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_corpus_1050_acceptance \
+            --archive "$RUNNER_TEMP/chaptera-1050-source.zip" \
+            --pub-cli "$RUNNER_TEMP/pub-runtime/pub" \
+            --shard "${{ matrix.shard }}" --shards 2 \
+            --receipt "$RUNNER_TEMP/rescue-1050-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-1050-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/rescue-1050-shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  aggregate:
+    name: Source-free 1050-PUB acceptance
+    needs: [build-pub, corpus]
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: source-free-1050-shard-*
+          path: receipts
+          merge-multiple: true
+      - name: Verify exact corpus denominator and positive text evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+          from collections import Counter
+          files = sorted(glob.glob('receipts/rescue-1050-shard-*.json'))
+          if len(files) != 2:
+              raise SystemExit('incomplete_source_free_receipt_set')
+          rows = [json.load(open(p, encoding='utf-8')) for p in files]
+          if ([r['shard'] for r in rows] != [0, 1]
+                  or any(not r['source_free'] or not r['source_immutable']
+                         or r['registered_in_artifact'] != 1050
+                         or r['shards'] != 2 or r['artifact_id'] != 11038217075
+                         for r in rows)):
+              raise SystemExit('invalid_corpus_provenance')
+          counts = Counter()
+          for row in rows:
+              counts.update(row['status_counts'])
+          result = {
+              'schema_version': 'chaptera.rescue-real-corpus-1050-aggregate.v1',
+              'source_free': True,
+              'exact_input_pubs': sum(r['input_unique'] for r in rows),
+              'real_bytes_processed': sum(r['input_bytes'] for r in rows),
+              'source_immutable': all(r['source_immutable'] for r in rows),
+              'statuses': dict(sorted(counts.items())),
+              'verified_text_files': sum(r['text_verified_files'] for r in rows),
+              'verified_story_ranges': sum(r['text_ranges'] for r in rows),
+              'verified_streams': sum(r['verified_physical_streams'] for r in rows),
+              'verified_images': sum(r['verified_image_assets'] for r in rows),
+              'restart_idempotent': all(r['restart_idempotent'] for r in rows),
+              'text_tamper_fails_closed': any(r['tamper_rejected'] is True for r in rows),
+              'native_pub_repaired': False,
+          }
+          print(json.dumps(result, sort_keys=True))
+          with open('source-free-1050-aggregate.json', 'w', encoding='utf-8') as out:
+              json.dump(result, out, sort_keys=True, indent=2)
+          if (result['exact_input_pubs'] != 1050 or sum(counts.values()) != 1050
+                  or any(k not in {'done_partial', 'done_unsupported'} for k in counts)
+                  or result['verified_story_ranges'] <= 0
+                  or not result['restart_idempotent']
+                  or not result['text_tamper_fails_closed']):
+              raise SystemExit('real_corpus_acceptance_failed')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-1050-aggregate
+          path: source-free-1050-aggregate.json
+          if-no-files-found: warn
+          retention-days: 7
