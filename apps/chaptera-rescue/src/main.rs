@@ -587,6 +587,26 @@ impl eframe::App for RescueApp {
                 {
                     self.view = RescueView::Evidence;
                 }
+                if let Some(label) = self.batch_ui.activity_label() {
+                    ui.add_space(16.0);
+                    egui::Frame::new()
+                        .fill(ui_theme::accent_soft())
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(label)
+                                    .size(12.0)
+                                    .strong()
+                                    .color(ui_theme::accent()),
+                            );
+                            if self.view == RescueView::Evidence
+                                && ui.button("Open recovery controls").clicked()
+                            {
+                                self.view = RescueView::Batch;
+                            }
+                        });
+                }
                 ui.add_space(20.0);
                 ui.separator();
                 ui.add_space(10.0);

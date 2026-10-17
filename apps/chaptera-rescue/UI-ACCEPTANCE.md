@@ -21,6 +21,9 @@ The native Rust/egui interface is the product. A Canva concept or HTML mock is n
 | Running Scan/Run | Busy status with textual message; paths protected from edits; Pause/Cancel enabled only for an active Run |
 | Switching to Validate evidence during Run | Worker continues under existing process guard; reaping and progress polling remain active after switching tabs |
 | Completed batch | Count of unique SHA sources, partial/unsupported/failed/cancelled, duplicates, rejections and source-free short hashes agree with canonical `summary.json` |
+| Large batch (e.g. 1556 distinct SHA sources) | Every entry remains reachable across 100-row pages; count and range are explicit, last page contains 56 rows, and no silent truncation occurs |
+| Filtered results | SHA/status/outcome/reason filtering resets to first page, still shows matching count and handles empty results visibly |
+| Active batch while viewing evidence | Sidebar shows a textual active-operation indicator and a return-to-recovery control without claiming the process completed |
 | Bad or absent summary | Old queue metrics disappear, explicit error is shown, no success color derived from an invalid summary |
 | Evidence selected | Original SHA inspection, source-matched receipt, independent JSON export are separate steps |
 | Source or receipt path changed | Previous validated proof and prior success text disappear until revalidation |

@@ -53,6 +53,25 @@ struct BatchReport {
     entries: Vec<BatchRow>,
 }
 
+const RESULTS_PAGE_SIZE: usize = 100;
+
+/// Resolve the visible slice, retaining access to every accepted queue row.
+fn result_page_window(total: usize, requested_page: usize) -> (usize, usize, usize, usize) {
+    let pages = total.saturating_sub(1) / RESULTS_PAGE_SIZE + 1;
+    let page = requested_page.min(pages - 1);
+    let start = page.saturating_mul(RESULTS_PAGE_SIZE);
+    let end = start.saturating_add(RESULTS_PAGE_SIZE).min(total);
+    (page, start, end, pages)
+}
+
+fn row_matches_filter(row: &BatchRow, normalized_filter: &str) -> bool {
+    normalized_filter.is_empty()
+        || row.sha256.contains(normalized_filter)
+        || row.status.contains(normalized_filter)
+        || row.outcome.as_deref().is_some_and(|value| value.contains(normalized_filter))
+        || row.reason.as_deref().is_some_and(|value| value.contains(normalized_filter))
+}
+
 /// Only render totals from a structurally consistent source-free engine report.
 /// This is not an independent artifact/stream verification.
 fn report_is_consistent(report: &BatchReport) -> bool {
@@ -104,6 +123,7 @@ pub struct BatchUi {
     report: Option<BatchReport>,
     report_warning: Option<String>,
     filter: String,
+    results_page: usize,
 }
 
 impl Default for BatchUi {
@@ -123,6 +143,7 @@ impl Default for BatchUi {
             report: None,
             report_warning: None,
             filter: String::new(),
+            results_page: 0,
         }
     }
 }
@@ -421,6 +442,23 @@ impl BatchUi {
         self.poll(ctx);
     }
 
+    /// A persistent sidebar indicator: the user can return to active controls
+    /// without mistaking a background run for an idle GUI.
+    pub fn activity_label(&self) -> Option<&'static str> {
+        if self.active_process.is_some() {
+            match self.active_action {
+                Some("scan") => Some("Scanning local files"),
+                Some("run") => Some("Recovery in progress"),
+                Some("retry") => Some("Preparing retries"),
+                _ => Some("Local engine active"),
+            }
+        } else if self.control_process.is_some() {
+            Some("Sending pause / cancel")
+        } else {
+            None
+        }
+    }
+
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         use crate::ui_theme;
         use egui::RichText;
@@ -490,6 +528,7 @@ impl BatchUi {
                 // Never show a cached receipt or warning for another output directory.
                 self.report = None;
                 self.report_warning = None;
+                self.results_page = 0;
             }
             ui.label(
                 RichText::new("Results go to a separate folder outside the input tree.")
@@ -650,25 +689,47 @@ impl BatchUi {
                             .strong()
                             .color(ui_theme::muted()),
                     );
-                    ui.add(
+                    if ui.add(
                         egui::TextEdit::singleline(&mut self.filter)
-                            .hint_text("Filter hash or status")
+                            .hint_text("Filter by SHA, status or outcome")
                             .desired_width(220.0),
-                    );
+                    ).changed() {
+                        self.results_page = 0;
+                    }
+                });
+                let query = self.filter.trim().to_ascii_lowercase();
+                let matching: Vec<&BatchRow> = report
+                    .entries
+                    .iter()
+                    .filter(|entry| row_matches_filter(entry, &query))
+                    .collect();
+                let (page, start, end, pages) =
+                    result_page_window(matching.len(), self.results_page);
+                self.results_page = page;
+                ui.horizontal_wrapped(|ui| {
+                    if matching.is_empty() {
+                        ui.label(RichText::new("No entries match this filter.")
+                            .size(12.0).color(ui_theme::muted()));
+                    } else {
+                        ui.label(RichText::new(format!(
+                            "Showing {}–{} of {} matching files",
+                            start + 1, end, matching.len()
+                        )).size(12.0).color(ui_theme::muted()));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(page + 1 < pages, egui::Button::new("Next ›")).clicked() {
+                            self.results_page += 1;
+                        }
+                        ui.label(format!("{}/{}", page + 1, pages));
+                        if ui.add_enabled(page > 0, egui::Button::new("‹ Previous")).clicked() {
+                            self.results_page -= 1;
+                        }
+                    });
                 });
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
                     .show(ui, |ui| {
-                        for entry in report
-                            .entries
-                            .iter()
-                            .filter(|entry| {
-                                self.filter.trim().is_empty()
-                                    || entry.sha256.contains(self.filter.trim())
-                                    || entry.status.contains(self.filter.trim())
-                            })
-                            .take(100)
-                        {
+                        for entry in &matching[start..end] {
                             let short_hash = &entry.sha256[..entry.sha256.len().min(12)];
                             let outcome = entry
                                 .outcome
@@ -953,6 +1014,42 @@ mod tests {
             }]
         });
         serde_json::from_value(sample).expect("canonical local summary")
+    }
+
+    #[test]
+    fn pagination_reaches_full_1556_file_corpus_without_silent_truncation() {
+        assert_eq!(result_page_window(1556, 0), (0, 0, 100, 16));
+        assert_eq!(result_page_window(1556, 10), (10, 1000, 1100, 16));
+        assert_eq!(result_page_window(1556, 15), (15, 1500, 1556, 16));
+        assert_eq!(result_page_window(1556, usize::MAX), (15, 1500, 1556, 16));
+        assert_eq!(result_page_window(0, 7), (0, 0, 0, 1));
+    }
+
+    #[test]
+    fn queue_filter_can_search_sha_status_and_failure_reason() {
+        let mut row = BatchRow {
+            sha256: "a".repeat(64),
+            status: "failed".to_owned(),
+            outcome: None,
+            reason: Some("source_drift".to_owned()),
+            stream_count: None,
+            asset_count: None,
+        };
+        assert!(row_matches_filter(&row, ""));
+        assert!(row_matches_filter(&row, "aaaa"));
+        assert!(row_matches_filter(&row, "failed"));
+        assert!(row_matches_filter(&row, "source_drift"));
+        assert!(!row_matches_filter(&row, "done_partial"));
+        row.outcome = Some("partial".to_owned());
+        assert!(row_matches_filter(&row, "partial"));
+    }
+
+    #[test]
+    fn idle_sidebar_activity_is_not_falsely_running() {
+        let mut surface = BatchUi::default();
+        assert_eq!(surface.activity_label(), None);
+        surface.active_action = Some("run");
+        assert_eq!(surface.activity_label(), None);
     }
 
     #[test]
