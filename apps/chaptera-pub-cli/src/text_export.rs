@@ -53,52 +53,41 @@ fn sha256(bytes: &[u8]) -> String {
 fn add_record(
     records: &mut Vec<StoryEvidence>,
     total_text: &mut usize,
-    story_key: String,
-    utf16_start: u32,
-    utf16_end: u32,
-    text: String,
-    evidence_class: &'static str,
-    carrier: Option<String>,
-    carrier_byte_offset: Option<u64>,
-    carrier_byte_len: Option<u64>,
+    record: StoryEvidence,
 ) -> Result<()> {
-    ensure!(!text.is_empty(), "empty_story_not_promoted");
+    ensure!(!record.text.is_empty(), "empty_story_not_promoted");
     ensure!(
-        !story_key.is_empty()
-            && story_key.len() <= 96
-            && story_key
+        !record.story_key.is_empty()
+            && record.story_key.len() <= 96
+            && record
+                .story_key
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_')),
         "unsafe_story_key"
     );
     ensure!(records.len() < MAX_RECORDS, "story_count_limit");
-    let utf16_len = u32::try_from(text.encode_utf16().count()).context("text_utf16_limit")?;
+    let utf16_len =
+        u32::try_from(record.text.encode_utf16().count()).context("text_utf16_limit")?;
     ensure!(
-        utf16_start.checked_add(utf16_len) == Some(utf16_end),
+        record.utf16_start.checked_add(utf16_len) == Some(record.utf16_end),
         "unproven_utf16_story_range"
     );
+    ensure!(
+        record.utf8_byte_len == record.text.len()
+            && record.text_sha256 == sha256(record.text.as_bytes()),
+        "story_payload_digest_mismatch"
+    );
     *total_text = total_text
-        .checked_add(text.len())
+        .checked_add(record.text.len())
         .context("text_length_overflow")?;
     ensure!(*total_text <= MAX_TOTAL_TEXT_BYTES, "text_total_limit");
-    if let (Some(offset), Some(len)) = (carrier_byte_offset, carrier_byte_len) {
+    if let (Some(offset), Some(len)) = (record.carrier_byte_offset, record.carrier_byte_len) {
         ensure!(
             offset.checked_add(len).is_some(),
             "invalid_source_carrier_range"
         );
     }
-    records.push(StoryEvidence {
-        story_key,
-        utf16_start,
-        utf16_end,
-        utf8_byte_len: text.len(),
-        text_sha256: sha256(text.as_bytes()),
-        text,
-        evidence_class,
-        carrier,
-        carrier_byte_offset,
-        carrier_byte_len,
-    });
+    records.push(record);
     Ok(())
 }
 
@@ -130,19 +119,26 @@ fn mature_story_records(
         let span = exact_text
             .byte_range
             .context("mature_story_missing_carrier_range")?;
-        ensure!(span.end().is_some(), "mature_story_carrier_range_overflow");
+        ensure!(
+            span.length > 0 && span.end().is_some(),
+            "mature_story_carrier_range_invalid"
+        );
         let end = u32::try_from(story.text.encode_utf16().count()).context("mature_utf16_limit")?;
         add_record(
             &mut records,
             &mut total,
-            story.id.as_canonical().to_string(),
-            0,
-            end,
-            story.text.clone(),
-            "mature_authoritative_exact",
-            Some(exact_text.carrier.clone()),
-            Some(span.offset),
-            Some(span.length),
+            StoryEvidence {
+                story_key: story.id.as_canonical().to_string(),
+                utf16_start: 0,
+                utf16_end: end,
+                utf8_byte_len: story.text.len(),
+                text_sha256: sha256(story.text.as_bytes()),
+                text: story.text.clone(),
+                evidence_class: "mature_authoritative_exact",
+                carrier: Some(exact_text.carrier.clone()),
+                carrier_byte_offset: Some(span.offset),
+                carrier_byte_len: Some(span.length),
+            },
         )?;
     }
     Ok(records)
@@ -176,14 +172,18 @@ fn salvage_story_records(bytes: &[u8]) -> Result<Vec<StoryEvidence>> {
             add_record(
                 &mut records,
                 &mut total,
-                story_key,
-                utf16_start,
-                utf16_end,
-                text,
-                "salvage_confirmed_quill_text_range",
-                None,
-                None,
-                None,
+                StoryEvidence {
+                    story_key,
+                    utf16_start,
+                    utf16_end,
+                    utf8_byte_len: text.len(),
+                    text_sha256: sha256(text.as_bytes()),
+                    text,
+                    evidence_class: "salvage_confirmed_quill_text_range",
+                    carrier: None,
+                    carrier_byte_offset: None,
+                    carrier_byte_len: None,
+                },
             )?;
         }
     }
@@ -378,14 +378,18 @@ mod tests {
         add_record(
             &mut rows,
             &mut 0_usize,
-            story_key.to_owned(),
-            start,
-            end,
-            text.to_owned(),
-            "salvage_confirmed_quill_text_range",
-            None,
-            None,
-            None,
+            StoryEvidence {
+                story_key: story_key.to_owned(),
+                utf16_start: start,
+                utf16_end: end,
+                utf8_byte_len: text.len(),
+                text_sha256: sha256(text.as_bytes()),
+                text: text.to_owned(),
+                evidence_class: "salvage_confirmed_quill_text_range",
+                carrier: None,
+                carrier_byte_offset: None,
+                carrier_byte_len: None,
+            },
         )?;
         Ok(rows.remove(0))
     }
@@ -403,6 +407,13 @@ mod tests {
     fn refuses_unknown_story_key_and_empty_payload() {
         assert!(admitted_story("confidential/name", "hello", 0, 5).is_err());
         assert!(admitted_story("some-story", "", 0, 0).is_err());
+    }
+
+    #[test]
+    fn record_with_tampered_payload_digest_is_rejected() {
+        let mut record = admitted_story("quill-syid:00000002", "hello", 0, 5).unwrap();
+        record.text_sha256 = "0".repeat(64);
+        assert!(add_record(&mut Vec::new(), &mut 0_usize, record).is_err());
     }
 
     #[test]
