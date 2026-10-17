@@ -19,6 +19,11 @@ ALLOWED_MODULES = frozenset({
     "tools.rescue_cfb_stream_export",
     "tools.verify_rescue_cfb_stream_export",
 })
+# Internal dependency modules are import-checked but NOT callable via -m.
+# In particular rescue_batch_text_v1 has no standalone main entrypoint.
+REQUIRED_IMPORT_MODULES = ALLOWED_MODULES | frozenset({
+    "tools.rescue_batch_text_v1", "tools.verify_rescue_text_evidence_v1",
+})
 
 
 def dispatch(argv: list[str] | None = None) -> int:
@@ -26,14 +31,14 @@ def dispatch(argv: list[str] | None = None) -> int:
     if args == ["--self-check"]:
         try:
             # Even in a frozen executable, prove all requisite modules import.
-            for name in sorted(ALLOWED_MODULES):
+            for name in sorted(REQUIRED_IMPORT_MODULES):
                 importlib.import_module(name)
         except ImportError:
             print(json.dumps({"schema_version": SCHEMA, "ok": False}))
             return 2
         print(json.dumps({"schema_version": SCHEMA, "ok": True,
                           "frozen": bool(getattr(sys, "frozen", False)),
-                          "module_count": len(ALLOWED_MODULES)}))
+                          "module_count": len(REQUIRED_IMPORT_MODULES)}))
         return 0
 
     if args[:1] == ["-m"]:

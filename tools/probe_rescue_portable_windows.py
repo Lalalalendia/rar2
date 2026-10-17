@@ -49,7 +49,7 @@ def main() -> int:
     assert code == 0, "frozen dependency import failed"
     check = json.loads(stdout)
     assert check == {"schema_version": "chaptera.rescue-portable-engine.v1", "ok": True,
-                     "frozen": True, "module_count": 4}, check
+                     "frozen": True, "module_count": 6}, check
 
     # Real Rust GUI binary must remain identifiable even when launched offline.
     code, stdout = invoke(gui, ["--self-check"], env)
@@ -84,7 +84,8 @@ def main() -> int:
         rows = json.loads((output / "summary.json").read_text(encoding="utf-8"))["entries"]
         assert len(rows) == 1 and rows[0]["sha256"] == origin_digest
         assert rows[0]["status"] == "done_partial" and rows[0]["stream_count"] == 2
-        assert rows[0]["auto_tier"] in ("verified_streams", "verified_images")
+        assert rows[0]["auto_tier"] in ("verified_streams", "verified_images", "verified_text")
+        assert rows[0]["text_status"] in ("verified", "unavailable")
         bundle = output / "bundles" / origin_digest
         # Real frozen Windows engine must materialize the automatic result,
         # not merely pass Python-only unit tests.

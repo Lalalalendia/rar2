@@ -28,6 +28,7 @@ import uuid
 
 from tools import rescue_salvage_bundle_v1 as salvage
 from tools import rescue_auto_restore_v1 as autorestore
+from tools import rescue_batch_text_v1 as text_batch
 from tools import rescue_windows_job_guard as job_guard
 
 SCHEMA = "chaptera.rescue-desktop-batch.v1"
@@ -43,9 +44,10 @@ STATES = frozenset({QUEUED, "running", "done_partial", "done_unsupported", "fail
 DONE = frozenset({"done_partial", "done_unsupported"})
 REASONS = frozenset({"source_missing", "source_drift", "unsafe_source", "worker_timeout",
                      "worker_error", "bundle_integrity", "auto_restore_integrity",
-                     "cancelled", "worker_crash"})
+                     "cancelled", "worker_crash", "text_integrity"})
 FIELDS = ("sha256", "source_bytes", "status", "outcome", "reason", "attempts",
-          "stream_count", "asset_count", "auto_tier", "auto_index")
+          "stream_count", "asset_count", "auto_tier", "auto_index",
+          "text_status", "text_count")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -155,21 +157,31 @@ def report(state: dict) -> dict:
     entries = []
     for row in sorted(state["entries"], key=lambda entry: entry["sha256"]):
         public = {key: row.get(key) for key in FIELDS}
+        done = public["status"] in DONE
+        count = row.get("text_count", 0)
+        text_status = row.get("text_status", "not_requested")
+        # Never echo an arbitrary private queue value in a source-free report.
+        if not (done and type(count) is int and 0 <= count <= 16_384
+                and text_status in ("not_requested", "unavailable", "verified")
+                and ((text_status == "verified") == (count > 0))):
+            public["text_status"] = None
+            public["text_count"] = 0
+        else:
+            public["text_status"] = text_status
+            public["text_count"] = count
         tier = public["auto_tier"]
-        # The output of status/CSV is always source-free; never echo arbitrary
-        # values from a private queue field as an auto-recovery tier.
         public["auto_tier"] = (
-            tier if public["status"] in DONE and
-            isinstance(tier, str) and tier in autorestore.TIERS else None
+            tier if done and isinstance(tier, str) and tier in autorestore.TIERS else None
         )
-        # This relative path is generated from a validated SHA only; it is not
-        # a private filesystem path or a claim that a native PUB was repaired.
+        if public["auto_tier"] == "verified_text" and public["text_status"] != "verified":
+            public["auto_tier"] = None
         digest = public["sha256"]
-        public["auto_index"] = (
-            f"recovered/{digest}/index.html"
-            if public["auto_tier"] is not None and isinstance(digest, str)
-            and SHA.fullmatch(digest) and public["status"] in DONE else None
-        )
+        if (public["auto_tier"] is not None and isinstance(digest, str)
+                and SHA.fullmatch(digest) and done):
+            prefix = "recovered-text-pages" if public["auto_tier"] == "verified_text" else "recovered"
+            public["auto_index"] = f"{prefix}/{digest}/index.html"
+        else:
+            public["auto_index"] = None
         entries.append(public)
     counts = dict(sorted(Counter(row["status"] for row in entries).items()))
     return {"schema_version": REPORT_SCHEMA, "source_free": True,
@@ -268,7 +280,8 @@ def scan(inputs: list[Path], output: Path, *, append: bool = False) -> dict:
                     row = {"sha256": digest, "source_bytes": byte_len,
                            "paths": [private_path], "status": QUEUED, "attempts": 0,
                            "outcome": None, "reason": None, "stream_count": 0,
-                           "asset_count": 0, "auto_tier": None}
+                           "asset_count": 0, "auto_tier": None,
+                           "text_status": "not_requested", "text_count": 0}
                     if len(state["entries"]) >= MAX_UNIQUE_SOURCES:
                         raise BatchError("batch_source_limit")
                     state["entries"].append(row)
@@ -359,7 +372,12 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
                 "stream_count": 0, "asset_count": 0}
     args = [sys.executable, "-m", "tools.rescue_salvage_bundle_v1", str(source),
             "--output", str(bundle_root), "--timeout", str(timeout)]
-    if pub_cli is not None:
+    # A verified SHA-owned salvage bundle is immutable. When a legacy batch
+    # later gains the pub.exe text producer, do NOT ask the older salvage worker
+    # to retrofit an image manifest into the immutable existing bundle.
+    # The new Story producer runs independently after bundle re-verification.
+    existing_bundle = bundle_root / row["sha256"]
+    if pub_cli is not None and not (existing_bundle.exists() or existing_bundle.is_symlink()):
         args.extend(["--pub-cli", str(pub_cli)])
     if retain_original:
         args.append("--retain-original")
@@ -369,12 +387,12 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
         options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
+    deadline = time.monotonic() + file_timeout
     try:
         proc = subprocess.Popen(args, **options)
     except OSError:
         return {"status": "failed", "reason": "worker_error", "outcome": None,
                 "stream_count": 0, "asset_count": 0}
-    deadline = time.monotonic() + file_timeout
     stdout = b""
     while True:
         try:
@@ -431,10 +449,30 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
             ValueError, TypeError, KeyError, json.JSONDecodeError):
         return {"status": "failed", "reason": "auto_restore_integrity", "outcome": None,
                 "stream_count": 0, "asset_count": 0, "auto_tier": None}
-    return {"status": status, "reason": None, "outcome": expected_outcome,
+    try:
+        # Same aggregate Windows Job and original per-file wall deadline.
+        # A verified text view does not alter the immutable physical bundle.
+        text_count, text_status = text_batch.admit(
+            source, bundle_root.parent, row["sha256"], pub_cli=pub_cli,
+            deadline=deadline, abort=abort, kill_tree=kill_tree)
+    except text_batch.TextInterrupted as error:
+        interrupted = str(error) == "cancelled"
+        return {"status": "cancelled" if interrupted else "failed",
+                "reason": "cancelled" if interrupted else "worker_timeout",
+                "outcome": None, "stream_count": 0, "asset_count": 0, "auto_tier": None,
+                "text_status": None, "text_count": 0}
+    except (text_batch.TextRecoveryError, salvage.UnsafeInput, OSError, ValueError,
+            TypeError, KeyError, json.JSONDecodeError):
+        return {"status": "failed", "reason": "text_integrity", "outcome": None,
+                "stream_count": 0, "asset_count": 0, "auto_tier": None,
+                "text_status": None, "text_count": 0}
+    composite_outcome = "partial" if text_count or expected_outcome == "partial" else "unsupported"
+    return {"status": "done_partial" if composite_outcome == "partial" else "done_unsupported",
+            "reason": None, "outcome": composite_outcome,
             "stream_count": receipt["physical"].get("stream_count", 0),
             "asset_count": receipt["images"].get("asset_count", 0),
-            "auto_tier": promoted["tier"]}
+            "auto_tier": "verified_text" if text_count else promoted["tier"],
+            "text_status": text_status, "text_count": text_count}
 
 
 def run(output: Path, *, workers: int = 2, timeout: int = 45,
@@ -467,29 +505,61 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
             if row["status"] in DONE:
                 source, why = choose_source(row)
                 if source is None:
-                    row.update(status="failed", reason=why, outcome=None, auto_tier=None)
+                    row.update(status="failed", reason=why, outcome=None, auto_tier=None,
+                               text_status=None, text_count=0)
                     continue
                 try:
                     receipt = salvage.read_bundle_report(source, bundle_root / row["sha256"], timeout)
-                    outcome = receipt["outcome"]
-                    if (row["status"] != ("done_partial" if outcome == "partial" else "done_unsupported")
-                            or row["outcome"] != outcome
+                    physical_outcome = receipt["outcome"]
+                    stored_text_status = row.get("text_status", "not_requested")
+                    stored_count = row.get("text_count", 0)
+                    if (stored_text_status not in ("not_requested", "unavailable", "verified")
+                            or type(stored_count) is not int
+                            or not 0 <= stored_count <= 16_384
+                            or ((stored_text_status == "verified") != (stored_count > 0))):
+                        raise BatchError("invalid_stored_text_receipt")
+                    previous_outcome = "partial" if stored_count or physical_outcome == "partial" else "unsupported"
+                    if (row["status"] != ("done_partial" if previous_outcome == "partial"
+                                          else "done_unsupported")
+                            or row["outcome"] != previous_outcome
                             or row["stream_count"] != receipt["physical"].get("stream_count", 0)
                             or row["asset_count"] != receipt["images"].get("asset_count", 0)):
                         raise BatchError("integrity_mismatch")
                 except (salvage.UnsafeInput, OSError, ValueError, TypeError, KeyError):
-                    row.update(status="failed", reason="bundle_integrity", outcome=None, auto_tier=None)
+                    row.update(status="failed", reason="bundle_integrity", outcome=None,
+                               auto_tier=None, text_status=None, text_count=0)
                     continue
                 try:
                     promoted = autorestore.materialize(
                         source, bundle_root / row["sha256"], output / "recovered", receipt)
-                    row["auto_tier"] = promoted["tier"]
                 except (autorestore.AutoRestoreError, salvage.UnsafeInput, OSError,
                         ValueError, TypeError, KeyError, json.JSONDecodeError):
-                    # Preserve the immutable salvage bundle as forensic evidence;
-                    # do not call a corrupted presentation a successful recovery.
                     row.update(status="failed", reason="auto_restore_integrity",
-                               outcome=None, auto_tier=None)
+                               outcome=None, auto_tier=None, text_status=None, text_count=0)
+                    continue
+                try:
+                    text_count, observed = text_batch.admit(
+                        source, output, row["sha256"], pub_cli=None,
+                        deadline=time.monotonic() + file_timeout,
+                        abort=threading.Event(), kill_tree=kill_tree)
+                    if (stored_text_status == "verified"
+                            and (observed != "verified" or text_count != stored_count)):
+                        raise text_batch.TextRecoveryError("stored_text_proof_missing")
+                    outcome = "partial" if text_count or physical_outcome == "partial" else "unsupported"
+                    row.update(status="done_partial" if outcome == "partial" else "done_unsupported",
+                               outcome=outcome, auto_tier=("verified_text" if text_count
+                                                           else promoted["tier"]),
+                               text_count=text_count,
+                               text_status="verified" if text_count else stored_text_status,
+                               reason=None)
+                    # Backfill an old completed row in the cancellable worker pool.
+                    if pub_cli is not None and not text_count and stored_text_status == "not_requested":
+                        row.update(status=QUEUED, outcome=None, auto_tier=None,
+                                   text_count=0, text_status=None)
+                except (text_batch.TextRecoveryError, text_batch.TextInterrupted,
+                        salvage.UnsafeInput, OSError, ValueError, TypeError, KeyError):
+                    row.update(status="failed", reason="text_integrity",
+                               outcome=None, auto_tier=None, text_status=None, text_count=0)
             elif row["status"] == "running":
                 row["status"] = QUEUED
                 row["reason"] = None
@@ -510,6 +580,8 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                             row = todo.pop(0)
                             row["status"] = "running"
                             row["auto_tier"] = None
+                            row["text_status"] = None
+                            row["text_count"] = 0
                             row["attempts"] += 1
                             persist(output, state)
                             future = pool.submit(process_one, dict(row), bundle_root, timeout=timeout,
@@ -544,7 +616,8 @@ def retry(output: Path) -> dict:
         for row in state["entries"]:
             if row["status"] in ("failed", "cancelled"):
                 row.update(status=QUEUED, reason=None, outcome=None,
-                           stream_count=0, asset_count=0, auto_tier=None)
+                           stream_count=0, asset_count=0, auto_tier=None,
+                           text_status=None, text_count=0)
         state["run_token"] = None
         persist(output, state)
         return report(state)

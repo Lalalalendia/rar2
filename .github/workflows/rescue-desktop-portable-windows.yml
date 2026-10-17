@@ -7,10 +7,14 @@ on:
       - 'tools/rescue_engine_entrypoint.py'
       - 'tools/test_rescue_engine_entrypoint.py'
       - 'tools/probe_rescue_portable_windows.py'
+      - 'tools/probe_rescue_real_text_windows.py'
       - 'tools/probe_rescue_gui_window_windows.py'
       - 'tools/test_rescue_gui_window_probe.py'
       - '.github/workflows/rescue-desktop-portable-windows.yml'
       - 'tools/rescue_desktop_batch_v1.py'
+      - 'tools/rescue_batch_text_v1.py'
+      - 'tools/test_rescue_batch_text_v1.py'
+      - 'tools/verify_rescue_text_evidence_v1.py'
       - 'tools/rescue_salvage_bundle_v1.py'
       - 'tools/rescue_windows_job_guard.py'
       - 'tools/test_rescue_windows_job_guard.py'
@@ -41,13 +45,13 @@ jobs:
       - name: Offline entrypoint and existing batch/salvage tests
         shell: pwsh
         run: |
-          python -m unittest tools.test_rescue_engine_entrypoint tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity tools.test_rescue_windows_job_guard -v
-          python -m py_compile tools/rescue_engine_entrypoint.py tools/probe_rescue_portable_windows.py tools/rescue_windows_job_guard.py tools/test_rescue_windows_job_guard.py
+          python -m unittest tools.test_rescue_engine_entrypoint tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity tools.test_rescue_windows_job_guard tools.test_rescue_batch_text_v1 tools.test_verify_rescue_text_evidence_v1 -v
+          python -m py_compile tools/rescue_engine_entrypoint.py tools/probe_rescue_portable_windows.py tools/probe_rescue_real_text_windows.py tools/rescue_windows_job_guard.py tools/test_rescue_windows_job_guard.py
       - name: Build frozen existing Python engine
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check pyinstaller==6.16.0
-          python -m PyInstaller --noconfirm --clean --onedir --console --name rescue-engine --distpath dist --workpath build/pyinstaller --specpath build/pyinstaller --paths . --hidden-import tools.rescue_desktop_batch_v1 --hidden-import tools.rescue_salvage_bundle_v1 --hidden-import tools.rescue_windows_job_guard --hidden-import tools.rescue_cfb_stream_export --hidden-import tools.verify_rescue_cfb_stream_export --hidden-import tools.corpus.cfb_physical tools/rescue_engine_entrypoint.py
+          python -m PyInstaller --noconfirm --clean --onedir --console --name rescue-engine --distpath dist --workpath build/pyinstaller --specpath build/pyinstaller --paths . --hidden-import tools.rescue_desktop_batch_v1 --hidden-import tools.rescue_salvage_bundle_v1 --hidden-import tools.rescue_windows_job_guard --hidden-import tools.rescue_batch_text_v1 --hidden-import tools.verify_rescue_text_evidence_v1 --hidden-import tools.rescue_cfb_stream_export --hidden-import tools.verify_rescue_cfb_stream_export --hidden-import tools.corpus.cfb_physical tools/rescue_engine_entrypoint.py
       - name: Build Rescue GUI and native image exporter
         shell: pwsh
         run: |
@@ -61,6 +65,12 @@ jobs:
         shell: pwsh
         run: |
           python -m tools.probe_rescue_portable_windows --portable-dir dist/rescue-engine
+      - name: Real pinned Publisher Story batch with no installed Python
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'SampleNewsletter.pub'
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub' -OutFile $fixture
+          python -m tools.probe_rescue_real_text_windows --portable-dir dist/rescue-engine --fixture $fixture
       - name: Label unsigned preview and generate SHA-256 inventory
         shell: pwsh
         run: |
@@ -69,7 +79,7 @@ jobs:
           @'
           Chaptera Rescue Desktop — portable Windows technical preview
           Run chaptera-rescue.exe in this folder. Its sibling rescue-engine.exe
-          and _internal/ provide the frozen runtime; pub.exe extracts verified images.
+          and _internal/ provide the frozen runtime; pub.exe extracts verified images and source-backed Story text.
           No separate Python installation or rar2 checkout is required.
           Bundle outputs must be in a dedicated folder outside source PUB directories.
           No network service or automatic upload is used during runtime.
