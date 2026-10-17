@@ -74,7 +74,12 @@ fn report_is_consistent(report: &BatchReport) -> bool {
             || !hashes.insert(entry.sha256.as_str())
             || !matches!(
                 entry.status.as_str(),
-                "pending" | "running" | "done_partial" | "done_unsupported" | "failed" | "cancelled"
+                "pending"
+                    | "running"
+                    | "done_partial"
+                    | "done_unsupported"
+                    | "failed"
+                    | "cancelled"
             )
         {
             return false;
@@ -1001,5 +1006,4 @@ mod tests {
         assert!(surface.report.is_none());
         assert!(surface.report_warning.is_some());
     }
-
 }

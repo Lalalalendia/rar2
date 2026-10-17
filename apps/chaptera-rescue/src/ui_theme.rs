@@ -18,7 +18,7 @@ pub fn ink() -> Color32 {
     Color32::from_rgb(34, 37, 54)
 }
 pub fn muted() -> Color32 {
-    Color32::from_rgb(105, 112, 130)
+    Color32::from_rgb(96, 103, 121)
 }
 pub fn success() -> Color32 {
     Color32::from_rgb(27, 130, 101)
@@ -101,5 +101,6 @@ mod tests {
         assert_eq!(ink(), Color32::from_rgb(34, 37, 54));
         assert_eq!(canvas(), Color32::from_rgb(233, 235, 240));
         assert_eq!(border(), Color32::from_rgb(227, 229, 237));
+        assert_eq!(muted(), Color32::from_rgb(96, 103, 121));
     }
 }
