@@ -135,7 +135,7 @@ fn mature_story_records(
         add_record(
             &mut records,
             &mut total,
-            story.id.to_string(),
+            story.id.as_canonical().to_string(),
             0,
             end,
             story.text.clone(),
