@@ -4,6 +4,7 @@ use chaptera_server::{
     auth_runtime::AuthRuntime,
     authz_runtime::SqliteAuthzAuthority,
     blob_runtime::BlobStoreRuntime,
+    build_info::BUILD_GIT_SHA,
     cli::{Cli, Command},
     config::{ChapteraConfig, EnvironmentMode, SecretResolver},
     doctor,
@@ -464,11 +465,15 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
         }
         Command::Doctor => {
-            if let Some(config) = explicit_config.as_ref() {
-                let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
-                drop(secrets);
-            }
-            doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
+            let config = explicit_config.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "doctor requires --config to inspect the existing Reader runtime",
+                )
+            })?;
+            // No dummy ports: prove the running production process over its
+            // configured loopback listener and compare exact immutable SHA.
+            doctor::run_live(config.listen, BUILD_GIT_SHA).await?;
         }
         Command::UntrustedPubInspect { .. } => unreachable!(
             "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
