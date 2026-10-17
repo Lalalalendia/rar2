@@ -6,6 +6,8 @@ from __future__ import annotations
 from fnmatch import fnmatchcase
 from pathlib import Path
 import re
+import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,8 @@ RELEASE = ROOT / ".github/workflows/cloud-reader-linux-release.yml"
 EMBEDDED = ROOT / "apps/chaptera-server/src/product_editor_assets.rs"
 LEGACY_PRODUCTION_DEPLOY = ROOT / ".github/workflows/cloud-reader-deploy.yml"
 HOST_INSTALL = ROOT / "deploy/install-reader-host.sh"
+HOST_BOOTSTRAP = ROOT / "deploy/bootstrap-reader-deployer.sh"
+HOST_HARNESS = ROOT / "tools/run_cloud_reader_host_acceptance.py"
 
 # Rust source owns the inventory of compile-time embedded files.
 # Authenticated and temporary Editor assets share the same immutable release packet.
@@ -104,6 +108,37 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
             "rar2 must not auto-deploy production; use chaptera-site pinned deploy",
         )
 
+
+    def test_current_host_acceptance_harness_is_immutable_packet_input(self):
+        harness = HOST_HARNESS.read_text(encoding="utf-8")
+        installer = HOST_INSTALL.read_text(encoding="utf-8")
+        bootstrap = HOST_BOOTSTRAP.read_text(encoding="utf-8")
+        path = "tools/run_cloud_reader_host_acceptance.py"
+        self.assertTrue(any(fnmatchcase(path, rule) for rule in self.triggers))
+        self.assertIn("dist/" + path, self.workflow)
+        self.assertIn('''${RELEASE}/''' + path, installer)
+        self.assertIn(path, bootstrap)
+        self.assertIn('SERVICES = ("chaptera-reader.service",)', harness)
+        self.assertNotIn('"chaptera-web.service"', harness)
+        self.assertNotIn('"chaptera-worker.service"', harness)
+        self.assertNotIn('stderr[-800:]', harness)
+        self.assertIn('"host acceptance subprocess failed rc=', harness)
+        self.assertIn("private_cleanup_verified = private_cleanup[\"verified\"]", harness)
+        self.assertIn("complete = host_operability_complete and private_cleanup_verified and doctor_verified", harness)
+        self.assertIn("doctor_verified = False", harness)
+        self.assertIn('"cli_doctor_not_bound_to_live_runtime"', harness)
+        self.assertIn("def private_storage_snapshot(", harness)
+        self.assertIn("mode=ro", harness)
+        self.assertIn('"--verify-private-expiry"', harness)
+        self.assertIn("private_expiry_not_requested", harness)
+        self.assertIn('not before["reservation_active"]', harness)
+        self.assertIn("common = guest_mutation_headers(origin, csrf)", harness)
+        self.assertIn('"origin": origin', harness)
+        result = subprocess.run(
+            [sys.executable, str(HOST_HARNESS), "--self-test"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-1200:])
 
     def test_reader_host_install_preserves_verified_previous_release(self):
         install = HOST_INSTALL.read_text(encoding="utf-8")

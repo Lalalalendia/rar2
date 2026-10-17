@@ -57,7 +57,7 @@ trap cleanup EXIT
 tar -xzf "${ARCHIVE_REAL}" -C "${WORK}"
 cd "${WORK}"
 
-for required in   chaptera   chaptera.reader.prod.example.toml   chaptera-reader.service   chaptera-reader.conf.example   install-reader-host.sh   tools/migration_pdf_worker_isolation.py   run_cloud_reader_guest_host_acceptance.py   COMMIT_SHA   SHA256SUMS
+for required in   chaptera   chaptera.reader.prod.example.toml   chaptera-reader.service   chaptera-reader.conf.example   install-reader-host.sh   tools/migration_pdf_worker_isolation.py   tools/run_cloud_reader_host_acceptance.py   run_cloud_reader_guest_host_acceptance.py   COMMIT_SHA   SHA256SUMS
 do
   [[ -e "${required}" ]] || { echo "release packet missing ${required}" >&2; exit 3; }
 done
