@@ -6,7 +6,7 @@
 
 use eframe::egui;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -48,8 +48,79 @@ struct BatchReport {
     source_free: bool,
     unique_sources: usize,
     duplicate_paths: usize,
+    rejected_paths: BTreeMap<String, usize>,
     counts: BTreeMap<String, usize>,
     entries: Vec<BatchRow>,
+}
+
+/// A pause/cancel command is allowed only for a still-live owned Run.
+fn can_send_batch_control(
+    current_action: Option<&str>,
+    active_child: bool,
+    control_pending: bool,
+) -> bool {
+    current_action == Some("run") && active_child && !control_pending
+}
+
+const RESULTS_PAGE_SIZE: usize = 100;
+
+/// Resolve the visible slice, retaining access to every accepted queue row.
+fn result_page_window(total: usize, requested_page: usize) -> (usize, usize, usize, usize) {
+    let pages = total.saturating_sub(1) / RESULTS_PAGE_SIZE + 1;
+    let page = requested_page.min(pages - 1);
+    let start = page.saturating_mul(RESULTS_PAGE_SIZE);
+    let end = start.saturating_add(RESULTS_PAGE_SIZE).min(total);
+    (page, start, end, pages)
+}
+
+fn row_matches_filter(row: &BatchRow, normalized_filter: &str) -> bool {
+    normalized_filter.is_empty()
+        || row.sha256.contains(normalized_filter)
+        || row.status.contains(normalized_filter)
+        || row
+            .outcome
+            .as_deref()
+            .is_some_and(|value| value.contains(normalized_filter))
+        || row
+            .reason
+            .as_deref()
+            .is_some_and(|value| value.contains(normalized_filter))
+}
+
+/// Only render totals from a structurally consistent source-free engine report.
+/// This is not an independent artifact/stream verification.
+fn report_is_consistent(report: &BatchReport) -> bool {
+    if report.schema_version != BATCH_REPORT_SCHEMA
+        || !report.source_free
+        || report.entries.len() > 10_000
+        || report.unique_sources != report.entries.len()
+    {
+        return false;
+    }
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut hashes = BTreeSet::<&str>::new();
+    for entry in &report.entries {
+        if entry.sha256.len() != 64
+            || !entry
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !hashes.insert(entry.sha256.as_str())
+            || !matches!(
+                entry.status.as_str(),
+                "pending"
+                    | "running"
+                    | "done_partial"
+                    | "done_unsupported"
+                    | "failed"
+                    | "cancelled"
+            )
+        {
+            return false;
+        }
+        *counts.entry(entry.status.clone()).or_insert(0) += 1;
+    }
+    report.counts == counts
 }
 
 pub struct BatchUi {
@@ -65,7 +136,9 @@ pub struct BatchUi {
     run_token: Option<String>,
     status: String,
     report: Option<BatchReport>,
+    report_warning: Option<String>,
     filter: String,
+    results_page: usize,
 }
 
 impl Default for BatchUi {
@@ -83,13 +156,39 @@ impl Default for BatchUi {
             run_token: None,
             status: "No local batch has been selected".to_owned(),
             report: None,
+            report_warning: None,
             filter: String::new(),
+            results_page: 0,
         }
     }
 }
 
 impl BatchUi {
+    /// Applies to both text selection and native drag/drop on every workspace.
+    /// Do not accept a different source while a GUI-owned subprocess is active.
+    pub fn is_busy(&self) -> bool {
+        self.active_process.is_some() || self.control_process.is_some()
+    }
+
+    pub fn reject_drop_while_active(&mut self) {
+        self.status = "File drop ignored while a local operation is active".to_owned();
+    }
+
+    fn can_control(&self) -> bool {
+        can_send_batch_control(
+            self.active_action,
+            self.active_process.is_some(),
+            self.control_process.is_some(),
+        )
+    }
+
     pub fn use_input(&mut self, path: &Path) {
+        // Native OS drop events bypass disabled text fields. Never silently
+        // switch the displayed source while an earlier batch still owns it.
+        if self.is_busy() {
+            self.reject_drop_while_active();
+            return;
+        }
         self.input_path = path.to_string_lossy().to_string();
     }
 
@@ -271,29 +370,54 @@ impl BatchUi {
     fn refresh_report(&mut self) {
         if self.output_path.trim().is_empty() {
             self.report = None;
+            self.report_warning = None;
             return;
         }
+
         let path = Path::new(self.output_path.trim()).join("summary.json");
-        let Ok(meta) = fs::metadata(&path) else {
-            return;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if self.report.take().is_some() {
+                    self.report_warning =
+                        Some("Queue summary disappeared; cached results are hidden.".to_owned());
+                }
+                return;
+            }
+            Err(_) => {
+                self.report = None;
+                self.report_warning =
+                    Some("Cannot inspect queue summary; previous results are hidden.".to_owned());
+                return;
+            }
         };
-        if meta.len() > MAX_REPORT_BYTES || !meta.is_file() {
-            self.status = "Batch summary exceeds local read limit".to_owned();
+        if !metadata.file_type().is_file() || metadata.len() > MAX_REPORT_BYTES {
+            self.report = None;
+            self.report_warning =
+                Some("Queue summary is unsafe or exceeds the local read limit.".to_owned());
             return;
         }
-        let Ok(raw) = fs::read(&path) else {
-            return;
+
+        let raw = match fs::read(&path) {
+            Ok(raw) => raw,
+            Err(_) => {
+                self.report = None;
+                self.report_warning =
+                    Some("Cannot read queue summary; previous results are hidden.".to_owned());
+                return;
+            }
         };
-        if let Ok(report) = serde_json::from_slice::<BatchReport>(&raw) {
-            if report.source_free
-                && report.schema_version == BATCH_REPORT_SCHEMA
-                && report.entries.len() <= 10000
-                && report.entries.iter().all(|entry| {
-                    entry.sha256.len() == 64
-                        && entry.sha256.bytes().all(|value| value.is_ascii_hexdigit())
-                })
-            {
+        match serde_json::from_slice::<BatchReport>(&raw) {
+            Ok(report) if report_is_consistent(&report) => {
                 self.report = Some(report);
+                self.report_warning = None;
+            }
+            _ => {
+                self.report = None;
+                self.report_warning = Some(
+                    "Queue summary failed source-free consistency checks; no totals are shown."
+                        .to_owned(),
+                );
             }
         }
     }
@@ -352,80 +476,475 @@ impl BatchUi {
         }
     }
 
-    pub fn draw(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        // Poll even while the user is on the evidence workspace.
         self.poll(ctx);
-        let busy = self.active_process.is_some() || self.control_process.is_some();
-        ui.group(|ui| {
-            ui.strong("4. Local batch salvage (preview)");
-            if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
-                ui.label("Portable engine detected; Python and rar2 checkout are not required.");
-            } else {
-                ui.label("Development mode: select a rar2 checkout and Python, or install the portable package.");
+    }
+
+    /// A persistent sidebar indicator: the user can return to active controls
+    /// without mistaking a background run for an idle GUI.
+    pub fn activity_label(&self) -> Option<&'static str> {
+        if self.active_process.is_some() {
+            match self.active_action {
+                Some("scan") => Some("Scanning local files"),
+                Some("run") => Some("Recovery in progress"),
+                Some("retry") => Some("Preparing retries"),
+                _ => Some("Local engine active"),
             }
-            ui.label("All source data stays local; no cloud upload.");
-            ui.horizontal(|ui| {
-                ui.label("PUB / folder");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.input_path));
+        } else if self.control_process.is_some() {
+            Some("Sending pause / cancel")
+        } else {
+            None
+        }
+    }
+
+    /// Show the *same* guarded pause/cancel controls regardless of workspace.
+    /// This sidebar is outside the central scroll area, keeping critical run
+    /// actions reachable even when the user scrolls the evidence/queue page.
+    pub fn draw_sidebar_activity(&mut self, ui: &mut egui::Ui) {
+        use crate::ui_theme;
+        use egui::RichText;
+        let Some(label) = self.activity_label() else {
+            return;
+        };
+        egui::Frame::new()
+            .fill(ui_theme::accent_soft())
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(label)
+                        .size(12.0)
+                        .strong()
+                        .color(ui_theme::accent()),
+                );
+                ui.label(
+                    RichText::new(&self.status)
+                        .size(11.0)
+                        .color(ui_theme::muted()),
+                );
+                if self.can_control() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Pause").clicked() {
+                            self.request_control("pause");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.request_control("cancel");
+                        }
+                    });
+                } else if self.control_process.is_some() {
+                    ui.label(
+                        RichText::new("Control request pending")
+                            .size(11.0)
+                            .color(ui_theme::muted()),
+                    );
+                }
             });
-            ui.horizontal(|ui| {
-                ui.label("Output folder");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.output_path));
-            });
-            ui.horizontal(|ui| {
-                ui.label("rar2 checkout");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.repo_root));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Python");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.python_path));
-                ui.label("Optional pub CLI");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.asset_cli));
-            });
-            ui.add_enabled(!busy, egui::Slider::new(&mut self.workers, 1..=4).text("Parallel files"));
+    }
+
+    pub fn draw(&mut self, ui: &mut egui::Ui) {
+        use crate::ui_theme;
+        use egui::RichText;
+        let busy = self.is_busy();
+        let can_control = self.can_control();
+
+        ui_theme::kicker(ui, "OFFLINE WORKSPACE / FILE RECOVERY");
+        ui_theme::headline(
+            ui,
+            "Batch recovery",
+            "Scan Publisher files, extract proven data and review exactly what was recovered.",
+        );
+        ui.add_space(18.0);
+
+        ui_theme::card(ui, |ui| {
+            ui.label(
+                RichText::new("01  /  SELECT FILES")
+                    .size(12.0)
+                    .strong()
+                    .color(ui_theme::accent()),
+            );
+            ui.label(
+                RichText::new("Your originals stay untouched")
+                    .size(18.0)
+                    .strong()
+                    .color(ui_theme::ink()),
+            );
+            ui.label(
+                RichText::new(
+                    "Drop a PUB or folder into the window, or enter an absolute local path.",
+                )
+                .size(12.0)
+                .color(ui_theme::muted()),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("SOURCE PUB OR FOLDER")
+                    .size(11.0)
+                    .strong()
+                    .color(ui_theme::muted()),
+            );
+            let width = ui.available_width();
+            ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut self.input_path)
+                    .desired_width(width)
+                    .hint_text("C:\\Documents\\Publications"),
+            );
+            ui.label(
+                RichText::new("OUTPUT FOLDER")
+                    .size(11.0)
+                    .strong()
+                    .color(ui_theme::muted()),
+            );
+            let width = ui.available_width();
+            if ui
+                .add_enabled(
+                    !busy,
+                    egui::TextEdit::singleline(&mut self.output_path)
+                        .desired_width(width)
+                        .hint_text("C:\\Rescue\\Results"),
+                )
+                .changed()
+            {
+                // Never show a cached receipt or warning for another output directory.
+                self.report = None;
+                self.report_warning = None;
+                self.results_page = 0;
+            }
+            ui.label(
+                RichText::new("Results go to a separate folder outside the input tree.")
+                    .size(11.0)
+                    .color(ui_theme::muted()),
+            );
+        });
+
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            ui.label(
+                RichText::new("02  /  PROCESS")
+                    .size(12.0)
+                    .strong()
+                    .color(ui_theme::accent()),
+            );
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!busy, egui::Button::new("Scan / add folder")).clicked() {
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Scan / add folder"))
+                    .clicked()
+                {
                     self.begin("scan");
                 }
-                if ui.add_enabled(!busy, egui::Button::new("Run / resume")).clicked() {
+                if ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new(
+                            RichText::new("Run / resume")
+                                .strong()
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(ui_theme::accent()),
+                    )
+                    .clicked()
+                {
                     self.begin("run");
                 }
-                if ui.add_enabled(!busy, egui::Button::new("Retry failed")).clicked() {
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Retry failed"))
+                    .clicked()
+                {
                     self.begin("retry");
                 }
-                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Pause")).clicked() {
+                if ui
+                    .add_enabled(can_control, egui::Button::new("Pause"))
+                    .clicked()
+                {
                     self.request_control("pause");
                 }
-                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Cancel")).clicked() {
+                if ui
+                    .add_enabled(can_control, egui::Button::new("Cancel"))
+                    .clicked()
+                {
                     self.request_control("cancel");
                 }
-                if ui.button("Refresh").clicked() {
+                if ui.button("Refresh results").clicked() {
                     self.refresh_report();
                 }
             });
-            ui.label(&self.status);
-            if let Some(report) = &self.report {
-                ui.separator();
-                ui.label(format!("Unique PUB: {}  |  Duplicate paths: {}", report.unique_sources, report.duplicate_paths));
-                for (state, count) in &report.counts {
-                    ui.label(format!("{state}: {count}"));
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if busy {
+                    ui.spinner();
+                    ui_theme::pill(ui, "PROCESSING", ui_theme::accent());
+                } else {
+                    ui_theme::pill(ui, "IDLE", ui_theme::muted());
                 }
-                ui.horizontal(|ui| {
-                    ui.label("Filter SHA or status");
-                    ui.text_edit_singleline(&mut self.filter);
+                ui.label(
+                    RichText::new(&self.status)
+                        .size(12.0)
+                        .color(ui_theme::ink()),
+                );
+            });
+        });
+
+        ui.add_space(14.0);
+        if let Some(warning) = &self.report_warning {
+            ui.label(RichText::new(warning).size(12.0).color(ui_theme::danger()));
+            ui.add_space(8.0);
+        }
+        if let Some(report) = &self.report {
+            ui_theme::card(ui, |ui| {
+                ui.label(
+                    RichText::new("03  /  RESULTS")
+                        .size(12.0)
+                        .strong()
+                        .color(ui_theme::accent()),
+                );
+                ui.label(
+                    RichText::new("Local queue summary")
+                        .size(18.0)
+                        .strong()
+                        .color(ui_theme::ink()),
+                );
+                ui.add_space(4.0);
+                let partial = *report.counts.get("done_partial").unwrap_or(&0);
+                let unsupported = *report.counts.get("done_unsupported").unwrap_or(&0);
+                let failed = *report.counts.get("failed").unwrap_or(&0)
+                    + *report.counts.get("cancelled").unwrap_or(&0);
+                ui.columns(4, |cols| {
+                    ui_theme::metric(
+                        &mut cols[0],
+                        "Unique PUB",
+                        report.unique_sources,
+                        ui_theme::ink(),
+                    );
+                    ui_theme::metric(
+                        &mut cols[1],
+                        "Partial recovery",
+                        partial,
+                        ui_theme::success(),
+                    );
+                    ui_theme::metric(
+                        &mut cols[2],
+                        "Unsupported",
+                        unsupported,
+                        ui_theme::warning(),
+                    );
+                    ui_theme::metric(&mut cols[3], "Needs attention", failed, ui_theme::danger());
                 });
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    for entry in report.entries.iter().filter(|entry| {
-                        self.filter.is_empty()
-                            || entry.sha256.contains(self.filter.trim())
-                            || entry.status.contains(self.filter.trim())
-                    }).take(100) {
-                        let suffix = entry.outcome.as_deref().or(entry.reason.as_deref()).unwrap_or("-");
-                        let short_sha = &entry.sha256[..entry.sha256.len().min(12)];
-                        ui.label(format!("{short_sha}  {}  {}  streams:{} assets:{}", entry.status, suffix,
-                            entry.stream_count.unwrap_or(0), entry.asset_count.unwrap_or(0)));
+                let finished = partial + unsupported + failed;
+                let progress = if report.unique_sources == 0 {
+                    0.0
+                } else {
+                    (finished as f32 / report.unique_sources as f32).clamp(0.0, 1.0)
+                };
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .fill(ui_theme::accent())
+                        .show_percentage(),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{finished} of {} files completed or stopped  ·  {} duplicate paths",
+                        report.unique_sources, report.duplicate_paths,
+                    ))
+                    .size(11.0)
+                    .color(ui_theme::muted()),
+                );
+                let rejected = report
+                    .rejected_paths
+                    .values()
+                    .fold(0usize, |total, count| total.saturating_add(*count));
+                if rejected > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{rejected} source inputs rejected during scan (excluded from unique PUB count)."
+                        ))
+                        .size(12.0)
+                        .color(ui_theme::warning()),
+                    );
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("RESULTS  /  SHA-256")
+                            .size(11.0)
+                            .strong()
+                            .color(ui_theme::muted()),
+                    );
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.filter)
+                                .hint_text("Filter by SHA, status or outcome")
+                                .desired_width(220.0),
+                        )
+                        .changed()
+                    {
+                        self.results_page = 0;
                     }
                 });
-            }
+                let query = self.filter.trim().to_ascii_lowercase();
+                let matching: Vec<&BatchRow> = report
+                    .entries
+                    .iter()
+                    .filter(|entry| row_matches_filter(entry, &query))
+                    .collect();
+                let (page, start, end, pages) =
+                    result_page_window(matching.len(), self.results_page);
+                self.results_page = page;
+                ui.horizontal_wrapped(|ui| {
+                    if matching.is_empty() {
+                        ui.label(
+                            RichText::new("No entries match this filter.")
+                                .size(12.0)
+                                .color(ui_theme::muted()),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(format!(
+                                "Showing {}–{} of {} matching files",
+                                start + 1,
+                                end,
+                                matching.len()
+                            ))
+                            .size(12.0)
+                            .color(ui_theme::muted()),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(page + 1 < pages, egui::Button::new("Next ›"))
+                            .clicked()
+                        {
+                            self.results_page += 1;
+                        }
+                        ui.label(format!("{}/{}", page + 1, pages));
+                        if ui
+                            .add_enabled(page > 0, egui::Button::new("‹ Previous"))
+                            .clicked()
+                        {
+                            self.results_page -= 1;
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for entry in &matching[start..end] {
+                            let short_hash = &entry.sha256[..entry.sha256.len().min(12)];
+                            let outcome = entry
+                                .outcome
+                                .as_deref()
+                                .or(entry.reason.as_deref())
+                                .unwrap_or("Not processed");
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    RichText::new(short_hash)
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(ui_theme::ink()),
+                                );
+                                let tone = match entry.status.as_str() {
+                                    "done_partial" => ui_theme::success(),
+                                    "done_unsupported" => ui_theme::warning(),
+                                    "failed" | "cancelled" => ui_theme::danger(),
+                                    "running" => ui_theme::accent(),
+                                    _ => ui_theme::muted(),
+                                };
+                                ui.label(
+                                    RichText::new(&entry.status).strong().size(12.0).color(tone),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}  ·  {} streams  ·  {} assets",
+                                        outcome,
+                                        entry.stream_count.unwrap_or(0),
+                                        entry.asset_count.unwrap_or(0),
+                                    ))
+                                    .size(12.0)
+                                    .color(ui_theme::muted()),
+                                );
+                            });
+                            ui.separator();
+                        }
+                    });
+            });
+        } else {
+            ui_theme::card(ui, |ui| {
+                ui.label(
+                    RichText::new("03  /  RESULTS")
+                        .size(12.0)
+                        .strong()
+                        .color(ui_theme::accent()),
+                );
+                ui.label(
+                    RichText::new("Your results will appear here")
+                        .size(18.0)
+                        .strong()
+                        .color(ui_theme::ink()),
+                );
+                ui.label(
+                    RichText::new("Run a scan to see local SHA identities and engine-reported outcomes. No results are inferred before the engine reports them.")
+                        .size(12.0).color(ui_theme::muted()),
+                );
+            });
+        }
+
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            egui::CollapsingHeader::new("Advanced  /  local engine settings")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
+                        ui.label("Portable engine detected. Python and checkout are not needed.");
+                    } else {
+                        ui.label(
+                            "Development mode: choose a rar2 checkout and Python interpreter.",
+                        );
+                    }
+                    ui.label(
+                        RichText::new("RAR2 CHECKOUT")
+                            .size(11.0)
+                            .strong()
+                            .color(ui_theme::muted()),
+                    );
+                    let width = ui.available_width();
+                    ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut self.repo_root)
+                            .desired_width(width)
+                            .hint_text("Optional checkout path"),
+                    );
+                    ui.label(
+                        RichText::new("PYTHON")
+                            .size(11.0)
+                            .strong()
+                            .color(ui_theme::muted()),
+                    );
+                    let width = ui.available_width();
+                    ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut self.python_path).desired_width(width),
+                    );
+                    ui.label(
+                        RichText::new("OPTIONAL PUB CLI")
+                            .size(11.0)
+                            .strong()
+                            .color(ui_theme::muted()),
+                    );
+                    let width = ui.available_width();
+                    ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut self.asset_cli).desired_width(width),
+                    );
+                    ui.add_enabled(
+                        !busy,
+                        egui::Slider::new(&mut self.workers, 1..=4).text("Parallel files"),
+                    );
+                    ui.label(
+                        RichText::new("All processing is offline; no source data is uploaded.")
+                            .size(11.0)
+                            .color(ui_theme::muted()),
+                    );
+                });
         });
     }
 }
@@ -576,12 +1095,135 @@ mod tests {
         assert!(surface.command_for("run").is_err());
     }
 
+    fn sample_report() -> BatchReport {
+        let sample = serde_json::json!({
+            "schema_version": BATCH_REPORT_SCHEMA,
+            "source_free": true,
+            "unique_sources": 1,
+            "duplicate_paths": 0,
+            "rejected_paths": {},
+            "counts": {"pending": 1},
+            "entries": [{
+                "sha256": "a".repeat(64),
+                "status": "pending",
+                "outcome": null,
+                "reason": null,
+                "stream_count": null,
+                "asset_count": null
+            }]
+        });
+        serde_json::from_value(sample).expect("canonical local summary")
+    }
+
     #[test]
-    fn source_free_batch_summary_is_only_admitted_schema() {
-        let sample = r#"{"schema_version":"chaptera.rescue-desktop-batch-report.v1","source_free":true,"unique_sources":1,"duplicate_paths":0,"counts":{"pending":1},"entries":[]}"#;
-        let report: BatchReport = serde_json::from_str(sample).expect("known report schema");
-        assert!(report.source_free);
-        assert_eq!(report.schema_version, BATCH_REPORT_SCHEMA);
-        assert_eq!(report.unique_sources, 1);
+    fn pagination_reaches_full_1556_file_corpus_without_silent_truncation() {
+        assert_eq!(result_page_window(1556, 0), (0, 0, 100, 16));
+        assert_eq!(result_page_window(1556, 10), (10, 1000, 1100, 16));
+        assert_eq!(result_page_window(1556, 15), (15, 1500, 1556, 16));
+        assert_eq!(result_page_window(1556, usize::MAX), (15, 1500, 1556, 16));
+        assert_eq!(result_page_window(0, 7), (0, 0, 0, 1));
+    }
+
+    #[test]
+    fn queue_filter_can_search_sha_status_and_failure_reason() {
+        let mut row = BatchRow {
+            sha256: "a".repeat(64),
+            status: "failed".to_owned(),
+            outcome: None,
+            reason: Some("source_drift".to_owned()),
+            stream_count: None,
+            asset_count: None,
+        };
+        assert!(row_matches_filter(&row, ""));
+        assert!(row_matches_filter(&row, "aaaa"));
+        assert!(row_matches_filter(&row, "failed"));
+        assert!(row_matches_filter(&row, "source_drift"));
+        assert!(!row_matches_filter(&row, "done_partial"));
+        row.outcome = Some("partial".to_owned());
+        assert!(row_matches_filter(&row, "partial"));
+    }
+
+    #[test]
+    fn sidebar_pause_cancel_gate_only_opens_for_live_owned_run() {
+        assert!(can_send_batch_control(Some("run"), true, false));
+        assert!(!can_send_batch_control(Some("scan"), true, false));
+        assert!(!can_send_batch_control(Some("retry"), true, false));
+        assert!(!can_send_batch_control(Some("run"), false, false));
+        assert!(!can_send_batch_control(Some("run"), true, true));
+        assert!(!can_send_batch_control(None, true, false));
+    }
+
+    #[test]
+    fn idle_state_disables_run_controls_and_allows_new_source_drops() {
+        let mut surface = BatchUi::default();
+        assert!(!surface.is_busy());
+        assert!(!surface.can_control());
+        surface.use_input(Path::new("synthetic-folder"));
+        assert_eq!(surface.input_path, "synthetic-folder");
+        surface.reject_drop_while_active();
+        assert_eq!(
+            surface.status,
+            "File drop ignored while a local operation is active"
+        );
+    }
+
+    #[test]
+    fn idle_sidebar_activity_is_not_falsely_running() {
+        let mut surface = BatchUi::default();
+        assert_eq!(surface.activity_label(), None);
+        surface.active_action = Some("run");
+        assert_eq!(surface.activity_label(), None);
+    }
+
+    #[test]
+    fn canonical_source_free_summary_has_consistent_counts() {
+        assert!(report_is_consistent(&sample_report()));
+    }
+
+    #[test]
+    fn fabricated_counts_do_not_render() {
+        let mut report = sample_report();
+        report.counts.insert("pending".to_owned(), 2);
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn duplicate_source_hashes_do_not_render() {
+        let mut report = sample_report();
+        report.entries.push(BatchRow {
+            sha256: "a".repeat(64),
+            status: "pending".to_owned(),
+            outcome: None,
+            reason: None,
+            stream_count: None,
+            asset_count: None,
+        });
+        report.unique_sources = 2;
+        report.counts.insert("pending".to_owned(), 2);
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn unknown_status_and_private_report_do_not_render() {
+        let mut report = sample_report();
+        report.entries[0].status = "done_magically".to_owned();
+        report.counts.clear();
+        report.counts.insert("done_magically".to_owned(), 1);
+        assert!(!report_is_consistent(&report));
+        report.source_free = false;
+        assert!(!report_is_consistent(&report));
+    }
+
+    #[test]
+    fn vanished_queue_clears_previous_metrics() {
+        let mut surface = BatchUi::default();
+        surface.output_path = std::env::temp_dir()
+            .join(next_run_token())
+            .to_string_lossy()
+            .to_string();
+        surface.report = Some(sample_report());
+        surface.refresh_report();
+        assert!(surface.report.is_none());
+        assert!(surface.report_warning.is_some());
     }
 }
