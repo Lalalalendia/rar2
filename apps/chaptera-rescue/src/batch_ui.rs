@@ -9,13 +9,28 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use crate::engine_job::EngineJob;
 
 const BATCH_REPORT_SCHEMA: &str = "chaptera.rescue-desktop-batch-report.v1";
 const MAX_REPORT_BYTES: u64 = 2 * 1024 * 1024;
+static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Unique run identity, not a security credential. Controllers must carry this
+// exact token so delayed cancel/pause requests cannot affect a successor run.
+fn next_run_token() -> String {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("gui-{:x}-{stamp:x}-{sequence:x}", std::process::id())
+}
 
 #[derive(Debug, Deserialize)]
 struct BatchRow {
@@ -45,8 +60,13 @@ pub struct BatchUi {
     asset_cli: String,
     workers: usize,
     active_action: Option<&'static str>,
-    receiver: Option<Receiver<Result<i32, String>>>,
-    control_receiver: Option<Receiver<Result<i32, String>>>,
+    active_process: Option<Child>,
+    control_process: Option<Child>,
+    run_token: Option<String>,
+    // Closing this GUI-owned handle terminates engine + nested workers, even
+    // when the GUI process crashes without executing Rust Drop.
+    #[cfg(windows)]
+    active_job: Option<EngineJob>,
     status: String,
     report: Option<BatchReport>,
     filter: String,
@@ -62,8 +82,11 @@ impl Default for BatchUi {
             asset_cli: String::new(),
             workers: 2,
             active_action: None,
-            receiver: None,
-            control_receiver: None,
+            active_process: None,
+            control_process: None,
+            run_token: None,
+            #[cfg(windows)]
+            active_job: None,
             status: "No local batch has been selected".to_owned(),
             report: None,
             filter: String::new(),
@@ -180,14 +203,19 @@ impl BatchUi {
                     cmd.arg("--pub-cli").arg(asset_cli);
                 }
             }
-            "retry" | "pause" | "cancel" => {}
+            "retry" => {}
+            "pause" | "cancel" => {
+                if let Some(token) = &self.run_token {
+                    cmd.arg("--expected-run-token").arg(token);
+                }
+            }
             _ => return Err("Unknown batch action".to_owned()),
         }
         Ok(cmd)
     }
 
     fn begin(&mut self, action: &'static str) {
-        if self.receiver.is_some() {
+        if self.active_process.is_some() || self.control_process.is_some() {
             self.status = "A local batch command is already active".to_owned();
             return;
         }
@@ -198,21 +226,46 @@ impl BatchUi {
                 return;
             }
         };
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let result = command
-                .status()
-                .map(|exit| exit.code().unwrap_or(-1))
-                .map_err(|_| "Cannot launch local Rescue engine".to_owned());
-            let _ = sender.send(result);
-        });
-        self.receiver = Some(receiver);
+        let token = (action == "run").then(next_run_token);
+        if let Some(token) = &token {
+            command.arg("--run-token").arg(token);
+        }
+        // Spawn on the UI thread and keep Child ownership here. A background
+        // command.status() waiter used to orphan its engine on GUI close.
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                self.status = "Cannot launch local Rescue engine".to_owned();
+                return;
+            }
+        };
+        #[cfg(windows)]
+        let job = match EngineJob::attach(&child) {
+            Ok(job) => job,
+            Err(error) => {
+                // Do not leave an unfenced child when assigning its lifetime
+                // Job Object fails (e.g. another incompatible parent job).
+                let _ = child.kill();
+                let _ = child.wait();
+                self.status = error;
+                return;
+            }
+        };
+        self.active_process = Some(child);
+        #[cfg(windows)]
+        {
+            self.active_job = Some(job);
+        }
         self.active_action = Some(action);
-        self.status = format!("{action} started in a separate local process");
+        self.run_token = token;
+        self.status = format!("{action} started in a GUI-owned local process");
     }
 
     fn request_control(&mut self, action: &'static str) {
-        if self.active_action != Some("run") || self.control_receiver.is_some() {
+        if self.active_action != Some("run")
+            || self.active_process.is_none()
+            || self.control_process.is_some()
+        {
             return;
         }
         let mut command = match self.command_for(action) {
@@ -222,16 +275,13 @@ impl BatchUi {
                 return;
             }
         };
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let result = command
-                .status()
-                .map(|exit| exit.code().unwrap_or(-1))
-                .map_err(|_| "Cannot send batch control command".to_owned());
-            let _ = sender.send(result);
-        });
-        self.control_receiver = Some(receiver);
-        self.status = format!("Requesting {action} for the active local batch");
+        match command.spawn() {
+            Ok(child) => {
+                self.control_process = Some(child);
+                self.status = format!("Requesting {action} for this exact batch run");
+            }
+            Err(_) => self.status = "Cannot send batch control command".to_owned(),
+        }
     }
 
     fn refresh_report(&mut self) {
@@ -265,16 +315,29 @@ impl BatchUi {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        let received = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(v) => Some(v),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                Some(Err("Batch runner disconnected unexpectedly".to_owned()))
-            }
-        });
+        let received = self
+            .active_process
+            .as_mut()
+            .and_then(|child| match child.try_wait() {
+                Ok(Some(exit)) => Some(Ok(exit.code().unwrap_or(-1))),
+                Ok(None) => None,
+                Err(_) => Some(Err("Cannot inspect local batch engine".to_owned())),
+            });
         if let Some(result) = received {
             let action = self.active_action.take().unwrap_or("command");
-            self.receiver = None;
+            if let Some(mut child) = self.active_process.take() {
+                if result.is_err() {
+                    let _ = child.kill();
+                }
+                let _ = child.wait();
+            }
+            #[cfg(windows)]
+            {
+                // On normal completion, close the GUI lifetime job and reap
+                // any unexpected grandchild left running by the engine.
+                self.active_job.take();
+            }
+            self.run_token = None;
             self.status = match result {
                 Ok(0) => format!("{action}: completed (see per-file outcomes below)"),
                 Ok(1) => format!("{action}: incomplete, paused, or some files failed"),
@@ -283,31 +346,37 @@ impl BatchUi {
                 Err(error) => error,
             };
         }
+
         let controlled = self
-            .control_receiver
-            .as_ref()
-            .and_then(|rx| match rx.try_recv() {
-                Ok(v) => Some(v),
-                Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => {
-                    Some(Err("Local control command disconnected".to_owned()))
-                }
+            .control_process
+            .as_mut()
+            .and_then(|child| match child.try_wait() {
+                Ok(Some(exit)) => Some(Ok(exit.code().unwrap_or(-1))),
+                Ok(None) => None,
+                Err(_) => Some(Err("Cannot inspect local control command".to_owned())),
             });
         if let Some(result) = controlled {
-            self.control_receiver = None;
-            if !matches!(result, Ok(0)) {
+            if let Some(mut child) = self.control_process.take() {
+                if result.is_err() {
+                    let _ = child.kill();
+                }
+                let _ = child.wait();
+            }
+            // A late control failure must not overwrite the final result of a
+            // batch that already finished. It never counts as cancellation.
+            if !matches!(result, Ok(0)) && self.active_process.is_some() {
                 self.status = "Pause/cancel request could not be delivered".to_owned();
             }
         }
         self.refresh_report();
-        if self.receiver.is_some() || self.control_receiver.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(400));
+        if self.active_process.is_some() || self.control_process.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
     pub fn draw(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.poll(ctx);
-        let busy = self.receiver.is_some();
+        let busy = self.active_process.is_some() || self.control_process.is_some();
         ui.group(|ui| {
             ui.strong("4. Local batch salvage (preview)");
             if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
@@ -318,23 +387,23 @@ impl BatchUi {
             ui.label("All source data stays local; no cloud upload.");
             ui.horizontal(|ui| {
                 ui.label("PUB / folder");
-                ui.text_edit_singleline(&mut self.input_path);
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.input_path));
             });
             ui.horizontal(|ui| {
                 ui.label("Output folder");
-                ui.text_edit_singleline(&mut self.output_path);
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.output_path));
             });
             ui.horizontal(|ui| {
                 ui.label("rar2 checkout");
-                ui.text_edit_singleline(&mut self.repo_root);
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.repo_root));
             });
             ui.horizontal(|ui| {
                 ui.label("Python");
-                ui.text_edit_singleline(&mut self.python_path);
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.python_path));
                 ui.label("Optional pub CLI");
-                ui.text_edit_singleline(&mut self.asset_cli);
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.asset_cli));
             });
-            ui.add(egui::Slider::new(&mut self.workers, 1..=4).text("Parallel files"));
+            ui.add_enabled(!busy, egui::Slider::new(&mut self.workers, 1..=4).text("Parallel files"));
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!busy, egui::Button::new("Scan / add folder")).clicked() {
                     self.begin("scan");
@@ -345,10 +414,10 @@ impl BatchUi {
                 if ui.add_enabled(!busy, egui::Button::new("Retry failed")).clicked() {
                     self.begin("retry");
                 }
-                if ui.add_enabled(self.active_action == Some("run"), egui::Button::new("Pause")).clicked() {
+                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Pause")).clicked() {
                     self.request_control("pause");
                 }
-                if ui.add_enabled(self.active_action == Some("run"), egui::Button::new("Cancel")).clicked() {
+                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Cancel")).clicked() {
                     self.request_control("cancel");
                 }
                 if ui.button("Refresh").clicked() {
@@ -380,6 +449,57 @@ impl BatchUi {
                 });
             }
         });
+    }
+}
+
+impl Drop for BatchUi {
+    fn drop(&mut self) {
+        if self.active_action == Some("run") && self.active_process.is_some() {
+            // Ask the canonical engine to stop; never write its private queue
+            // or control JSON directly from Rust. Wait a bounded grace period.
+            if let Ok(mut command) = self.command_for("cancel") {
+                if let Ok(mut control) = command.spawn() {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    while Instant::now() < deadline {
+                        let done = self
+                            .active_process
+                            .as_mut()
+                            .and_then(|child| child.try_wait().ok())
+                            .flatten()
+                            .is_some();
+                        if done {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    if control.try_wait().ok().flatten().is_none() {
+                        let _ = control.kill();
+                    }
+                    let _ = control.wait();
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            // Closes the last GUI-owned Job handle. Windows terminates the
+            // entire engine/worker tree, even if a worker ignores cancellation.
+            self.active_job.take();
+        }
+        if let Some(mut child) = self.active_process.take() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        }
+        // POSIX development mode has only a cooperative engine cancellation
+        // plus parent kill fallback; unlike Windows it does not guarantee
+        // crash-time termination of children in their own process sessions.
+        if let Some(mut control) = self.control_process.take() {
+            if control.try_wait().ok().flatten().is_none() {
+                let _ = control.kill();
+            }
+            let _ = control.wait();
+        }
     }
 }
 
@@ -441,6 +561,34 @@ mod tests {
         assert_eq!(args[0], "scan");
         assert!(args.contains(&"--output".to_owned()));
         assert!(!args.contains(&"-m".to_owned()));
+    }
+
+    #[test]
+    fn cancel_command_is_pinned_to_the_active_run() {
+        let mut surface = BatchUi::default();
+        surface.output_path = std::env::temp_dir()
+            .join("rescue-control-token")
+            .to_string_lossy()
+            .to_string();
+        surface.run_token = Some("gui-run-pinned-0001".to_owned());
+        let engine = std::env::temp_dir().join("rescue-engine.exe");
+        let command = surface
+            .command_for_engine("cancel", Some(&engine))
+            .expect("control command");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            args.windows(2).any(|pair| {
+                pair[0] == "--expected-run-token" && pair[1] == "gui-run-pinned-0001"
+            })
+        );
+    }
+
+    #[test]
+    fn run_tokens_are_distinct_between_invocations() {
+        assert_ne!(next_run_token(), next_run_token());
     }
 
     #[test]

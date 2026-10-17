@@ -240,6 +240,72 @@ class RescueBatchTests(unittest.TestCase):
         self.assertEqual(batch.retry(self.output)["counts"], {"pending": 1})
         self.assertEqual(batch.run(self.output)["counts"], {"done_unsupported": 1})
 
+    def test_stale_gui_controls_cannot_cancel_successor_run(self):
+        self.sample("a.pub", b"A")
+        batch.scan([self.sources], self.output)
+        first_token = "gui-run-previous-0001"
+        next_token = "gui-run-successor-0002"
+        state = batch.load_queue(self.output)
+        state["run_token"] = first_token
+        batch.persist(self.output, state)
+        with self.assertRaisesRegex(batch.BatchError, "run_token_mismatch"):
+            batch.request_action(self.output, "cancel", expected_run_token=next_token)
+        self.assertFalse((self.output / "control.json").exists())
+        batch.request_action(self.output, "pause", expected_run_token=first_token)
+        self.assertEqual(batch.control_action(self.output, first_token), "pause")
+        state["run_token"] = next_token
+        batch.persist(self.output, state)
+        self.assertIsNone(batch.control_action(self.output, next_token))
+        with self.assertRaisesRegex(batch.BatchError, "run_token_mismatch"):
+            batch.request_action(self.output, "cancel", expected_run_token=first_token)
+        self.assertIsNone(batch.control_action(self.output, next_token))
+        batch.request_action(self.output, "cancel", expected_run_token=next_token)
+        self.assertEqual(batch.control_action(self.output, next_token), "cancel")
+
+    def test_gui_cancel_token_stops_two_workers_and_retry_is_safe(self):
+        self.sample("a.pub", b"A")
+        self.sample("b.pub", b"B")
+        batch.scan([self.sources], self.output)
+        token = "gui-run-parallel-0001"
+        both_active = threading.Event()
+        entered = [0]
+        mutex = threading.Lock()
+        result = {}
+
+        def blocked(_row, _root, *, abort, **_kwargs):
+            with mutex:
+                entered[0] += 1
+                if entered[0] == 2:
+                    both_active.set()
+            abort.wait(6)
+            return {"status": "cancelled", "reason": "cancelled", "outcome": None,
+                    "stream_count": 0, "asset_count": 0}
+
+        with patch.object(batch, "process_one", side_effect=blocked):
+            worker = threading.Thread(target=lambda: result.setdefault(
+                "report", batch.run(self.output, workers=2, run_token=token)))
+            worker.start()
+            self.assertTrue(both_active.wait(4))
+            with self.assertRaisesRegex(batch.BatchError, "run_token_mismatch"):
+                batch.request_action(self.output, "cancel", expected_run_token="gui-stale-worker-0001")
+            self.assertTrue(worker.is_alive())
+            batch.request_action(self.output, "cancel", expected_run_token=token)
+            worker.join(8)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result["report"]["counts"], {"cancelled": 2})
+        self.assertIsNone(batch.load_queue(self.output)["run_token"])
+        self.assertEqual(batch.retry(self.output)["counts"], {"pending": 2})
+        self.assertEqual(batch.run(self.output, workers=2)["counts"], {"done_unsupported": 2})
+
+    def test_invalid_explicit_run_token_fails_before_queue_mutation(self):
+        self.sample("a.pub", b"A")
+        batch.scan([self.sources], self.output)
+        initial = (self.output / "queue-private.json").read_bytes()
+        for token in ("short", "../outside", " " * 32):
+            with self.assertRaisesRegex(batch.BatchError, "invalid_run_token"):
+                batch.run(self.output, run_token=token)
+        self.assertEqual((self.output / "queue-private.json").read_bytes(), initial)
+
     def test_concurrency_is_bounded(self):
         for i in range(5):
             self.sample(f"{i}.pub", f"PUB-{i}".encode())
