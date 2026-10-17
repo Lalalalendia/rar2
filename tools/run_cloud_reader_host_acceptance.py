@@ -274,9 +274,15 @@ def trace_headers() -> dict[str, str]:
     }
 
 
+def guest_mutation_headers(origin: str, csrf: str) -> dict[str, str]:
+    # EdgePolicy rejects every POST/PUT/PATCH/DELETE without a same-origin
+    # Origin header, even for this source-neutral operator witness.
+    return {"origin": origin, "x-csrf-token": csrf, **trace_headers()}
+
+
 def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: int) -> dict[str, Any]:
     csrf = hashlib.sha256(os.urandom(32)).hexdigest()
-    common = {"x-csrf-token": csrf, **trace_headers()}
+    common = guest_mutation_headers(origin, csrf)
 
     t0 = time.monotonic()
     status, _headers, issued = request_json(
@@ -517,6 +523,9 @@ def self_test() -> int:
     }
     assert sample_current["state"] == "current"
     assert SERVICES == ("chaptera-reader.service",)
+    headers = guest_mutation_headers("https://reader.chaptera.online", "csrf-probe")
+    assert headers["origin"] == "https://reader.chaptera.online"
+    assert headers["x-csrf-token"] == "csrf-probe"
     global CHAPTERA_ROOT
     original_root = CHAPTERA_ROOT
     try:

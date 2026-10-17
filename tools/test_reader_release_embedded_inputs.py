@@ -121,6 +121,8 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertIn('SERVICES = ("chaptera-reader.service",)', harness)
         self.assertNotIn('"chaptera-web.service"', harness)
         self.assertNotIn('"chaptera-worker.service"', harness)
+        self.assertIn("common = guest_mutation_headers(origin, csrf)", harness)
+        self.assertIn('"origin": origin', harness)
         result = subprocess.run(
             [sys.executable, str(HOST_HARNESS), "--self-test"],
             capture_output=True, text=True, check=False,
