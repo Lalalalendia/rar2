@@ -480,7 +480,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 // resolve required production credentials before reporting
                 // genuinely unconfigured local producers as runtime_not_ready.
                 if let Some(config) = explicit_config.as_ref() {
-                    let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
+                    let secrets =
+                        config.resolve_required_secrets(&SecretResolver::from_process())?;
                     drop(secrets);
                 }
                 doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
