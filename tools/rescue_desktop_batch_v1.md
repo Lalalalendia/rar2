@@ -88,3 +88,25 @@ do not delete tampered output to force a successful status. Missing text for a
 legacy completed job may be backfilled only on an explicit Run with `--pub-cli`,
 inside the worker pool. This reuses the immutable CFB bundle and gallery.
 Original and extracted Story bytes are never public Actions artifacts.
+
+### Immutable legacy bundle backfill
+
+A completed legacy bundle with image status "not_requested" is never
+retrofitted just because a later Run supplies --pub-cli. Instead the existing
+CFB bundle and previously materialized gallery are independently reverified,
+and the canonical Rust text producer writes only the separate SHA-owned Story
+evidence. This prevents "existing_bundle_missing_requested_images" when adding
+text to an already completed physical-only or unsupported run. Re-extracting
+images into a legacy immutable bundle would require a separate explicitly
+versioned migration, not an implicit rewrite.
+
+### Public real-PUB integration gate
+
+The Windows portable workflow runs a pinned Apache POI SampleNewsletter.pub
+(291840 bytes, exact fixture SHA), through the *frozen Python engine* and its
+sibling Rust pub.exe with no installed Python on PATH. It requires 44
+independently byte-verified Story ranges, a truthful verified_text tier,
+source-free reports, restart/idempotency and corruption fail-closed; the private
+text stays ephemeral on the hosted runner. Synthetic two-worker cancellation
+and legacy backfill tests additionally exercise the queue. This is one real
+PUBLIC source, not proof of full Publisher layout or the 1556 private corpus.

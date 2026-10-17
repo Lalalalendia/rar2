@@ -216,6 +216,10 @@ def admit(source: Path, output: Path, digest: str, *, pub_cli: Path | None,
         if not target.is_dir() or target.is_symlink():
             raise TextRecoveryError("missing_text_producer_output")
 
+    if abort.is_set():
+        raise TextInterrupted("cancelled")
+    if time.monotonic() >= deadline:
+        raise TextInterrupted("worker_timeout")
     try:
         proof = verifier.verify(source, target)
     except (verifier.StoryEvidenceError, OSError, ValueError) as error:
@@ -224,6 +228,8 @@ def admit(source: Path, output: Path, digest: str, *, pub_cli: Path | None,
         raise TextRecoveryError("text_source_or_count_mismatch")
     if abort.is_set():
         raise TextInterrupted("cancelled")
+    if time.monotonic() >= deadline:
+        raise TextInterrupted("worker_timeout")
     if salvage.sha_file(source) != digest:
         raise TextRecoveryError("text_source_drift_after_verification")
     _save_index(output, digest, proof["story_count"])

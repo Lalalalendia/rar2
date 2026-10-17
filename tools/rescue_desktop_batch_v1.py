@@ -372,7 +372,12 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
                 "stream_count": 0, "asset_count": 0}
     args = [sys.executable, "-m", "tools.rescue_salvage_bundle_v1", str(source),
             "--output", str(bundle_root), "--timeout", str(timeout)]
-    if pub_cli is not None:
+    # A verified SHA-owned salvage bundle is immutable. When a legacy batch
+    # later gains the pub.exe text producer, do NOT ask the older salvage worker
+    # to retrofit an image manifest into the immutable existing bundle.
+    # The new Story producer runs independently after bundle re-verification.
+    existing_bundle = bundle_root / row["sha256"]
+    if pub_cli is not None and not (existing_bundle.exists() or existing_bundle.is_symlink()):
         args.extend(["--pub-cli", str(pub_cli)])
     if retain_original:
         args.append("--retain-original")
@@ -382,12 +387,12 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
         options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
+    deadline = time.monotonic() + file_timeout
     try:
         proc = subprocess.Popen(args, **options)
     except OSError:
         return {"status": "failed", "reason": "worker_error", "outcome": None,
                 "stream_count": 0, "asset_count": 0}
-    deadline = time.monotonic() + file_timeout
     stdout = b""
     while True:
         try:

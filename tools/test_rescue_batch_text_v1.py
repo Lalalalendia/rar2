@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from tools import rescue_batch_text_v1 as text_batch
-from tools import rescue_auto_restore_v1 as auto
+from tools import rescue_desktop_batch_v1 as batch
 from tools import rescue_salvage_bundle_v1 as salvage
 
 
@@ -128,6 +128,102 @@ class StoryBatchTests(unittest.TestCase):
         with self.assertRaisesRegex(text_batch.TextRecoveryError, "unsafe_text_path"):
             self.admit()
         self.assertEqual(list(foreign.iterdir()), [])
+
+
+    def test_old_unsupported_bundle_gains_verified_story_without_rewrite(self):
+        """Text backfill must not ask immutable legacy CFB bundle for new images."""
+        batch_output = self.root / "batch"
+        scanned = batch.scan([self.source], batch_output)
+        self.assertEqual(scanned["counts"], {"pending": 1})
+        previous = batch.run(batch_output, workers=1)
+        self.assertEqual(previous["counts"], {"done_unsupported": 1})
+        original_bundle = (batch_output / "bundles" / self.digest / "bundle.json").read_bytes()
+        original_gallery = (batch_output / "recovered" / self.digest / "index.html").read_bytes()
+
+        def generate(_cli, _src, target, *_args):
+            self.make_story(target)
+            return True
+
+        with patch.object(text_batch, "run_cli", side_effect=generate) as invoked:
+            promoted = batch.run(batch_output, workers=1, pub_cli=self.pub)
+        self.assertEqual(invoked.call_count, 1)
+        self.assertEqual(promoted["counts"], {"done_partial": 1})
+        row = promoted["entries"][0]
+        self.assertEqual(row["text_count"], 1)
+        self.assertEqual(row["text_status"], "verified")
+        self.assertEqual(row["auto_tier"], "verified_text")
+        self.assertEqual(row["outcome"], "partial")
+        self.assertEqual(row["auto_index"],
+                         f"recovered-text-pages/{self.digest}/index.html")
+        self.assertEqual((batch_output / "bundles" / self.digest / "bundle.json").read_bytes(),
+                         original_bundle)
+        self.assertEqual((batch_output / "recovered" / self.digest / "index.html").read_bytes(),
+                         original_gallery)
+        self.assertEqual(salvage.sha_file(self.source), self.digest)
+        public = (batch_output / "summary.json").read_text(encoding="utf-8")
+        csv = (batch_output / "entries.csv").read_text(encoding="utf-8")
+        self.assertNotIn(self.source.name, public + csv)
+        self.assertNotIn("A😀Z", public + csv)
+        self.assertNotIn("test-story", public + csv)
+        self.assertEqual(batch.run(batch_output, workers=1)["counts"], {"done_partial": 1})
+        self.assertEqual(batch.status(batch_output)["entries"][0]["attempts"], 2)
+
+        # Rechecking a previously promoted text result is fail-closed.
+        (batch_output / "recovered-text" / self.digest / "stories.txt").write_bytes(b"tampered")
+        failed = batch.run(batch_output, workers=1)
+        self.assertEqual(failed["counts"], {"failed": 1})
+        self.assertEqual(failed["entries"][0]["reason"], "text_integrity")
+        self.assertEqual((batch_output / "bundles" / self.digest / "bundle.json").read_bytes(),
+                         original_bundle)
+
+    def test_first_batch_run_promotes_source_backed_story(self):
+        """A text-only partial must not be mislabeled done_unsupported."""
+        batch_output = self.root / "first-batch"
+        batch.scan([self.source], batch_output)
+
+        def generate(_cli, _src, target, *_args):
+            self.make_story(target)
+            return True
+
+        with patch.object(text_batch, "run_cli", side_effect=generate):
+            report = batch.run(batch_output, workers=1, pub_cli=self.pub)
+        self.assertEqual(report["counts"], {"done_partial": 1})
+        row = report["entries"][0]
+        self.assertEqual(row["text_count"], 1)
+        self.assertEqual(row["auto_tier"], "verified_text")
+        self.assertEqual(row["stream_count"], 0)
+        self.assertEqual(row["asset_count"], 0)
+        self.assertEqual(salvage.sha_file(self.source), self.digest)
+
+    def test_cancelled_text_does_not_publish_positive_result(self):
+        """Two concurrent source jobs must obey the shared batch abort event."""
+        batch_output = self.root / "cancel-batch"
+        other = self.root / "other.pub"
+        other.write_bytes(b"other-private-synthetic-source")
+        batch.scan([self.source, other], batch_output)
+        started = threading.Event()
+        stop = threading.Event()
+        outcome = {}
+
+        def blocked(*_args, **_kwargs):
+            started.set()
+            stop.wait(4)
+            raise text_batch.TextInterrupted("cancelled")
+
+        with patch.object(text_batch, "run_cli", side_effect=blocked):
+            worker = threading.Thread(target=lambda: outcome.setdefault(
+                "report", batch.run(batch_output, workers=2, pub_cli=self.pub)))
+            worker.start()
+            self.assertTrue(started.wait(3))
+            batch.request_action(batch_output, "cancel")
+            stop.set()
+            worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertIn("cancelled", outcome["report"]["counts"])
+        self.assertTrue(all(row["text_status"] is None
+                            for row in outcome["report"]["entries"]
+                            if row["status"] != "done_partial"))
+        self.assertEqual(salvage.sha_file(self.source), self.digest)
 
 
 if __name__ == "__main__":
