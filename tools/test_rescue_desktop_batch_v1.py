@@ -490,6 +490,70 @@ class RescueAutoPresentationTests(unittest.TestCase):
         self.assertIsNone(report["entries"][0]["auto_index"])
         self.assertNotIn(self.source.name, json.dumps(report))
 
+    def test_real_salvage_verified_asset_manifest_builds_gallery(self):
+        """Exercise the actual salvage output verifier, not a fake receipt."""
+        self.source.write_bytes(b"synthetic-image-carrier")
+        fake_pub_cli = self.root / "synthetic-pub-cli.exe"
+        fake_pub_cli.write_bytes(b"test only")
+        payload = b"\xff\xd8\xff\xd9"
+        name = "asset-123.jpg"
+
+        def fake_producer(args, _timeout):
+            if "extract-assets" not in args:
+                return "failed"  # no synthetic physical stream evidence
+            asset_dir = Path(args[args.index("--output") + 1])
+            asset_dir.mkdir()
+            (asset_dir / name).write_bytes(payload)
+            (asset_dir / "manifest.json").write_text(json.dumps({
+                "schema_version": salvage.ASSET_SCHEMA,
+                "assets": [{
+                    "filename": name, "sha256": salvage.hashlib.sha256(payload).hexdigest(),
+                    "byte_len": len(payload)
+                }],
+                "diagnostics": []
+            }), encoding="utf-8")
+            return None
+
+        bundle_root = self.output / "bundles"
+        with patch.object(salvage, "run_command", side_effect=fake_producer):
+            kind, report = salvage.execute(
+                self.source, bundle_root, pub_cli=fake_pub_cli)
+            self.assertEqual(kind, "created")
+            digest = salvage.sha_file(self.source)
+            bundle = bundle_root / digest
+            admitted = salvage.read_bundle_report(self.source, bundle, timeout=45)
+        self.assertEqual(admitted, report)
+        data = autorestore.materialize(
+            self.source, bundle, self.output / "recovered", admitted)
+        self.assertEqual(data["tier"], "verified_images")
+        self.assertEqual(data["physical_stream_count"], 0)
+        self.assertEqual(data["image_asset_count"], 1)
+        html = (self.output / "recovered" / digest / "index.html").read_text()
+        self.assertIn("images/asset-123.jpg", html)
+        self.assertNotIn(self.source.name, html)
+        self.assertFalse(data["native_pub_delivery_allowed"])
+        with patch.object(salvage, "run_command", side_effect=fake_producer):
+            again = salvage.read_bundle_report(self.source, bundle, timeout=45)
+        self.assertEqual(
+            autorestore.materialize(self.source, bundle, self.output / "recovered", again),
+            data)
+        (bundle / "images" / name).write_bytes(b"tamper")
+        with self.assertRaisesRegex(salvage.UnsafeInput, "asset_"):
+            salvage.read_bundle_report(self.source, bundle, timeout=45)
+
+    def test_stale_auto_tier_is_never_published_for_nonterminal_status(self):
+        self.source.write_bytes(b"private source")
+        batch.scan([self.source], self.output)
+        state = batch.load_queue(self.output)
+        row = state["entries"][0]
+        for current in ("pending", "running", "failed", "cancelled"):
+            with self.subTest(status=current):
+                row["status"] = current
+                row["auto_tier"] = "verified_images"
+                report = batch.report(state)
+                self.assertIsNone(report["entries"][0]["auto_tier"])
+                self.assertIsNone(report["entries"][0]["auto_index"])
+
     def test_presentation_symlink_rejected_without_overwrite(self):
         self.source.write_bytes(b"synthetic")
         batch.scan([self.source], self.output)

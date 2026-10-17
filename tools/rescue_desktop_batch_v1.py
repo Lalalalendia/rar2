@@ -158,7 +158,10 @@ def report(state: dict) -> dict:
         tier = public["auto_tier"]
         # The output of status/CSV is always source-free; never echo arbitrary
         # values from a private queue field as an auto-recovery tier.
-        public["auto_tier"] = tier if isinstance(tier, str) and tier in autorestore.TIERS else None
+        public["auto_tier"] = (
+            tier if public["status"] in DONE and
+            isinstance(tier, str) and tier in autorestore.TIERS else None
+        )
         # This relative path is generated from a validated SHA only; it is not
         # a private filesystem path or a claim that a native PUB was repaired.
         digest = public["sha256"]
