@@ -27,6 +27,7 @@ import time
 import uuid
 
 from tools import rescue_salvage_bundle_v1 as salvage
+from tools import rescue_auto_restore_v1 as autorestore
 from tools import rescue_windows_job_guard as job_guard
 
 SCHEMA = "chaptera.rescue-desktop-batch.v1"
@@ -41,9 +42,10 @@ QUEUED = "pending"
 STATES = frozenset({QUEUED, "running", "done_partial", "done_unsupported", "failed", "cancelled"})
 DONE = frozenset({"done_partial", "done_unsupported"})
 REASONS = frozenset({"source_missing", "source_drift", "unsafe_source", "worker_timeout",
-                     "worker_error", "bundle_integrity", "cancelled", "worker_crash"})
+                     "worker_error", "bundle_integrity", "auto_restore_integrity",
+                     "cancelled", "worker_crash"})
 FIELDS = ("sha256", "source_bytes", "status", "outcome", "reason", "attempts",
-          "stream_count", "asset_count")
+          "stream_count", "asset_count", "auto_tier", "auto_index")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -150,8 +152,22 @@ def load_queue(output: Path) -> dict:
 
 
 def report(state: dict) -> dict:
-    entries = [{key: row.get(key) for key in FIELDS} for row in sorted(
-        state["entries"], key=lambda entry: entry["sha256"])]
+    entries = []
+    for row in sorted(state["entries"], key=lambda entry: entry["sha256"]):
+        public = {key: row.get(key) for key in FIELDS}
+        tier = public["auto_tier"]
+        # The output of status/CSV is always source-free; never echo arbitrary
+        # values from a private queue field as an auto-recovery tier.
+        public["auto_tier"] = tier if isinstance(tier, str) and tier in autorestore.TIERS else None
+        # This relative path is generated from a validated SHA only; it is not
+        # a private filesystem path or a claim that a native PUB was repaired.
+        digest = public["sha256"]
+        public["auto_index"] = (
+            f"recovered/{digest}/index.html"
+            if public["auto_tier"] is not None and isinstance(digest, str)
+            and SHA.fullmatch(digest) and public["status"] in DONE else None
+        )
+        entries.append(public)
     counts = dict(sorted(Counter(row["status"] for row in entries).items()))
     return {"schema_version": REPORT_SCHEMA, "source_free": True,
             "unique_sources": len(entries), "duplicate_paths": state.get("duplicate_paths", 0),
@@ -249,7 +265,7 @@ def scan(inputs: list[Path], output: Path, *, append: bool = False) -> dict:
                     row = {"sha256": digest, "source_bytes": byte_len,
                            "paths": [private_path], "status": QUEUED, "attempts": 0,
                            "outcome": None, "reason": None, "stream_count": 0,
-                           "asset_count": 0}
+                           "asset_count": 0, "auto_tier": None}
                     if len(state["entries"]) >= MAX_UNIQUE_SOURCES:
                         raise BatchError("batch_source_limit")
                     state["entries"].append(row)
@@ -398,12 +414,24 @@ def process_one(row: dict, bundle_root: Path, *, timeout: int, file_timeout: int
         if expected_outcome != answer.get("outcome"):
             raise ValueError("worker_wrong_outcome")
         status = "done_partial" if expected_outcome == "partial" else "done_unsupported"
-        return {"status": status, "reason": None, "outcome": expected_outcome,
-                "stream_count": receipt["physical"].get("stream_count", 0),
-                "asset_count": receipt["images"].get("asset_count", 0)}
     except (salvage.UnsafeInput, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return {"status": "failed", "reason": "bundle_integrity", "outcome": None,
                 "stream_count": 0, "asset_count": 0}
+    try:
+        # The canonical independent verifier above owns evidence admission.
+        # AutoRestore only materializes a local static presentation of it.
+        promoted = autorestore.materialize(
+            source, bundle_root / row["sha256"], bundle_root.parent / "recovered", receipt)
+        if salvage.sha_file(source) != row["sha256"]:
+            raise autorestore.AutoRestoreError("source_drift_after_presentation")
+    except (autorestore.AutoRestoreError, salvage.UnsafeInput, OSError,
+            ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return {"status": "failed", "reason": "auto_restore_integrity", "outcome": None,
+                "stream_count": 0, "asset_count": 0, "auto_tier": None}
+    return {"status": status, "reason": None, "outcome": expected_outcome,
+            "stream_count": receipt["physical"].get("stream_count", 0),
+            "asset_count": receipt["images"].get("asset_count", 0),
+            "auto_tier": promoted["tier"]}
 
 
 def run(output: Path, *, workers: int = 2, timeout: int = 45,
@@ -436,7 +464,7 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
             if row["status"] in DONE:
                 source, why = choose_source(row)
                 if source is None:
-                    row.update(status="failed", reason=why, outcome=None)
+                    row.update(status="failed", reason=why, outcome=None, auto_tier=None)
                     continue
                 try:
                     receipt = salvage.read_bundle_report(source, bundle_root / row["sha256"], timeout)
@@ -447,7 +475,18 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                             or row["asset_count"] != receipt["images"].get("asset_count", 0)):
                         raise BatchError("integrity_mismatch")
                 except (salvage.UnsafeInput, OSError, ValueError, TypeError, KeyError):
-                    row.update(status="failed", reason="bundle_integrity", outcome=None)
+                    row.update(status="failed", reason="bundle_integrity", outcome=None, auto_tier=None)
+                    continue
+                try:
+                    promoted = autorestore.materialize(
+                        source, bundle_root / row["sha256"], output / "recovered", receipt)
+                    row["auto_tier"] = promoted["tier"]
+                except (autorestore.AutoRestoreError, salvage.UnsafeInput, OSError,
+                        ValueError, TypeError, KeyError, json.JSONDecodeError):
+                    # Preserve the immutable salvage bundle as forensic evidence;
+                    # do not call a corrupted presentation a successful recovery.
+                    row.update(status="failed", reason="auto_restore_integrity",
+                               outcome=None, auto_tier=None)
             elif row["status"] == "running":
                 row["status"] = QUEUED
                 row["reason"] = None
@@ -467,6 +506,7 @@ def run(output: Path, *, workers: int = 2, timeout: int = 45,
                         while todo and len(in_flight) < workers:
                             row = todo.pop(0)
                             row["status"] = "running"
+                            row["auto_tier"] = None
                             row["attempts"] += 1
                             persist(output, state)
                             future = pool.submit(process_one, dict(row), bundle_root, timeout=timeout,
@@ -501,7 +541,7 @@ def retry(output: Path) -> dict:
         for row in state["entries"]:
             if row["status"] in ("failed", "cancelled"):
                 row.update(status=QUEUED, reason=None, outcome=None,
-                           stream_count=0, asset_count=0)
+                           stream_count=0, asset_count=0, auto_tier=None)
         state["run_token"] = None
         persist(output, state)
         return report(state)
