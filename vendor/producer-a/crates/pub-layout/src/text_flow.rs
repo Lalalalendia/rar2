@@ -231,16 +231,15 @@ pub fn resolve_bounded_text_flow_with_paragraph_flow(
                 successor_capacity,
                 &consumed_start_next,
             );
-            if let Some(break_before) = flow_break {
-                if let Ok(break_before_u32) = u32::try_from(break_before) {
-                    if paragraph_flow.iter().any(|run| {
-                        run.story_origin == story.origin
-                            && run.scalar_start == break_before_u32
-                            && run.constraint == BoundedParagraphFlowConstraint::StartInNextTextBox
-                    }) {
-                        consumed_start_next.insert(break_before_u32);
-                    }
-                }
+            if let Some(break_before) = flow_break
+                && let Ok(break_before_u32) = u32::try_from(break_before)
+                && paragraph_flow.iter().any(|run| {
+                    run.story_origin == story.origin
+                        && run.scalar_start == break_before_u32
+                        && run.constraint == BoundedParagraphFlowConstraint::StartInNextTextBox
+                })
+            {
+                consumed_start_next.insert(break_before_u32);
             }
             let end = flow_break.unwrap_or(provisional_end);
             if end == cursor {
@@ -415,12 +414,11 @@ fn paragraph_flow_break_before_fixed_v1(
         if group
             .iter()
             .any(|run| run.constraint == BoundedParagraphFlowConstraint::KeepWithNext)
+            && let Some(pair_end) = next_paragraph_end_fixed_v1(scalars, end)
         {
-            if let Some(pair_end) = next_paragraph_end_fixed_v1(scalars, end) {
-                let pair_len = pair_end.saturating_sub(start);
-                if pair_end > end && pair_len > remaining && pair_len <= successor_capacity {
-                    return Some(start);
-                }
+            let pair_len = pair_end.saturating_sub(start);
+            if pair_end > end && pair_len > remaining && pair_len <= successor_capacity {
+                return Some(start);
             }
         }
 

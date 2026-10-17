@@ -1,7 +1,8 @@
 use pub_contents::{ContentsFamily, ContentsReadError};
+use pub_format_registry::{FormatProfileEntry, RegistryError};
 
 // Keep registry routing beside the PUB family classifier rather than in the crate root.
-pub fn format_profile() -> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
+pub fn format_profile() -> Result<FormatProfileEntry, RegistryError> {
     pub_format_registry::resolve(super::PUB_FORMAT_PROFILE_ID)
 }
 

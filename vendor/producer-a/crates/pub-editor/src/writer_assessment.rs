@@ -33,108 +33,99 @@ pub(super) fn reject_legacy_page_lifecycle_schemas_v032(
 ) -> Result<(), super::EditorProjectError> {
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_26
         && legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27
-    {
-        if let Some(index) = project.operations.iter().position(|operation| {
+        && let Some(index) = project.operations.iter().position(|operation| {
             matches!(operation, EditOperation::DeleteBlankAuthoredPageV1 { .. })
-        }) {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
-            );
-        }
+        })
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDeleteBlankPageOperation { index },
+        );
     }
-    if legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27 {
-        if let Some(index) = project
+    if legacy_compatible_schema != super::EDITOR_PROJECT_VERSION_V0_27
+        && let Some(index) = project
             .operations
             .iter()
             .position(|operation| matches!(operation, EditOperation::DuplicateBlankPageV1 { .. }))
-        {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation {
-                    index,
-                },
-            );
-        }
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDuplicateBlankPageOperation { index },
+        );
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_28
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
-    {
-        if let Some(index) = project
+        && let Some(index) = project
             .operations
             .iter()
             .position(|operation| matches!(operation, EditOperation::InsertBlankPageAfterV1 { .. }))
-        {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { index },
-            );
-        }
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesInsertBlankPageOperation { index },
+        );
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_29
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
-    {
-        if let Some(index) = project.operations.iter().position(|operation| {
+        && let Some(index) = project.operations.iter().position(|operation| {
             matches!(
                 operation,
                 EditOperation::DeleteAuthoredRectanglePageV1 { .. }
             )
-        }) {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
-                    index,
-                },
-            );
-        }
+        })
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglePageOperation {
+                index,
+            },
+        );
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_30
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
-    {
-        if let Some(index) = project.operations.iter().position(|operation| {
+        && let Some(index) = project.operations.iter().position(|operation| {
             matches!(
                 operation,
                 EditOperation::DuplicateAuthoredRectanglePageV1 { .. }
             )
-        }) {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
-                    index,
-                },
-            );
-        }
+        })
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglePageOperation {
+                index,
+            },
+        );
     }
     if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_31
         && project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
-    {
-        if let Some(index) = project.operations.iter().position(|operation| {
+        && let Some(index) = project.operations.iter().position(|operation| {
             matches!(
                 operation,
                 EditOperation::DuplicateAuthoredRectanglesPageV1 { .. }
             )
-        }) {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation {
-                    index,
-                },
-            );
-        }
+        })
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDuplicateAuthoredRectanglesPageOperation {
+                index,
+            },
+        );
     }
-    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32 {
-        if let Some(index) = project.operations.iter().position(|operation| {
+    if project.schema_version != super::EDITOR_PROJECT_VERSION_V0_32
+        && let Some(index) = project.operations.iter().position(|operation| {
             matches!(
                 operation,
                 EditOperation::DeleteAuthoredRectanglesPageV1 { .. }
             )
-        }) {
-            return Err(
-                super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
-                    index,
-                },
-            );
-        }
+        })
+    {
+        return Err(
+            super::EditorProjectError::LegacyProjectCarriesDeleteAuthoredRectanglesPageOperation {
+                index,
+            },
+        );
     }
     Ok(())
 }

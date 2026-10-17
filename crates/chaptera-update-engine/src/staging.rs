@@ -83,7 +83,10 @@ pub fn preflight_space(
             "insufficient staging space: need {required_bytes} bytes, have {available_bytes}"
         ));
     }
-    Ok(SpaceBudget { required_bytes, available_bytes })
+    Ok(SpaceBudget {
+        required_bytes,
+        available_bytes,
+    })
 }
 
 pub fn stage_verified_zip(
@@ -96,7 +99,10 @@ pub fn stage_verified_zip(
     let compressed_bytes = fs::metadata(zip_path)?.len();
     let budget = preflight_space(install_root, compressed_bytes, manifest, limits)?;
     if destination.exists() {
-        return invariant(format!("staging destination already exists: {}", destination.display()));
+        return invariant(format!(
+            "staging destination already exists: {}",
+            destination.display()
+        ));
     }
     let parent = destination
         .parent()
@@ -104,7 +110,10 @@ pub fn stage_verified_zip(
     fs::create_dir_all(parent)?;
     let temp = destination.with_extension("extracting");
     if temp.exists() {
-        return invariant(format!("temporary staging path already exists: {}", temp.display()));
+        return invariant(format!(
+            "temporary staging path already exists: {}",
+            temp.display()
+        ));
     }
     fs::create_dir(&temp)?;
 
@@ -123,16 +132,22 @@ fn extract_and_verify(zip_path: &Path, manifest: &TreeManifest, destination: &Pa
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| UpdateError::LayoutInvariant(format!("invalid candidate ZIP: {error}")))?;
 
-    let expected: std::collections::HashMap<&str, &ManifestFile> =
-        manifest.files.iter().map(|file| (file.path.as_str(), file)).collect();
+    let expected: std::collections::HashMap<&str, &ManifestFile> = manifest
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
     let mut seen = HashSet::new();
     let mut extracted_bytes = 0u64;
 
     for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| UpdateError::LayoutInvariant(format!("read candidate ZIP entry: {error}")))?;
-        let raw = entry.name().to_owned();
+        let mut entry = archive.by_index(index).map_err(|error| {
+            UpdateError::LayoutInvariant(format!("read candidate ZIP entry: {error}"))
+        })?;
+        let raw = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(error) => return invariant(format!("invalid candidate ZIP entry name: {error}")),
+        };
         if entry.is_dir() {
             let trimmed = raw.trim_end_matches('/');
             if !trimmed.is_empty() {
@@ -142,12 +157,15 @@ fn extract_and_verify(zip_path: &Path, manifest: &TreeManifest, destination: &Pa
             continue;
         }
         validate_manifest_path(&raw)?;
-        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
             return invariant(format!("candidate ZIP contains symlink entry: {raw}"));
         }
-        let expected_file = expected
-            .get(raw.as_str())
-            .ok_or_else(|| UpdateError::LayoutInvariant(format!("candidate ZIP contains extra file: {raw}")))?;
+        let expected_file = expected.get(raw.as_str()).ok_or_else(|| {
+            UpdateError::LayoutInvariant(format!("candidate ZIP contains extra file: {raw}"))
+        })?;
         if !seen.insert(raw.clone()) {
             return invariant(format!("candidate ZIP contains duplicate file: {raw}"));
         }
@@ -159,23 +177,26 @@ fn extract_and_verify(zip_path: &Path, manifest: &TreeManifest, destination: &Pa
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut output = OpenOptions::new().create_new(true).write(true).open(&target)?;
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&target)?;
         let mut digest = Sha256::new();
         let mut copied = 0u64;
         let mut buffer = [0u8; 64 * 1024];
         loop {
-            let read = entry
-                .read(&mut buffer)
-                .map_err(|error| UpdateError::LayoutInvariant(format!("read candidate ZIP payload: {error}")))?;
+            let read = entry.read(&mut buffer).map_err(|error| {
+                UpdateError::LayoutInvariant(format!("read candidate ZIP payload: {error}"))
+            })?;
             if read == 0 {
                 break;
             }
-            copied = copied
-                .checked_add(read as u64)
-                .ok_or_else(|| UpdateError::LayoutInvariant("extracted byte count overflow".into()))?;
-            extracted_bytes = extracted_bytes
-                .checked_add(read as u64)
-                .ok_or_else(|| UpdateError::LayoutInvariant("total extracted byte count overflow".into()))?;
+            copied = copied.checked_add(read as u64).ok_or_else(|| {
+                UpdateError::LayoutInvariant("extracted byte count overflow".into())
+            })?;
+            extracted_bytes = extracted_bytes.checked_add(read as u64).ok_or_else(|| {
+                UpdateError::LayoutInvariant("total extracted byte count overflow".into())
+            })?;
             if copied > expected_file.length || extracted_bytes > manifest.installed_tree_bytes {
                 return invariant("candidate ZIP expands beyond authenticated manifest");
             }
@@ -233,10 +254,17 @@ fn validate_windows_component(value: &str) -> Result<()> {
     if value.ends_with(' ') || value.ends_with('.') {
         return invariant(format!("Windows-ambiguous path component: {value:?}"));
     }
-    if value.chars().any(|ch| ch < ' ' || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*')) {
+    if value
+        .chars()
+        .any(|ch| ch < ' ' || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
         return invariant(format!("Windows-invalid path component: {value:?}"));
     }
-    let stem = value.split('.').next().unwrap_or(value).to_ascii_uppercase();
+    let stem = value
+        .split('.')
+        .next()
+        .unwrap_or(value)
+        .to_ascii_uppercase();
     let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || (stem.len() == 4
             && (stem.starts_with("COM") || stem.starts_with("LPT"))

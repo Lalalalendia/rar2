@@ -260,13 +260,13 @@ pub fn parse_bounded_mcld(
         record_ids.push(record_id);
     }
 
-    if let Some(max_live_record_id) = record_ids.iter().map(|record_id| record_id.value).max() {
-        if record_count.value < max_live_record_id {
-            return Err(QuillMcldReadError::RecordIdOutsideOuterBound {
-                outer_value: record_count.value,
-                max_live_record_id,
-            });
-        }
+    if let Some(max_live_record_id) = record_ids.iter().map(|record_id| record_id.value).max()
+        && record_count.value < max_live_record_id
+    {
+        return Err(QuillMcldReadError::RecordIdOutsideOuterBound {
+            outer_value: record_count.value,
+            max_live_record_id,
+        });
     }
 
     let mut records = Vec::with_capacity(record_id_count.value as usize);

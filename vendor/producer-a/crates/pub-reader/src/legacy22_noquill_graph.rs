@@ -596,20 +596,19 @@ fn materialize_legacy_noquill_child(
         return Ok(());
     };
 
-    if let Some(table) = resolved_table {
-        if !table.object.is_materialized_grid()
+    if let Some(table) = resolved_table
+        && (!table.object.is_materialized_grid()
             || !table.object.columns_sum_to_declared_width()
             || !table.object.rows_sum_to_declared_height()
             || bounds.width.get() != i64::from(table.object.width_emu)
-            || bounds.height.get() != i64::from(table.object.height_emu)
-        {
-            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                object_id: u32::from(child_object_id),
-                raw_type: Some(child_entry.chunk_type),
-                reason: "legacy_table_geometry_grid_mismatch_v1".into(),
-            });
-            return Ok(());
-        }
+            || bounds.height.get() != i64::from(table.object.height_emu))
+    {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: Some(child_entry.chunk_type),
+            reason: "legacy_table_geometry_grid_mismatch_v1".into(),
+        });
+        return Ok(());
     }
 
     let node_id = derive_legacy_node_id(source_hash, child_object_id)?;

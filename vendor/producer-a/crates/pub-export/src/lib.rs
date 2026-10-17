@@ -366,10 +366,10 @@ pub fn plan_export_with_scoped_capabilities(
                     .copied()
                     .unwrap_or(CapabilityLevel::Unsupported)
             });
-        if let Some(key) = scoped_key {
-            if scoped.contains_key(&key) {
-                used.insert(key);
-            }
+        if let Some(key) = scoped_key
+            && scoped.contains_key(&key)
+        {
+            used.insert(key);
         }
 
         let planned = PlannedFeature {
