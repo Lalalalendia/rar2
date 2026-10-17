@@ -2,15 +2,33 @@
 //! Based on the existing Chaptera Editor Canva concept; no remote assets.
 use eframe::egui::{self, Color32, RichText, Stroke};
 
-pub fn accent() -> Color32 { Color32::from_rgb(105, 83, 232) }
-pub fn accent_soft() -> Color32 { Color32::from_rgb(240, 237, 255) }
-pub fn canvas() -> Color32 { Color32::from_rgb(233, 235, 240) }
-pub fn border() -> Color32 { Color32::from_rgb(227, 229, 237) }
-pub fn ink() -> Color32 { Color32::from_rgb(34, 37, 54) }
-pub fn muted() -> Color32 { Color32::from_rgb(105, 112, 130) }
-pub fn success() -> Color32 { Color32::from_rgb(27, 130, 101) }
-pub fn warning() -> Color32 { Color32::from_rgb(158, 105, 27) }
-pub fn danger() -> Color32 { Color32::from_rgb(180, 61, 71) }
+pub fn accent() -> Color32 {
+    Color32::from_rgb(105, 83, 232)
+}
+pub fn accent_soft() -> Color32 {
+    Color32::from_rgb(240, 237, 255)
+}
+pub fn canvas() -> Color32 {
+    Color32::from_rgb(233, 235, 240)
+}
+pub fn border() -> Color32 {
+    Color32::from_rgb(227, 229, 237)
+}
+pub fn ink() -> Color32 {
+    Color32::from_rgb(34, 37, 54)
+}
+pub fn muted() -> Color32 {
+    Color32::from_rgb(105, 112, 130)
+}
+pub fn success() -> Color32 {
+    Color32::from_rgb(27, 130, 101)
+}
+pub fn warning() -> Color32 {
+    Color32::from_rgb(158, 105, 27)
+}
+pub fn danger() -> Color32 {
+    Color32::from_rgb(180, 61, 71)
+}
 
 pub fn configure(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
@@ -64,7 +82,12 @@ pub fn pill(ui: &mut egui::Ui, title: &str, color: Color32) {
 
 pub fn metric(ui: &mut egui::Ui, caption: &str, number: usize, tint: Color32) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(number.to_string()).size(24.0).strong().color(tint));
+        ui.label(
+            RichText::new(number.to_string())
+                .size(24.0)
+                .strong()
+                .color(tint),
+        );
         ui.label(RichText::new(caption).size(12.0).color(muted()));
     });
 }
