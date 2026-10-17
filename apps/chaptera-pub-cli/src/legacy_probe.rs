@@ -47,7 +47,7 @@ fn count_proven(graph: &PubSourceGraph) -> (usize, usize) {
         }
         let text_bytes = story.text.len();
         total_text_bytes = total_text_bytes.saturating_add(text_bytes);
-        let key = story.id.as_canonical();
+        let key = story.id.as_canonical().to_string();
         let length_ok = story.text.encode_utf16().count() <= u32::MAX as usize;
         let ref_ok = story.source_refs.iter().any(|source_ref| {
             source_ref.role == SourceRole::Semantic
@@ -58,7 +58,7 @@ fn count_proven(graph: &PubSourceGraph) -> (usize, usize) {
                     .byte_range
                     .is_some_and(|span| span.length > 0 && span.end().is_some())
         });
-        if safe_story_key(key)
+        if safe_story_key(&key)
             && length_ok
             && total_text_bytes <= MAX_TOTAL_TEXT_BYTES
             && proven + ambiguous < MAX_STORIES
