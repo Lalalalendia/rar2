@@ -129,6 +129,7 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertIn("mode=ro", harness)
         self.assertIn('"--verify-private-expiry"', harness)
         self.assertIn("private_expiry_not_requested", harness)
+        self.assertIn('not before["reservation_active"]', harness)
         self.assertIn("common = guest_mutation_headers(origin, csrf)", harness)
         self.assertIn('"origin": origin', harness)
         result = subprocess.run(

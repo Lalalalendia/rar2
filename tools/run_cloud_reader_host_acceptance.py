@@ -476,10 +476,12 @@ def private_expiry_receipt(
     if not isinstance(session_id, str) or not isinstance(token, str) or type(expiry) is not int:
         raise AcceptanceError("private expiry witness is incomplete")
     before = private_storage_snapshot(sqlite_path, session_id)
+    # Guest open already released its upload-admission lease. It must not
+    # remain active while the source awaits its TTL.
     if not all((
         before["session_present"],
         before["quarantine_file_present"],
-        before["reservation_active"],
+        not before["reservation_active"],
         before["reservation_record_present"],
     )):
         raise AcceptanceError("private expiry precondition not physically present")
@@ -661,15 +663,17 @@ def self_test() -> int:
         quarantine = db.parent / "blob-store" / "quarantine" / GUEST_TENANT / upload
         quarantine.parent.mkdir(parents=True)
         quarantine.write_bytes(b"synthetic source")
-        pre = private_storage_snapshot(db, sid)
-        assert pre["session_present"] and pre["quarantine_file_present"]
-        assert pre["reservation_active"]
+        # Production open_session releases admission BEFORE guest TTL.
         with sqlite3.connect(db) as con:
-            con.execute("DELETE FROM reader_guest_sessions WHERE session_id=?", (sid.encode(),))
             con.execute(
                 "UPDATE upload_admission_reservations SET released_at_ms=123 WHERE reservation_id=?",
                 (reservation.encode(),),
             )
+        pre = private_storage_snapshot(db, sid)
+        assert pre["session_present"] and pre["quarantine_file_present"]
+        assert not pre["reservation_active"] and pre["reservation_record_present"]
+        with sqlite3.connect(db) as con:
+            con.execute("DELETE FROM reader_guest_sessions WHERE session_id=?", (sid.encode(),))
         quarantine.unlink()
         post = private_storage_snapshot(db, sid)
         assert not post["session_present"] and not post["quarantine_file_present"]
