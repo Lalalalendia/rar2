@@ -142,7 +142,10 @@ mod tests {
         let job = EngineJob::attach(&engine).expect("nested Windows GUI/engine jobs");
         let deadline = Instant::now() + Duration::from_secs(10);
         while !ready.exists() && Instant::now() < deadline {
-            assert!(engine.try_wait().unwrap().is_none(), "nested engine crashed");
+            assert!(
+                engine.try_wait().unwrap().is_none(),
+                "nested engine crashed"
+            );
             thread::sleep(Duration::from_millis(25));
         }
         assert!(ready.is_file(), "Python engine never spawned the worker");
@@ -155,7 +158,10 @@ mod tests {
         while engine.try_wait().unwrap().is_none() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(25));
         }
-        assert!(engine.try_wait().unwrap().is_some(), "GUI close left engine alive");
+        assert!(
+            engine.try_wait().unwrap().is_some(),
+            "GUI close left engine alive"
+        );
 
         #[link(name = "kernel32")]
         unsafe extern "system" {
