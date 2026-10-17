@@ -2,7 +2,7 @@
 import unittest
 
 from tools.probe_rescue_gui_pointer_windows import (
-    Input, KeyInput, MouseInput, SCHEMA, slot_coordinates,
+    Input, KeyInput, MouseInput, OsInput, SCHEMA, slot_coordinates,
 )
 
 
@@ -32,6 +32,61 @@ class GeometryTests(unittest.TestCase):
 
     def test_receipt_contract_cannot_be_mistaken_for_full_gui_acceptance(self):
         self.assertEqual(SCHEMA, "chaptera.rescue-gui-pointer-scan.v1")
+
+
+
+class FakeUser:
+    def __init__(self, foreground):
+        self.foreground = foreground
+        self.injections = 0
+        self.clipboard_opens = 0
+
+    def GetForegroundWindow(self):
+        return self.foreground
+
+    def SetForegroundWindow(self, hwnd):
+        self.foreground = hwnd
+        return 1
+
+    def SendInput(self, *_args):
+        self.injections += 1
+        return 1
+
+    def OpenClipboard(self, _hwnd):
+        self.clipboard_opens += 1
+        return 1
+
+
+class FocusGuardTests(unittest.TestCase):
+    def native(self, active):
+        driver = OsInput.__new__(OsInput)
+        driver.hwnd = 13
+        driver.user = FakeUser(active)
+        return driver
+
+    def test_unrelated_foreground_blocks_global_sendinput(self):
+        driver = self.native(12)
+        with self.assertRaisesRegex(RuntimeError, "not foreground"):
+            driver._send(Input(type=1, ki=KeyInput(65, 0, 0, 0, 0)))
+        self.assertEqual(driver.user.injections, 0)
+
+    def test_clipboard_does_not_open_without_target_foreground(self):
+        driver = self.native(12)
+        with self.assertRaisesRegex(RuntimeError, "not foreground"):
+            driver.clipboard("SYNTHETIC")
+        self.assertEqual(driver.user.clipboard_opens, 0)
+
+    def test_exact_target_foreground_accepts_input(self):
+        driver = self.native(13)
+        driver._send(Input(type=1, ki=KeyInput(65, 0, 0, 0, 0)))
+        self.assertEqual(driver.user.injections, 1)
+
+    def test_focus_is_confirmed_before_input(self):
+        driver = self.native(12)
+        driver._focus_target()
+        self.assertEqual(driver.user.foreground, 13)
+        driver._send(Input(type=1, ki=KeyInput(65, 0, 0, 0, 0)))
+        self.assertEqual(driver.user.injections, 1)
 
 
 if __name__ == "__main__":
