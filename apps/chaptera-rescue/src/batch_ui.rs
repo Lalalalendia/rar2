@@ -53,6 +53,15 @@ struct BatchReport {
     entries: Vec<BatchRow>,
 }
 
+/// A pause/cancel command is allowed only for a still-live owned Run.
+fn can_send_batch_control(
+    current_action: Option<&str>,
+    active_child: bool,
+    control_pending: bool,
+) -> bool {
+    current_action == Some("run") && active_child && !control_pending
+}
+
 const RESULTS_PAGE_SIZE: usize = 100;
 
 /// Resolve the visible slice, retaining access to every accepted queue row.
@@ -166,9 +175,11 @@ impl BatchUi {
     }
 
     fn can_control(&self) -> bool {
-        self.active_action == Some("run")
-            && self.active_process.is_some()
-            && self.control_process.is_none()
+        can_send_batch_control(
+            self.active_action,
+            self.active_process.is_some(),
+            self.control_process.is_some(),
+        )
     }
 
     pub fn use_input(&mut self, path: &Path) {
@@ -501,8 +512,17 @@ impl BatchUi {
             .corner_radius(egui::CornerRadius::same(10))
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
-                ui.label(RichText::new(label).size(12.0).strong().color(ui_theme::accent()));
-                ui.label(RichText::new(&self.status).size(11.0).color(ui_theme::muted()));
+                ui.label(
+                    RichText::new(label)
+                        .size(12.0)
+                        .strong()
+                        .color(ui_theme::accent()),
+                );
+                ui.label(
+                    RichText::new(&self.status)
+                        .size(11.0)
+                        .color(ui_theme::muted()),
+                );
                 if self.can_control() {
                     ui.horizontal_wrapped(|ui| {
                         if ui.button("Pause").clicked() {
@@ -1121,6 +1141,16 @@ mod tests {
         assert!(!row_matches_filter(&row, "done_partial"));
         row.outcome = Some("partial".to_owned());
         assert!(row_matches_filter(&row, "partial"));
+    }
+
+    #[test]
+    fn sidebar_pause_cancel_gate_only_opens_for_live_owned_run() {
+        assert!(can_send_batch_control(Some("run"), true, false));
+        assert!(!can_send_batch_control(Some("scan"), true, false));
+        assert!(!can_send_batch_control(Some("retry"), true, false));
+        assert!(!can_send_batch_control(Some("run"), false, false));
+        assert!(!can_send_batch_control(Some("run"), true, true));
+        assert!(!can_send_batch_control(None, true, false));
     }
 
     #[test]
