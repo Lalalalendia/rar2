@@ -126,6 +126,7 @@ impl EngineJob {
             .unwrap_or(false)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,7 +191,10 @@ mod tests {
         drop(holder);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !ready.is_file() && Instant::now() < deadline {
-            assert!(engine.try_wait().unwrap().is_none(), "engine exited before child spawn");
+            assert!(
+                engine.try_wait().unwrap().is_none(),
+                "engine exited before child spawn"
+            );
             thread::sleep(Duration::from_millis(25));
         }
         assert!(ready.is_file(), "nested worker never launched");
@@ -248,6 +252,4 @@ mod tests {
         }
         let _ = fs::remove_file(ready);
     }
-
-
 }
