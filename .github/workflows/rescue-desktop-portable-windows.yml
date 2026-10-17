@@ -7,6 +7,8 @@ on:
       - 'tools/rescue_engine_entrypoint.py'
       - 'tools/test_rescue_engine_entrypoint.py'
       - 'tools/probe_rescue_portable_windows.py'
+      - 'tools/probe_rescue_gui_window_windows.py'
+      - 'tools/test_rescue_gui_window_probe.py'
       - '.github/workflows/rescue-desktop-portable-windows.yml'
       - 'tools/rescue_desktop_batch_v1.py'
       - 'tools/rescue_salvage_bundle_v1.py'
@@ -93,6 +95,13 @@ jobs:
           $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$root/portable-build.json"
           Compress-Archive -Path "$root/*" -DestinationPath dist/chaptera-rescue-portable-windows-x64.zip -CompressionLevel Optimal
           Copy-Item "$root/portable-build.json" dist/chaptera-rescue-portable-build.json
+      - name: Real GUI window smoke from extracted ZIP (hosted Windows, not pointer acceptance)
+        shell: pwsh
+        run: |
+          python -m unittest tools.test_rescue_gui_window_probe -v
+          $destination = Join-Path $env:RUNNER_TEMP 'Rescue GUI acceptance unpack'
+          Expand-Archive -LiteralPath 'dist/chaptera-rescue-portable-windows-x64.zip' -DestinationPath $destination -Force
+          python -m tools.probe_rescue_gui_window_windows --portable-dir "$destination"
       - uses: actions/upload-artifact@v4
         with:
           name: chaptera-rescue-portable-windows-x64-unsigned
