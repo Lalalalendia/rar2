@@ -23,6 +23,8 @@ The native Rust/egui interface is the product. A Canva concept or HTML mock is n
 | Completed batch | Count of unique SHA sources, partial/unsupported/failed/cancelled, duplicates, rejections and source-free short hashes agree with canonical `summary.json` |
 | Large batch (e.g. 1556 distinct SHA sources) | Every entry remains reachable across 100-row pages; count and range are explicit, last page contains 56 rows, and no silent truncation occurs |
 | Filtered results | SHA/status/outcome/reason filtering resets to first page, still shows matching count and handles empty results visibly |
+| Drag/drop while worker active | Dropping another source does not replace the active displayed source; it reports that the drop is ignored |
+| Drag/drop alternate receipt JSON | Old matching proof disappears immediately; new receipt must be loaded and validated again |
 | Active batch while viewing evidence | Sidebar shows a textual active-operation indicator and a return-to-recovery control without claiming the process completed |
 | Bad or absent summary | Old queue metrics disappear, explicit error is shown, no success color derived from an invalid summary |
 | Evidence selected | Original SHA inspection, source-matched receipt, independent JSON export are separate steps |

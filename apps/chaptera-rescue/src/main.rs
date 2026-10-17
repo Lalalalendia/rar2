@@ -467,6 +467,9 @@ impl eframe::App for RescueApp {
                 }
                 Some(ext) if ext == "json" => {
                     self.receipt_path = path.display().to_string();
+                    // OS drag/drop also changes the selected receipt: revoke
+                    // proof from the old path, just as a text edit does.
+                    self.invalidate_receipt_proof();
                 }
                 _ => {}
             }

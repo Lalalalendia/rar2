@@ -68,8 +68,14 @@ fn row_matches_filter(row: &BatchRow, normalized_filter: &str) -> bool {
     normalized_filter.is_empty()
         || row.sha256.contains(normalized_filter)
         || row.status.contains(normalized_filter)
-        || row.outcome.as_deref().is_some_and(|value| value.contains(normalized_filter))
-        || row.reason.as_deref().is_some_and(|value| value.contains(normalized_filter))
+        || row
+            .outcome
+            .as_deref()
+            .is_some_and(|value| value.contains(normalized_filter))
+        || row
+            .reason
+            .as_deref()
+            .is_some_and(|value| value.contains(normalized_filter))
 }
 
 /// Only render totals from a structurally consistent source-free engine report.
@@ -150,6 +156,12 @@ impl Default for BatchUi {
 
 impl BatchUi {
     pub fn use_input(&mut self, path: &Path) {
+        // Native OS drop events bypass disabled text fields. Never silently
+        // switch the displayed source while an earlier batch still owns it.
+        if self.active_process.is_some() || self.control_process.is_some() {
+            self.status = "Source drop ignored while a batch operation is active".to_owned();
+            return;
+        }
         self.input_path = path.to_string_lossy().to_string();
     }
 
@@ -689,11 +701,14 @@ impl BatchUi {
                             .strong()
                             .color(ui_theme::muted()),
                     );
-                    if ui.add(
-                        egui::TextEdit::singleline(&mut self.filter)
-                            .hint_text("Filter by SHA, status or outcome")
-                            .desired_width(220.0),
-                    ).changed() {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.filter)
+                                .hint_text("Filter by SHA, status or outcome")
+                                .desired_width(220.0),
+                        )
+                        .changed()
+                    {
                         self.results_page = 0;
                     }
                 });
@@ -708,20 +723,35 @@ impl BatchUi {
                 self.results_page = page;
                 ui.horizontal_wrapped(|ui| {
                     if matching.is_empty() {
-                        ui.label(RichText::new("No entries match this filter.")
-                            .size(12.0).color(ui_theme::muted()));
+                        ui.label(
+                            RichText::new("No entries match this filter.")
+                                .size(12.0)
+                                .color(ui_theme::muted()),
+                        );
                     } else {
-                        ui.label(RichText::new(format!(
-                            "Showing {}–{} of {} matching files",
-                            start + 1, end, matching.len()
-                        )).size(12.0).color(ui_theme::muted()));
+                        ui.label(
+                            RichText::new(format!(
+                                "Showing {}–{} of {} matching files",
+                                start + 1,
+                                end,
+                                matching.len()
+                            ))
+                            .size(12.0)
+                            .color(ui_theme::muted()),
+                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(page + 1 < pages, egui::Button::new("Next ›")).clicked() {
+                        if ui
+                            .add_enabled(page + 1 < pages, egui::Button::new("Next ›"))
+                            .clicked()
+                        {
                             self.results_page += 1;
                         }
                         ui.label(format!("{}/{}", page + 1, pages));
-                        if ui.add_enabled(page > 0, egui::Button::new("‹ Previous")).clicked() {
+                        if ui
+                            .add_enabled(page > 0, egui::Button::new("‹ Previous"))
+                            .clicked()
+                        {
                             self.results_page -= 1;
                         }
                     });
