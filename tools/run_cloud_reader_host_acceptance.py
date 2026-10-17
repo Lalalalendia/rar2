@@ -34,7 +34,8 @@ COMPAT_PROTOCOL = "chaptera.reader-compatibility-report.v1"
 DEFAULT_CHAPTERA = pathlib.Path("/opt/chaptera/current/chaptera")
 DEFAULT_CONFIG = pathlib.Path("/etc/chaptera/chaptera.toml")
 CHAPTERA_ROOT = pathlib.Path("/opt/chaptera")
-SERVICES = ("chaptera.target", "chaptera-web.service", "chaptera-worker.service")
+# One public Reader service/cgroup; do not restart legacy Product web+worker units.
+SERVICES = ("chaptera-reader.service",)
 STATE_BY_CLASSIFICATION = {
     "supported": "opens_normally",
     "partial": "needs_review",
@@ -86,11 +87,15 @@ def safe_release_target(link: pathlib.Path) -> str:
     if not link.is_symlink():
         raise AcceptanceError(f"{link} is not a symlink")
     target = os.readlink(link)
-    if not re.fullmatch(r"releases/[A-Za-z0-9._+\-]+", target):
+    # Current immutable installer writes an absolute release symlink. The
+    # older relative release format remains valid for historical packets.
+    releases = CHAPTERA_ROOT / "releases"
+    absolute = re.escape(str(releases)) + r"/[0-9a-f]{40}"
+    if not (re.fullmatch(r"releases/[0-9a-f]{40}", target)
+            or re.fullmatch(absolute, target)):
         raise AcceptanceError(f"unsafe Chaptera release target at {link}")
     resolved = (link.parent / target).resolve()
-    releases = (CHAPTERA_ROOT / "releases").resolve()
-    if resolved.parent != releases or not resolved.is_dir():
+    if resolved.parent != releases.resolve() or not resolved.is_dir():
         raise AcceptanceError(f"release target is outside immutable release root: {link}")
     return target
 
@@ -487,7 +492,7 @@ def atomic_switch_current(target: str) -> None:
 
 def restart_services() -> float:
     started = time.monotonic()
-    run(["systemctl", "restart", "chaptera-web.service", "chaptera-worker.service"], timeout=90)
+    run(["systemctl", "restart", *SERVICES], timeout=90)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         snapshot = service_snapshot()
@@ -511,6 +516,38 @@ def self_test() -> int:
         "rollback_previous_binary_safe": False,
     }
     assert sample_current["state"] == "current"
+    assert SERVICES == ("chaptera-reader.service",)
+    global CHAPTERA_ROOT
+    original_root = CHAPTERA_ROOT
+    try:
+        with tempfile.TemporaryDirectory(prefix="chaptera-host-acceptance-") as tmp:
+            CHAPTERA_ROOT = pathlib.Path(tmp) / "chaptera"
+            sha = "a" * 40
+            release = CHAPTERA_ROOT / "releases" / sha
+            release.mkdir(parents=True)
+            (release / "chaptera").write_bytes(b"binary")
+            current = CHAPTERA_ROOT / "current"
+            current.symlink_to(release)
+            assert safe_release_target(current) == str(release)
+            relative = CHAPTERA_ROOT / "previous"
+            relative.symlink_to(f"releases/{sha}")
+            assert safe_release_target(relative) == f"releases/{sha}"
+            bad = CHAPTERA_ROOT / "unsafe"
+            bad.symlink_to("/tmp/foreign-release")
+            try:
+                safe_release_target(bad)
+            except AcceptanceError:
+                pass
+            else:
+                raise AssertionError("outside release target admitted")
+            second = CHAPTERA_ROOT / "releases" / ("b" * 40)
+            second.mkdir()
+            atomic_switch_current(str(second))
+            assert safe_release_target(current) == str(second)
+            atomic_switch_current(str(release))
+            assert safe_release_target(current) == str(release)
+    finally:
+        CHAPTERA_ROOT = original_root
     print("cloud reader host acceptance self-test: ok")
     return 0
 
