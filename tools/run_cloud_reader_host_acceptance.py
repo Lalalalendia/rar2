@@ -530,7 +530,7 @@ def validate_live_doctor_receipt(payload: dict[str, Any]) -> dict[str, Any]:
 
 def live_doctor_receipt(binary: pathlib.Path, config: pathlib.Path) -> dict[str, Any]:
     result = run(
-        [str(binary), "--config", str(config), "doctor"],
+        [str(binary), "--config", str(config), "doctor", "--live"],
         check=False, timeout=12,
     )
     if result.returncode != 0:

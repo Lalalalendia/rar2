@@ -464,15 +464,20 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 migrate::run(action, &runtime).await?;
             }
         }
-        Command::Doctor => {
+        Command::Doctor { live } => {
             let config = explicit_config.as_ref().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "doctor requires --config to inspect the existing Reader runtime",
                 )
             })?;
-            // No dummy ports: prove the running production process over its
-            // configured loopback listener and compare exact immutable SHA.
+            if !live {
+                // Preserve startup's secret-authority fail-closed boundary.
+                // Only the explicit operator --live mode skips re-reading
+                // credentials already owned by the running systemd service.
+                let secrets = config.resolve_required_secrets(&SecretResolver::from_process())?;
+                drop(secrets);
+            }
             doctor::run_live(config.listen, BUILD_GIT_SHA).await?;
         }
         Command::UntrustedPubInspect { .. } => unreachable!(

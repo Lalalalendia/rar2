@@ -126,6 +126,7 @@ class ReaderReleaseEmbeddedAssetTests(unittest.TestCase):
         self.assertIn("private_cleanup_verified = private_cleanup[\"verified\"]", harness)
         self.assertIn("complete = host_operability_complete and private_cleanup_verified and doctor_verified", harness)
         self.assertIn("doctor_receipt = live_doctor_receipt(current_binary, args.config)", harness)
+        self.assertIn('"doctor", "--live"', harness)
         self.assertIn('"chaptera.doctor-live.v1"', harness)
         self.assertIn('doctor_verified = doctor_receipt["verified"]', harness)
         self.assertIn("def private_storage_snapshot(", harness)
