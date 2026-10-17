@@ -18,11 +18,9 @@ import tempfile
 import time
 
 SCHEMA = "chaptera.rescue-gui-pointer-scan.v1"
-CF_UNICODETEXT = 13
-GMEM_MOVEABLE = 0x0002
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
-VK_CONTROL, VK_A, VK_C = 0x11, 0x41, 0x43
+VK_CONTROL, VK_A = 0x11, 0x41
 
 
 class KeyInput(ctypes.Structure):
@@ -73,7 +71,6 @@ class OsInput:
             raise RuntimeError("physical pointer test requires Windows")
         self.hwnd = hwnd
         self.user = ctypes.WinDLL("user32", use_last_error=True)
-        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.user.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int)
         self.user.SendInput.restype = wintypes.UINT
         self.user.GetClientRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
@@ -85,28 +82,9 @@ class OsInput:
         self.user.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
         self.user.SetCursorPos.restype = wintypes.BOOL
         self.user.SetForegroundWindow.argtypes = (wintypes.HWND,)
-        self.user.SetForegroundWindow.argtypes = (wintypes.HWND,)
         self.user.SetForegroundWindow.restype = wintypes.BOOL
         self.user.GetForegroundWindow.argtypes = ()
         self.user.GetForegroundWindow.restype = wintypes.HWND
-        self.user.OpenClipboard.argtypes = (wintypes.HWND,)
-        self.user.OpenClipboard.restype = wintypes.BOOL
-        self.user.CloseClipboard.argtypes = ()
-        self.user.CloseClipboard.restype = wintypes.BOOL
-        self.user.EmptyClipboard.argtypes = ()
-        self.user.EmptyClipboard.restype = wintypes.BOOL
-        self.user.SetClipboardData.argtypes = (wintypes.UINT, ctypes.c_void_p)
-        self.user.SetClipboardData.restype = ctypes.c_void_p
-        self.user.GetClipboardData.argtypes = (wintypes.UINT,)
-        self.user.GetClipboardData.restype = ctypes.c_void_p
-        self.kernel.GlobalAlloc.argtypes = (wintypes.UINT, ctypes.c_size_t)
-        self.kernel.GlobalAlloc.restype = ctypes.c_void_p
-        self.kernel.GlobalFree.argtypes = (ctypes.c_void_p,)
-        self.kernel.GlobalFree.restype = ctypes.c_void_p
-        self.kernel.GlobalLock.argtypes = (ctypes.c_void_p,)
-        self.kernel.GlobalLock.restype = ctypes.c_void_p
-        self.kernel.GlobalUnlock.argtypes = (ctypes.c_void_p,)
-        self.kernel.GlobalUnlock.restype = wintypes.BOOL
 
     def coordinates(self) -> dict[str, tuple[int, int]]:
         rect = wintypes.RECT()
@@ -131,26 +109,35 @@ class OsInput:
             time.sleep(0.02)
         self._require_foreground()
 
-    def _send(self, event: Input) -> None:
+    def _send(self, *events: Input) -> None:
+        if not events:
+            raise ValueError("Win32 input batch cannot be empty")
         self._require_foreground()
-        if self.user.SendInput(1, ctypes.byref(event), ctypes.sizeof(Input)) != 1:
-            raise OSError(ctypes.get_last_error(), "SendInput not delivered")
+        # One SendInput call preserves event order without interleaving input
+        # from another SendInput stream. Always release Ctrl in the same batch.
+        buffer = (Input * len(events))(*events)
+        sent = self.user.SendInput(len(events), buffer, ctypes.sizeof(Input))
+        if sent != len(events):
+            raise OSError(ctypes.get_last_error(), "SendInput batch not fully delivered")
 
-    def key(self, vk: int, up: bool = False) -> None:
-        self._send(Input(type=1, ki=KeyInput(vk, 0, KEYEVENTF_KEYUP if up else 0, 0, 0)))
+    @staticmethod
+    def _key(vk: int, up: bool = False) -> Input:
+        return Input(type=1, ki=KeyInput(vk, 0, KEYEVENTF_KEYUP if up else 0, 0, 0))
 
     def combo(self, vk: int) -> None:
-        self.key(VK_CONTROL)
-        self.key(vk)
-        self.key(vk, up=True)
-        self.key(VK_CONTROL, up=True)
+        self._send(
+            self._key(VK_CONTROL), self._key(vk),
+            self._key(vk, up=True), self._key(VK_CONTROL, up=True),
+        )
 
     def unicode(self, value: str) -> None:
         encoded = value.encode("utf-16-le")
         for offset in range(0, len(encoded), 2):
             unit = int.from_bytes(encoded[offset:offset + 2], "little")
-            self._send(Input(type=1, ki=KeyInput(0, unit, KEYEVENTF_UNICODE, 0, 0)))
-            self._send(Input(type=1, ki=KeyInput(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)))
+            self._send(
+                Input(type=1, ki=KeyInput(0, unit, KEYEVENTF_UNICODE, 0, 0)),
+                Input(type=1, ki=KeyInput(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)),
+            )
         time.sleep(0.2)
 
     def click(self, point: tuple[int, int]) -> None:
@@ -161,59 +148,18 @@ class OsInput:
         if not self.user.SetCursorPos(screen.x, screen.y):
             raise OSError(ctypes.get_last_error(), "SetCursorPos failed")
         time.sleep(0.08)
-        self._send(Input(type=0, mi=MouseInput(0, 0, 0, 0x0002, 0, 0)))
-        time.sleep(0.06)
-        self._send(Input(type=0, mi=MouseInput(0, 0, 0, 0x0004, 0, 0)))
+        self._send(
+            Input(type=0, mi=MouseInput(0, 0, 0, 0x0002, 0, 0)),
+            Input(type=0, mi=MouseInput(0, 0, 0, 0x0004, 0, 0)),
+        )
         time.sleep(0.15)
 
-    def clipboard(self, value: str | None = None) -> str:
-        self._require_foreground()
-        if not self.user.OpenClipboard(self.hwnd):
-            raise OSError(ctypes.get_last_error(), "OpenClipboard failed")
-        try:
-            if value is not None:
-                self.user.EmptyClipboard()
-                payload = value.encode("utf-16-le") + b"\x00\x00"
-                mem = self.kernel.GlobalAlloc(GMEM_MOVEABLE, len(payload))
-                if not mem:
-                    raise OSError(ctypes.get_last_error(), "GlobalAlloc failed")
-                ptr = self.kernel.GlobalLock(mem)
-                if not ptr:
-                    self.kernel.GlobalFree(mem)
-                    raise OSError(ctypes.get_last_error(), "GlobalLock failed")
-                ctypes.memmove(ptr, payload, len(payload))
-                self.kernel.GlobalUnlock(mem)
-                if not self.user.SetClipboardData(CF_UNICODETEXT, mem):
-                    self.kernel.GlobalFree(mem)
-                    raise OSError(ctypes.get_last_error(), "SetClipboardData failed")
-                return value
-            handle = self.user.GetClipboardData(CF_UNICODETEXT)
-            if not handle:
-                return ""
-            locked = self.kernel.GlobalLock(handle)
-            if not locked:
-                return ""
-            try:
-                return ctypes.wstring_at(locked)
-            finally:
-                self.kernel.GlobalUnlock(handle)
-        finally:
-            self.user.CloseClipboard()
-
-    def set_field(self, point: tuple[int, int], value: str) -> bool:
+    def set_field(self, point: tuple[int, int], value: str) -> None:
+        # No clipboard dependency: the canonical Scan/Run output verifies
+        # whether both typed paths actually reached the GUI controls.
         self.click(point)
         self.combo(VK_A)
         self.unicode(value)
-        return self.field_equals(point, value)
-
-    def field_equals(self, point: tuple[int, int], value: str) -> bool:
-        self.click(point)
-        self.clipboard("SYNTHETIC_TEST_NO_SELECTION")
-        self.combo(VK_A)
-        self.combo(VK_C)
-        time.sleep(0.15)
-        # Never log clipboard contents: only compare against a generated path.
-        return self.clipboard() == value
 
 
 def wait_summary(path: Path, predicate, limit: float = 25) -> dict:
@@ -267,17 +213,18 @@ def main() -> int:
                 raise AssertionError("real GUI window unavailable for OS pointer acceptance")
             native = OsInput(hwnd)
             fields = native.coordinates()
-            if not native.set_field(fields["source"], str(inputs)):
-                raise AssertionError("real pointer/keyboard did not set source folder")
-            if not native.set_field(fields["output"], str(output)):
-                raise AssertionError("real pointer/keyboard did not set output folder")
-            if not native.field_equals(fields["source"], str(inputs)):
-                raise AssertionError("output edit corrupted source field or selected wrong widget")
+            native.set_field(fields["source"], str(inputs))
+            native.set_field(fields["output"], str(output))
             native.click(fields["scan"])
             scan = wait_summary(output / "summary.json",
                                 lambda value: value.get("unique_sources") == 1)
-            if scan.get("source_free") is not True or scan.get("duplicate_paths") != 0:
-                raise AssertionError("GUI scan does not preserve source-free queue")
+            entries = scan.get("entries", [])
+            if (scan.get("source_free") is not True
+                    or scan.get("duplicate_paths") != 0
+                    or len(entries) != 1
+                    or entries[0].get("sha256") != original_hash
+                    or entries[0].get("status") != "pending"):
+                raise AssertionError("GUI Scan did not admit the exact typed PUB source")
             # The summary may become visible slightly before the GUI has reaped
             # the scan subprocess and reenabled the Run button.
             time.sleep(1.0)
@@ -303,7 +250,8 @@ def main() -> int:
                 "physical_windows_mouse_keyboard": True, "source_and_output_fields": True,
                 "scan_button": True, "run_button": True, "synthetic_sources": 1,
                 "exact_verified_sid_streams": 2, "source_unchanged": True,
-                "no_system_python": True, "clean_windows_10_11": False,
+                "python_hidden_from_gui_path": True, "python_absent_on_host": False,
+                "clean_windows_10_11": False,
                 "active_workers_cancel_proven": False, "drag_drop_proven": False,
                 "source_free": True,
             }, sort_keys=True))
