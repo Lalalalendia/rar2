@@ -18,6 +18,7 @@ import tempfile
 import time
 
 SCHEMA = "chaptera.rescue-gui-pointer-scan.v1"
+BATCH_REPORT_SCHEMA = "chaptera.rescue-desktop-batch-report.v1"
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_CONTROL, VK_A = 0x11, 0x41
@@ -162,6 +163,43 @@ class OsInput:
         self.unicode(value)
 
 
+def _admitted_row(state: dict, digest: str, expected_status: str) -> dict:
+    """Assert exact per-source evidence, not a permissive summary count."""
+    if (not isinstance(state, dict)
+            or state.get("schema_version") != BATCH_REPORT_SCHEMA
+            or state.get("source_free") is not True
+            or state.get("unique_sources") != 1
+            or state.get("duplicate_paths") != 0
+            or state.get("rejected_paths", {}) != {}
+            or state.get("counts") != {expected_status: 1}):
+        raise AssertionError("canonical synthetic GUI batch summary rejected")
+    rows = state.get("entries")
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise AssertionError("GUI did not retain one exact synthetic source")
+    row = rows[0]
+    if (not isinstance(row, dict)
+            or row.get("sha256") != digest
+            or row.get("status") != expected_status):
+        raise AssertionError("GUI batch source SHA or expected state mismatch")
+    return row
+
+
+def validate_scanned_source(state: dict, digest: str) -> None:
+    row = _admitted_row(state, digest, "pending")
+    if row.get("attempts") != 0:
+        raise AssertionError("new GUI scan unexpectedly attempted salvage")
+
+
+def validate_completed_source(state: dict, digest: str) -> None:
+    row = _admitted_row(state, digest, "done_partial")
+    if (row.get("stream_count") != 2
+            or row.get("outcome") != "partial"
+            or row.get("reason") is not None
+            or not isinstance(row.get("attempts"), int)
+            or row["attempts"] < 1):
+        raise AssertionError("GUI did not independently verify two SID streams")
+
+
 def wait_summary(path: Path, predicate, limit: float = 25) -> dict:
     deadline = time.monotonic() + limit
     while time.monotonic() < deadline:
@@ -218,13 +256,7 @@ def main() -> int:
             native.click(fields["scan"])
             scan = wait_summary(output / "summary.json",
                                 lambda value: value.get("unique_sources") == 1)
-            entries = scan.get("entries", [])
-            if (scan.get("source_free") is not True
-                    or scan.get("duplicate_paths") != 0
-                    or len(entries) != 1
-                    or entries[0].get("sha256") != original_hash
-                    or entries[0].get("status") != "pending"):
-                raise AssertionError("GUI Scan did not admit the exact typed PUB source")
+            validate_scanned_source(scan, original_hash)
             # The summary may become visible slightly before the GUI has reaped
             # the scan subprocess and reenabled the Run button.
             time.sleep(1.0)
@@ -234,11 +266,7 @@ def main() -> int:
                 lambda state: any(row.get("status") == "done_partial"
                                   for row in state.get("entries", [])), limit=35,
             )
-            rows = report.get("entries", [])
-            if len(rows) != 1 or rows[0].get("sha256") != original_hash:
-                raise AssertionError("GUI run changed the exact source SHA identity")
-            if rows[0].get("stream_count") != 2:
-                raise AssertionError("GUI run did not verify two physical SID streams")
+            validate_completed_source(report, original_hash)
             if hashlib.sha256(doc.read_bytes()).hexdigest() != original_hash:
                 raise AssertionError("GUI batch modified source bytes")
             desktop.close(hwnd)
