@@ -89,6 +89,12 @@ class OsInput:
         self.user.GetDpiForWindow.restype = wintypes.UINT
         self.user.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
         self.user.SetCursorPos.restype = wintypes.BOOL
+        self.user.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
+        self.user.GetCursorPos.restype = wintypes.BOOL
+        self.user.WindowFromPoint.argtypes = (wintypes.POINT,)
+        self.user.WindowFromPoint.restype = wintypes.HWND
+        self.user.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+        self.user.GetAncestor.restype = wintypes.HWND
         self.user.SetForegroundWindow.argtypes = (wintypes.HWND,)
         self.user.SetForegroundWindow.restype = wintypes.BOOL
         self.user.GetForegroundWindow.argtypes = ()
@@ -148,6 +154,19 @@ class OsInput:
             )
         time.sleep(0.2)
 
+    def _assert_click_target(self, expected: wintypes.POINT) -> None:
+        # Foreground can still be Rescue while a popup/overlay owns the pixel,
+        # or another process has moved the shared system cursor. Fail closed
+        # before any global mouse button event can hit a different window.
+        actual = wintypes.POINT()
+        if not self.user.GetCursorPos(ctypes.byref(actual)):
+            raise OSError(ctypes.get_last_error(), "GetCursorPos failed")
+        if (actual.x, actual.y) != (expected.x, expected.y):
+            raise RuntimeError("mouse cursor moved away from Rescue click target")
+        hit = self.user.WindowFromPoint(actual)
+        if not hit or self.user.GetAncestor(hit, 2) != self.hwnd:  # GA_ROOT
+            raise RuntimeError("Rescue GUI does not own the click target")
+
     def click(self, point: tuple[int, int]) -> None:
         screen = wintypes.POINT(*point)
         if not self.user.ClientToScreen(self.hwnd, ctypes.byref(screen)):
@@ -156,6 +175,7 @@ class OsInput:
         if not self.user.SetCursorPos(screen.x, screen.y):
             raise OSError(ctypes.get_last_error(), "SetCursorPos failed")
         time.sleep(0.08)
+        self._assert_click_target(screen)
         self._send(
             Input(type=0, mi=MouseInput(0, 0, 0, 0x0002, 0, 0)),
             Input(type=0, mi=MouseInput(0, 0, 0, 0x0004, 0, 0)),
