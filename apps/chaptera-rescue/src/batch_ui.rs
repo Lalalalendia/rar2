@@ -353,79 +353,212 @@ impl BatchUi {
     }
 
     pub fn draw(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        use crate::ui_theme;
+        use egui::RichText;
+
         self.poll(ctx);
         let busy = self.active_process.is_some() || self.control_process.is_some();
-        ui.group(|ui| {
-            ui.strong("4. Local batch salvage (preview)");
-            if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
-                ui.label("Portable engine detected; Python and rar2 checkout are not required.");
-            } else {
-                ui.label("Development mode: select a rar2 checkout and Python, or install the portable package.");
+        let can_control = self.active_action == Some("run")
+            && self.active_process.is_some()
+            && self.control_process.is_none();
+
+        ui_theme::kicker(ui, "OFFLINE WORKSPACE / FILE RECOVERY");
+        ui_theme::headline(
+            ui,
+            "Batch recovery",
+            "Scan Publisher files, extract proven data and review exactly what was recovered.",
+        );
+        ui.add_space(18.0);
+
+        ui_theme::card(ui, |ui| {
+            ui.label(RichText::new("01  /  SELECT FILES").size(12.0).strong().color(ui_theme::accent()));
+            ui.label(RichText::new("Your originals stay untouched").size(18.0).strong().color(ui_theme::ink()));
+            ui.label(
+                RichText::new("Drop a PUB or folder into the window, or enter an absolute local path.")
+                    .size(12.0).color(ui_theme::muted()),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("SOURCE PUB OR FOLDER").size(11.0).strong().color(ui_theme::muted()));
+            let width = ui.available_width();
+            ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut self.input_path)
+                    .desired_width(width)
+                    .hint_text("C:\\Documents\\Publications"),
+            );
+            ui.label(RichText::new("OUTPUT FOLDER").size(11.0).strong().color(ui_theme::muted()));
+            let width = ui.available_width();
+            if ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut self.output_path)
+                    .desired_width(width)
+                    .hint_text("C:\\Rescue\\Results"),
+            ).changed() {
+                // Never show a cached receipt for another output directory.
+                self.report = None;
             }
-            ui.label("All source data stays local; no cloud upload.");
-            ui.horizontal(|ui| {
-                ui.label("PUB / folder");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.input_path));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Output folder");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.output_path));
-            });
-            ui.horizontal(|ui| {
-                ui.label("rar2 checkout");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.repo_root));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Python");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.python_path));
-                ui.label("Optional pub CLI");
-                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.asset_cli));
-            });
-            ui.add_enabled(!busy, egui::Slider::new(&mut self.workers, 1..=4).text("Parallel files"));
+            ui.label(
+                RichText::new("Results go to a separate folder outside the input tree.")
+                    .size(11.0).color(ui_theme::muted()),
+            );
+        });
+
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            ui.label(RichText::new("02  /  PROCESS").size(12.0).strong().color(ui_theme::accent()));
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!busy, egui::Button::new("Scan / add folder")).clicked() {
                     self.begin("scan");
                 }
-                if ui.add_enabled(!busy, egui::Button::new("Run / resume")).clicked() {
+                if ui.add_enabled(
+                    !busy,
+                    egui::Button::new(
+                        RichText::new("Run / resume").strong().color(egui::Color32::WHITE),
+                    ).fill(ui_theme::accent()),
+                ).clicked() {
                     self.begin("run");
                 }
                 if ui.add_enabled(!busy, egui::Button::new("Retry failed")).clicked() {
                     self.begin("retry");
                 }
-                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Pause")).clicked() {
+                if ui.add_enabled(can_control, egui::Button::new("Pause")).clicked() {
                     self.request_control("pause");
                 }
-                if ui.add_enabled(self.active_action == Some("run") && self.control_process.is_none(), egui::Button::new("Cancel")).clicked() {
+                if ui.add_enabled(can_control, egui::Button::new("Cancel")).clicked() {
                     self.request_control("cancel");
                 }
-                if ui.button("Refresh").clicked() {
+                if ui.button("Refresh results").clicked() {
                     self.refresh_report();
                 }
             });
-            ui.label(&self.status);
-            if let Some(report) = &self.report {
-                ui.separator();
-                ui.label(format!("Unique PUB: {}  |  Duplicate paths: {}", report.unique_sources, report.duplicate_paths));
-                for (state, count) in &report.counts {
-                    ui.label(format!("{state}: {count}"));
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if busy {
+                    ui.spinner();
+                    ui_theme::pill(ui, "PROCESSING", ui_theme::accent());
+                } else {
+                    ui_theme::pill(ui, "LOCAL ENGINE", ui_theme::success());
                 }
-                ui.horizontal(|ui| {
-                    ui.label("Filter SHA or status");
-                    ui.text_edit_singleline(&mut self.filter);
+                ui.label(RichText::new(&self.status).size(12.0).color(ui_theme::ink()));
+            });
+        });
+
+        ui.add_space(14.0);
+        if let Some(report) = &self.report {
+            ui_theme::card(ui, |ui| {
+                ui.label(RichText::new("03  /  RESULTS").size(12.0).strong().color(ui_theme::accent()));
+                ui.label(RichText::new("Verified queue overview").size(18.0).strong().color(ui_theme::ink()));
+                ui.add_space(4.0);
+                let partial = *report.counts.get("done_partial").unwrap_or(&0);
+                let unsupported = *report.counts.get("done_unsupported").unwrap_or(&0);
+                let failed = *report.counts.get("failed").unwrap_or(&0)
+                    + *report.counts.get("cancelled").unwrap_or(&0);
+                ui.columns(4, |cols| {
+                    ui_theme::metric(&mut cols[0], "Unique PUB", report.unique_sources, ui_theme::ink());
+                    ui_theme::metric(&mut cols[1], "Partial recovery", partial, ui_theme::success());
+                    ui_theme::metric(&mut cols[2], "Unsupported", unsupported, ui_theme::warning());
+                    ui_theme::metric(&mut cols[3], "Needs attention", failed, ui_theme::danger());
                 });
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                let finished = partial + unsupported + failed;
+                let progress = if report.unique_sources == 0 {
+                    0.0
+                } else {
+                    (finished as f32 / report.unique_sources as f32).clamp(0.0, 1.0)
+                };
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .fill(ui_theme::accent())
+                        .show_percentage(),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{finished} of {} files in a terminal state  ·  {} duplicate paths",
+                        report.unique_sources, report.duplicate_paths,
+                    )).size(11.0).color(ui_theme::muted()),
+                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("RESULTS  /  SHA-256").size(11.0).strong().color(ui_theme::muted()));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter)
+                            .hint_text("Filter hash or status")
+                            .desired_width(220.0),
+                    );
+                });
+                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                     for entry in report.entries.iter().filter(|entry| {
-                        self.filter.is_empty()
+                        self.filter.trim().is_empty()
                             || entry.sha256.contains(self.filter.trim())
                             || entry.status.contains(self.filter.trim())
                     }).take(100) {
-                        let suffix = entry.outcome.as_deref().or(entry.reason.as_deref()).unwrap_or("-");
-                        let short_sha = &entry.sha256[..entry.sha256.len().min(12)];
-                        ui.label(format!("{short_sha}  {}  {}  streams:{} assets:{}", entry.status, suffix,
-                            entry.stream_count.unwrap_or(0), entry.asset_count.unwrap_or(0)));
+                        let short_hash = &entry.sha256[..entry.sha256.len().min(12)];
+                        let outcome = entry.outcome.as_deref()
+                            .or(entry.reason.as_deref()).unwrap_or("Not processed");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(short_hash).monospace().size(12.0)
+                                    .color(ui_theme::ink()),
+                            );
+                            let tone = match entry.status.as_str() {
+                                "done_partial" => ui_theme::success(),
+                                "done_unsupported" => ui_theme::warning(),
+                                "failed" | "cancelled" => ui_theme::danger(),
+                                "running" => ui_theme::accent(),
+                                _ => ui_theme::muted(),
+                            };
+                            ui.label(RichText::new(&entry.status).strong().size(12.0).color(tone));
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}  ·  {} streams  ·  {} assets",
+                                    outcome, entry.stream_count.unwrap_or(0),
+                                    entry.asset_count.unwrap_or(0),
+                                )).size(12.0).color(ui_theme::muted()),
+                            );
+                        });
+                        ui.separator();
                     }
                 });
-            }
+            });
+        } else {
+            ui_theme::card(ui, |ui| {
+                ui.label(RichText::new("03  /  RESULTS").size(12.0).strong().color(ui_theme::accent()));
+                ui.label(RichText::new("Your results will appear here").size(18.0).strong().color(ui_theme::ink()));
+                ui.label(
+                    RichText::new("Run a scan to see verified SHA identities, outcomes, streams and errors. No results are inferred before the local engine reports them.")
+                        .size(12.0).color(ui_theme::muted()),
+                );
+            });
+        }
+
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            egui::CollapsingHeader::new("Advanced  /  local engine settings")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if self.repo_root.trim().is_empty() && Self::portable_engine().is_some() {
+                        ui.label("Portable engine detected. Python and checkout are not needed.");
+                    } else {
+                        ui.label("Development mode: choose a rar2 checkout and Python interpreter.");
+                    }
+                    ui.label(RichText::new("RAR2 CHECKOUT").size(11.0).strong().color(ui_theme::muted()));
+                    let width = ui.available_width();
+                    ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.repo_root)
+                        .desired_width(width).hint_text("Optional checkout path"));
+                    ui.label(RichText::new("PYTHON").size(11.0).strong().color(ui_theme::muted()));
+                    let width = ui.available_width();
+                    ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.python_path)
+                        .desired_width(width));
+                    ui.label(RichText::new("OPTIONAL PUB CLI").size(11.0).strong().color(ui_theme::muted()));
+                    let width = ui.available_width();
+                    ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.asset_cli)
+                        .desired_width(width));
+                    ui.add_enabled(!busy, egui::Slider::new(&mut self.workers, 1..=4)
+                        .text("Parallel files"));
+                    ui.label(
+                        RichText::new("All processing is offline; no source data is uploaded.")
+                            .size(11.0).color(ui_theme::muted()),
+                    );
+                });
         });
     }
 }
