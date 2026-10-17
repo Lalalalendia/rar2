@@ -18,6 +18,8 @@ ALLOWED_MODULES = frozenset({
     "tools.rescue_salvage_bundle_v1",
     "tools.rescue_cfb_stream_export",
     "tools.verify_rescue_cfb_stream_export",
+    "tools.rescue_batch_text_v1",
+    "tools.verify_rescue_text_evidence_v1",
 })
 
 

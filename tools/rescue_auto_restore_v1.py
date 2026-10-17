@@ -17,7 +17,7 @@ from urllib.parse import quote
 from tools import rescue_salvage_bundle_v1 as salvage
 
 SCHEMA = "chaptera.rescue-auto-presentation.v1"
-TIERS = frozenset({"verified_images", "verified_streams", "unsupported"})
+TIERS = frozenset({"verified_images", "verified_streams", "verified_text", "unsupported"})
 MAX_HTML_BYTES = 8 * 1024 * 1024
 MAX_PRESENTATION_BYTES = 16 * 1024
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})

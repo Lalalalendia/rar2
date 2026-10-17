@@ -56,7 +56,7 @@ class PortableEntrypointTests(unittest.TestCase):
         self.assertEqual(loader.call_count, len(engine.ALLOWED_MODULES))
         result = json.loads(output.getvalue())
         self.assertTrue(result["ok"])
-        self.assertEqual(result["module_count"], 4)
+        self.assertEqual(result["module_count"], 6)
 
     def test_self_check_fails_if_dependency_missing(self):
         with patch.object(engine.importlib, "import_module", side_effect=ImportError("missing")):

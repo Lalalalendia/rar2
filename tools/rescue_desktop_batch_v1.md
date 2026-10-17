@@ -67,3 +67,24 @@ Acceptance for the finished desktop product additionally requires a real Windows
 GUI batch workflow, independent packing of Python/Rust dependencies into an
 offline portable distribution, and a physically mounted, SHA-checked 1,556 PUB
 corpus benchmark (a hash-list alone is insufficient).
+
+## Optional verified Story text in batch
+
+With `--pub-cli /path/to/pub` (the Windows portable distribution includes
+`pub.exe`), each input also attempts the existing bounded `pub extract-text`
+producer in the aggregate Windows Job and under the existing per-file deadline.
+No second Quill parser is created. The independent byte-integrity validator
+must accept `recovered-text/<SHA>/stories.json` and `stories.txt` before a
+new `verified_text` tier is published. Source-free summaries contain only
+`text_status` and `text_count`; `auto_index` points to
+`recovered-text-pages/<SHA>/index.html` for verified text. That private local
+page links to the original immutable `recovered/<SHA>/index.html` image/stream
+gallery. Unsupported text does not erase independently verified SID/images.
+
+Original `bundles/<SHA>` and existing `recovered/<SHA>` are never rewritten.
+Repeated runs independently reverify saved Story bytes, source SHA, UTF-16
+intervals and private index. A mismatch fails closed as `text_integrity`;
+do not delete tampered output to force a successful status. Missing text for a
+legacy completed job may be backfilled only on an explicit Run with `--pub-cli`,
+inside the worker pool. This reuses the immutable CFB bundle and gallery.
+Original and extracted Story bytes are never public Actions artifacts.

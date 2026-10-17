@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'tools/rescue_desktop_batch_v1.py'
+      - 'tools/rescue_batch_text_v1.py'
+      - 'tools/test_rescue_batch_text_v1.py'
+      - 'tools/verify_rescue_text_evidence_v1.py'
       - 'tools/test_rescue_desktop_batch_v1.py'
       - 'tools/rescue_desktop_batch_v1.md'
       - '.github/workflows/rescue-desktop-batch-v1.yml'
@@ -33,7 +36,7 @@ jobs:
       - name: Source-safe unit tests with actual unsupported PUB worker
         shell: bash
         run: |
-          python -m unittest tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity -v
+          python -m unittest tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity tools.test_rescue_batch_text_v1 tools.test_verify_rescue_text_evidence_v1 -v
       - name: Real physical CFB batch, SHA dedup, restart and tamper rejection
         shell: bash
         run: |
