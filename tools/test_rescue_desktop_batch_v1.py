@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import threading
@@ -12,6 +13,8 @@ from unittest.mock import patch
 
 from tools import rescue_desktop_batch_v1 as batch
 from tools import rescue_salvage_bundle_v1 as salvage
+from tools import rescue_auto_restore_v1 as autorestore
+from tools.test_rescue_cfb_stream_identity import collision_fixture
 
 
 class RescueBatchTests(unittest.TestCase):
@@ -345,6 +348,229 @@ class RescueBatchTests(unittest.TestCase):
             self.assertEqual(batch.main(["run", "--output", str(self.output), "--workers", "1"]), 0)
             self.assertEqual(batch.main(["status", "--output", str(self.output)]), 0)
         self.assertTrue(printer.called)
+
+
+class RescueAutoPresentationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "confidential-example.pub"
+        self.output = self.root / "result"
+
+    def test_unsupported_real_batch_auto_indexes_without_false_repair(self):
+        self.source.write_bytes(b"synthetic-unsupported-input")
+        original = self.source.read_bytes()
+        scan = batch.scan([self.source], self.output)
+        self.assertEqual(scan["counts"], {"pending": 1})
+        first = batch.run(self.output, workers=1)
+        self.assertEqual(first["counts"], {"done_unsupported": 1})
+        row = first["entries"][0]
+        self.assertEqual(row["auto_tier"], "unsupported")
+        self.assertEqual(row["auto_index"], f"recovered/{row['sha256']}/index.html")
+        self.assertIn("auto_tier", (self.output / "entries.csv").read_text())
+        target = self.output / "recovered" / row["sha256"]
+        public = json.loads((target / "recovery.json").read_text())
+        page = (target / "index.html").read_text()
+        self.assertEqual(public["tier"], "unsupported")
+        self.assertFalse(public["native_pub_repair_attempted"])
+        self.assertFalse(public["semantic_text_reconstructed"])
+        self.assertFalse(public["native_pub_delivery_allowed"])
+        self.assertNotIn(self.source.name, page)
+        self.assertNotIn(str(self.root), page)
+        self.assertEqual(self.source.read_bytes(), original)
+        html = (target / "index.html").read_bytes()
+        rerun = batch.run(self.output, workers=1)
+        self.assertEqual(rerun["counts"], {"done_unsupported": 1})
+        self.assertEqual(rerun["entries"][0]["attempts"], 1)
+        self.assertEqual((target / "index.html").read_bytes(), html)
+
+    def test_real_cfb_two_sid_streams_auto_index_without_repaired_pub(self):
+        self.source.write_bytes(collision_fixture())
+        original = salvage.sha_file(self.source)
+        batch.scan([self.source], self.output)
+        result = batch.run(self.output, workers=1)
+        self.assertEqual(result["counts"], {"done_partial": 1})
+        row = result["entries"][0]
+        self.assertEqual(row["auto_tier"], "verified_streams")
+        folder = self.output / "recovered" / row["sha256"]
+        summary = json.loads((folder / "recovery.json").read_text())
+        self.assertEqual(summary["physical_stream_count"], 2)
+        self.assertEqual(summary["image_asset_count"], 0)
+        self.assertFalse(summary["native_pub_delivery_allowed"])
+        html = (folder / "index.html").read_text(encoding="utf-8")
+        self.assertIn("sid-000001", html)
+        self.assertIn("sid-000002", html)
+        self.assertIn("../../bundles/", html)
+        self.assertNotIn("repaired.pub", html)
+        self.assertEqual(salvage.sha_file(self.source), original)
+
+    def test_tampered_presentation_cannot_be_silently_regenerated(self):
+        self.source.write_bytes(b"synthetic-unsupported-input")
+        batch.scan([self.source], self.output)
+        first = batch.run(self.output)
+        sha = first["entries"][0]["sha256"]
+        target = self.output / "recovered" / sha / "index.html"
+        target.write_text("<script>unexpected</script>", encoding="utf-8")
+        after = batch.run(self.output)
+        self.assertEqual(after["counts"], {"failed": 1})
+        self.assertEqual(after["entries"][0]["reason"], "auto_restore_integrity")
+        self.assertIn("unexpected", target.read_text())
+        batch.retry(self.output)
+        again = batch.run(self.output)
+        self.assertEqual(again["counts"], {"failed": 1})
+        self.assertEqual(again["entries"][0]["reason"], "auto_restore_integrity")
+
+    def test_missing_legacy_presentation_backfills_without_worker_rerun(self):
+        self.source.write_bytes(b"synthetic-unsupported-input")
+        batch.scan([self.source], self.output)
+        first = batch.run(self.output)
+        sha = first["entries"][0]["sha256"]
+        old_attempts = first["entries"][0]["attempts"]
+        shutil.rmtree(self.output / "recovered" / sha)
+        next_result = batch.run(self.output)
+        self.assertEqual(next_result["entries"][0]["attempts"], old_attempts)
+        self.assertEqual(next_result["entries"][0]["auto_tier"], "unsupported")
+        self.assertTrue((self.output / "recovered" / sha / "recovery.json").is_file())
+
+    def test_verified_image_gallery_and_private_path_separation(self):
+        self.source.write_bytes(b"synthetic-image-only-evidence")
+        digest = salvage.sha_file(self.source)
+        bundle = self.output / "bundles" / digest
+        (bundle / "images").mkdir(parents=True)
+        (bundle / "images" / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
+        (bundle / "images" / "manifest.json").write_text(
+            json.dumps({"assets": [{"filename": "cover.png"}]}), encoding="utf-8")
+        (bundle / "bundle.json").write_text("synthetic existing independently verified receipt")
+        # This unit test passes the same already-verified receipt contract that
+        # the batch executor gets only after read_bundle_report succeeds.
+        verified = {
+            "source": {"sha256": digest},
+            "source_immutable": True,
+            "native_pub_delivery_allowed": False,
+            "text": {"status": "not_implemented"},
+            "outcome": "partial",
+            "physical": {"status": "unavailable"},
+            "images": {"status": "verified", "asset_count": 1},
+        }
+        data = autorestore.materialize(
+            self.source, bundle, self.output / "recovered", verified)
+        self.assertEqual(data["tier"], "verified_images")
+        page = (self.output / "recovered" / digest / "index.html").read_text()
+        self.assertIn("images/cover.png", page)
+        self.assertNotIn("confidential-example.pub", page)
+        self.assertNotIn(str(self.source), page)
+
+    def test_untrusted_manifest_artifact_path_fails_before_presentation(self):
+        self.source.write_bytes(b"synthetic-private-input")
+        digest = salvage.sha_file(self.source)
+        bundle = self.output / "bundles" / digest
+        (bundle / "images").mkdir(parents=True)
+        (bundle / "images" / "manifest.json").write_text(
+            json.dumps({"assets": [{"filename": "../escape.html"}]}))
+        (bundle / "bundle.json").write_text("synthetic")
+        receipt = {
+            "source": {"sha256": digest}, "source_immutable": True,
+            "native_pub_delivery_allowed": False, "text": {"status": "not_implemented"},
+            "outcome": "partial", "physical": {"status": "unavailable"},
+            "images": {"status": "verified", "asset_count": 1},
+        }
+        with self.assertRaisesRegex(autorestore.AutoRestoreError, "unsafe_artifact_name"):
+            autorestore.materialize(
+                self.source, bundle, self.output / "recovered", receipt)
+        self.assertFalse((self.output / "recovered" / digest).exists())
+
+    def test_public_tier_field_cannot_echo_private_queue_value(self):
+        self.source.write_bytes(b"local-only")
+        batch.scan([self.source], self.output)
+        private = batch.load_queue(self.output)
+        private["entries"][0]["auto_tier"] = str(self.source)
+        report = batch.report(private)
+        self.assertIsNone(report["entries"][0]["auto_tier"])
+        self.assertIsNone(report["entries"][0]["auto_index"])
+        self.assertNotIn(self.source.name, json.dumps(report))
+
+    def test_real_salvage_verified_asset_manifest_builds_gallery(self):
+        """Exercise the actual salvage output verifier, not a fake receipt."""
+        self.source.write_bytes(b"synthetic-image-carrier")
+        fake_pub_cli = self.root / "synthetic-pub-cli.exe"
+        fake_pub_cli.write_bytes(b"test only")
+        payload = b"\xff\xd8\xff\xd9"
+        name = "asset-123.jpg"
+
+        def fake_producer(args, _timeout):
+            if "extract-assets" not in args:
+                return "failed"  # no synthetic physical stream evidence
+            asset_dir = Path(args[args.index("--output") + 1])
+            asset_dir.mkdir()
+            (asset_dir / name).write_bytes(payload)
+            (asset_dir / "manifest.json").write_text(json.dumps({
+                "schema_version": salvage.ASSET_SCHEMA,
+                "assets": [{
+                    "filename": name, "sha256": salvage.hashlib.sha256(payload).hexdigest(),
+                    "byte_len": len(payload)
+                }],
+                "diagnostics": []
+            }), encoding="utf-8")
+            return None
+
+        bundle_root = self.output / "bundles"
+        with patch.object(salvage, "run_command", side_effect=fake_producer):
+            kind, report = salvage.execute(
+                self.source, bundle_root, pub_cli=fake_pub_cli)
+            self.assertEqual(kind, "created")
+            digest = salvage.sha_file(self.source)
+            bundle = bundle_root / digest
+            admitted = salvage.read_bundle_report(self.source, bundle, timeout=45)
+        self.assertEqual(admitted, report)
+        data = autorestore.materialize(
+            self.source, bundle, self.output / "recovered", admitted)
+        self.assertEqual(data["tier"], "verified_images")
+        self.assertEqual(data["physical_stream_count"], 0)
+        self.assertEqual(data["image_asset_count"], 1)
+        html = (self.output / "recovered" / digest / "index.html").read_text()
+        self.assertIn("images/asset-123.jpg", html)
+        self.assertNotIn(self.source.name, html)
+        self.assertFalse(data["native_pub_delivery_allowed"])
+        with patch.object(salvage, "run_command", side_effect=fake_producer):
+            again = salvage.read_bundle_report(self.source, bundle, timeout=45)
+        self.assertEqual(
+            autorestore.materialize(self.source, bundle, self.output / "recovered", again),
+            data)
+        (bundle / "images" / name).write_bytes(b"tamper")
+        with self.assertRaisesRegex(salvage.UnsafeInput, "asset_"):
+            salvage.read_bundle_report(self.source, bundle, timeout=45)
+
+    def test_stale_auto_tier_is_never_published_for_nonterminal_status(self):
+        self.source.write_bytes(b"private source")
+        batch.scan([self.source], self.output)
+        state = batch.load_queue(self.output)
+        row = state["entries"][0]
+        for current in ("pending", "running", "failed", "cancelled"):
+            with self.subTest(status=current):
+                row["status"] = current
+                row["auto_tier"] = "verified_images"
+                report = batch.report(state)
+                self.assertIsNone(report["entries"][0]["auto_tier"])
+                self.assertIsNone(report["entries"][0]["auto_index"])
+
+    def test_presentation_symlink_rejected_without_overwrite(self):
+        self.source.write_bytes(b"synthetic")
+        batch.scan([self.source], self.output)
+        result = batch.run(self.output)
+        digest = result["entries"][0]["sha256"]
+        victim = self.root / "do-not-touch"
+        victim.mkdir()
+        target = self.output / "recovered" / digest
+        shutil.rmtree(target)
+        try:
+            target.symlink_to(victim, target_is_directory=True)
+        except (NotImplementedError, OSError):
+            self.skipTest("symlinks unavailable on this Windows test host")
+        rerun = batch.run(self.output)
+        self.assertEqual(rerun["counts"], {"failed": 1})
+        self.assertEqual(rerun["entries"][0]["reason"], "auto_restore_integrity")
+        self.assertEqual(list(victim.iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -84,23 +84,42 @@ def main() -> int:
         rows = json.loads((output / "summary.json").read_text(encoding="utf-8"))["entries"]
         assert len(rows) == 1 and rows[0]["sha256"] == origin_digest
         assert rows[0]["status"] == "done_partial" and rows[0]["stream_count"] == 2
+        assert rows[0]["auto_tier"] in ("verified_streams", "verified_images")
         bundle = output / "bundles" / origin_digest
+        # Real frozen Windows engine must materialize the automatic result,
+        # not merely pass Python-only unit tests.
+        auto_root = output / "recovered" / origin_digest
+        auto_manifest = json.loads((auto_root / "recovery.json").read_text(encoding="utf-8"))
+        auto_index = (auto_root / "index.html").read_text(encoding="utf-8")
+        assert auto_manifest["source_sha256"] == origin_digest
+        assert auto_manifest["tier"] == rows[0]["auto_tier"]
+        assert auto_manifest["physical_stream_count"] == 2
+        assert auto_manifest["native_pub_delivery_allowed"] is False
+        assert auto_manifest["native_pub_repair_attempted"] is False
+        assert auto_manifest["semantic_text_reconstructed"] is False
+        assert "../../bundles/" + origin_digest + "/" in auto_index
+        assert "alpha.pub" not in auto_index and "duplicate.PUB" not in auto_index
+        assert "repaired PUB" in auto_index
+        saved_auto = (auto_root / "index.html").read_bytes()
         files = sorted((bundle / "physical" / "streams").glob("sid-*.bin"))
         assert len(files) == 2
         assert source.read_bytes() == source_bytes and duplicate.read_bytes() == source_bytes
 
         code, _ = invoke(engine, ["run", "--output", str(output)], env)
         assert code == 0 and json.loads((output / "summary.json").read_text(encoding="utf-8"))["entries"][0]["status"] == "done_partial"
+        assert (auto_root / "index.html").read_bytes() == saved_auto
         files[0].write_bytes(b"tampered")
         code, _ = invoke(engine, ["run", "--output", str(output)], env)
         assert code == 1, "tampered physical stream must fail closed"
         broken = json.loads((output / "summary.json").read_text(encoding="utf-8"))["entries"][0]
         assert broken["status"] == "failed" and broken["reason"] == "bundle_integrity", broken
+        assert broken["auto_tier"] is None
         assert source.read_bytes() == source_bytes
 
     print(json.dumps({"schema_version": "chaptera.rescue-portable-acceptance.v1",
                       "frozen": True, "offline_path": True, "source_unchanged": True,
                       "verified_streams": 2, "sha_dedup": True, "resume": True,
+                      "auto_presentation": True, "native_pub_repair_claim": False,
                       "tamper_fail_closed": True}, sort_keys=True))
     return 0
 
