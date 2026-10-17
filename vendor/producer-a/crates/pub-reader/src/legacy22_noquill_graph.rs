@@ -1,17 +1,16 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
     PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyCharacterStyleRun,
-    PubLegacyOleSource, PubLegacyUnderlineStyle,
-    PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource,
-    PubTableCellCoordinates, PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource,
-    ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, bounded_wmf_metafile, derive_pub_id,
-    source_ref,
+    PubLegacyOleSource, PubLegacyUnderlineStyle, PubNodePayload, PubSourceGraph,
+    PubSourceGraphBuild, PubStoryFrameSource, PubTableCellCoordinates, PubTableCellSource,
+    PubTableSource, PubTableStoryOwnershipSource, ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY,
+    bounded_wmf_metafile, derive_pub_id, source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22CharacterRun, Legacy0x22Directory,
-    Legacy0x22DirectoryEntry, Legacy0x22Underline,
-    Legacy0x22ResolvedTable, parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
+    Legacy0x22DirectoryEntry, Legacy0x22ResolvedTable, Legacy0x22Underline,
+    parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
     parse_legacy_0x22_formatting_runs, parse_legacy_0x22_resolved_tables,
     parse_legacy_0x22_text_info_map,
 };
@@ -63,7 +62,6 @@ struct LegacyAdmittedStoryRange {
     absolute_start: u32,
     absolute_end: u32,
 }
-
 
 pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
     mut reader: R,
@@ -393,8 +391,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
                 .checked_mul(pub_contents::FKP_PAGE_SIZE)
                 .and_then(|offset| offset.checked_add(pub_contents::FKP_PAGE_SIZE))
                 .is_some_and(|end| end <= contents.len())
-        })
-    {
+        }) {
         match parse_legacy_0x22_formatting_runs(contents_stream.clone(), contents) {
             Ok(formatting) => project_legacy_character_style_runs(
                 &graph.source,
@@ -414,7 +411,6 @@ pub fn build_legacy_0x22_noquill_from_contents(
         });
         Vec::new()
     };
-
 
     for (page_object_id, page_id) in &page_object_to_id {
         let page_entry = directory
@@ -1151,7 +1147,6 @@ fn project_legacy_character_style_runs(
     projected
 }
 
-
 fn decode_bounded_legacy_ascii(bytes: &[u8]) -> Result<String> {
     if bytes.iter().any(|byte| *byte >= 0x80) {
         bail!(
@@ -1514,9 +1509,21 @@ mod tests {
 
         assert_eq!(projected.len(), 2);
         assert_eq!(projected[0].story_id, story_a);
-        assert_eq!((projected[0].story_scalar_start, projected[0].story_scalar_end), (2, 4));
+        assert_eq!(
+            (
+                projected[0].story_scalar_start,
+                projected[0].story_scalar_end
+            ),
+            (2, 4)
+        );
         assert_eq!(projected[1].story_id, story_b);
-        assert_eq!((projected[1].story_scalar_start, projected[1].story_scalar_end), (0, 2));
+        assert_eq!(
+            (
+                projected[1].story_scalar_start,
+                projected[1].story_scalar_end
+            ),
+            (0, 2)
+        );
         for item in &projected {
             assert!(item.small_caps);
             assert!(item.all_caps);
@@ -1576,7 +1583,6 @@ mod tests {
         assert_eq!(projected[0].baseline_shift_half_points, Some(-6));
         assert_eq!(projected[0].text_size_half_points, None);
     }
-
 
     #[test]
     fn ascii_decoder_fails_closed_on_unproven_codepage() {

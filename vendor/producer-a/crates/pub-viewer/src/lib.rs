@@ -10,8 +10,8 @@
 mod authoring_projection;
 mod borderart;
 mod bridge_diagnostics;
-mod legacy_character_style;
 mod images;
+mod legacy_character_style;
 mod mature_emf_preview;
 mod mature_wmf_preview;
 mod tables;
@@ -19,6 +19,7 @@ mod typography;
 mod viewer_shape_preset;
 
 pub use legacy_character_style::{ViewerLegacyCharacterStyleRun, ViewerLegacyUnderlineStyle};
+use legacy_character_style::viewer_legacy_character_style_runs;
 pub use typography::{ViewerTypographyBooleanV1, ViewerTypographyRun, viewer_story_text_sha256};
 
 pub use authoring_projection::bounded_authoring_slice_from_resolved;
@@ -123,11 +124,10 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubLegacyUnderlineStyle,
-    PubParagraphAlignment, PubParagraphFlowConstraint, PubParagraphFlowRun,
-    PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
-    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
-    PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    PubLegacyUnderlineStyle, PubParagraphAlignment, PubParagraphFlowConstraint,
+    PubParagraphFlowRun, PubParagraphLineSpacing, PubResolveDiagnostic, PubResolvedGraph,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,

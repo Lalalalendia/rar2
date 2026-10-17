@@ -36,8 +36,7 @@ pub struct ViewerLegacyCharacterStyleRun {
     pub source_story_text_sha256: Sha256Digest,
 }
 
-
-fn viewer_legacy_character_style_runs(
+pub(super) fn viewer_legacy_character_style_runs(
     source: &PubSourceGraphBuild,
     graph: &PubResolvedGraph,
 ) -> Vec<ViewerLegacyCharacterStyleRun> {
@@ -74,4 +73,3 @@ fn viewer_legacy_character_style_runs(
         })
         .collect()
 }
-

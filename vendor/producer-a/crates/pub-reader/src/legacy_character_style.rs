@@ -44,4 +44,3 @@ pub struct PubLegacyCharacterStyleRun {
     pub raw_payload: Vec<u8>,
     pub source_refs: Vec<SourceRef>,
 }
-

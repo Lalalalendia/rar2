@@ -311,4 +311,3 @@ pub(super) fn is_refreshable_text_flow_diagnostic(code: &str) -> bool {
             | "viewer.text.paragraph_flow_policy_applied"
     )
 }
-

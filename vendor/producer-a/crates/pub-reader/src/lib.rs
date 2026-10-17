@@ -24,9 +24,9 @@ mod grouped_projection;
 mod guide_bridge;
 mod intake_protocol;
 mod legacy22_graph;
-mod legacy_character_style;
 mod legacy22_noquill_graph;
 mod legacy22_page_role;
+mod legacy_character_style;
 #[cfg(feature = "master-authority-bridge")]
 mod master_bridge;
 pub mod mature_emf;
@@ -109,6 +109,7 @@ pub use intake_protocol::{
     IntakeDedupeDisposition, IntakeProtocolError, IntakeReceipt, build_intake_capability_request,
     exact_file_intake_eligible, validate_intake_capability_request, validate_intake_receipt,
 };
+pub use legacy_character_style::{PubLegacyCharacterStyleRun, PubLegacyUnderlineStyle};
 pub use legacy22_graph::{
     build_legacy_0x22_quill_from_streams, build_legacy_0x22_quill_source_graph, legacy22_object_key,
 };
@@ -116,7 +117,6 @@ pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
     read_legacy_0x22_image_wmf, read_legacy_0x22_image_wmfs,
 };
-pub use legacy_character_style::{PubLegacyCharacterStyleRun, PubLegacyUnderlineStyle};
 pub use legacy22_page_role::{
     LEGACY22_PAGE_ROLE_OBSERVATION_SCHEMA_V1, Legacy22PageListEntryObservationV1,
     Legacy22PageRoleObservationReceiptV1, analyze_legacy_0x22_page_roles,
