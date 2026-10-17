@@ -6,6 +6,9 @@ on:
       - 'tools/notion/test_canonical_v5_identity_receipt.py'
       - 'tools/notion/README-canonical-v5-identity.md'
       - '.github/workflows/pub-canonical-v5-identity.yml'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
