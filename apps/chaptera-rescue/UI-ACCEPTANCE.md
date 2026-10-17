@@ -25,7 +25,8 @@ The native Rust/egui interface is the product. A Canva concept or HTML mock is n
 | Filtered results | SHA/status/outcome/reason filtering resets to first page, still shows matching count and handles empty results visibly |
 | Drag/drop while worker active | Dropping another source does not replace the active displayed source; it reports that the drop is ignored |
 | Drag/drop alternate receipt JSON | Old matching proof disappears immediately; new receipt must be loaded and validated again |
-| Active batch while viewing evidence | Sidebar shows a textual active-operation indicator and a return-to-recovery control without claiming the process completed |
+| Drag/drop during any live engine/control command | Dropped PUB/folder/receipt JSON is ignored before synchronous file inspection or hashing; active source, receipt and queue are not replaced |
+| Active batch while viewing evidence | Sidebar shows textual active-operation state and guarded Pause/Cancel controls for a live Run, with return-to-recovery link; controls are disabled/absent during Scan, Retry and an in-flight control request |
 | Bad or absent summary | Old queue metrics disappear, explicit error is shown, no success color derived from an invalid summary |
 | Evidence selected | Original SHA inspection, source-matched receipt, independent JSON export are separate steps |
 | Source or receipt path changed | Previous validated proof and prior success text disappear until revalidation |

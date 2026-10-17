@@ -155,11 +155,27 @@ impl Default for BatchUi {
 }
 
 impl BatchUi {
+    /// Applies to both text selection and native drag/drop on every workspace.
+    /// Do not accept a different source while a GUI-owned subprocess is active.
+    pub fn is_busy(&self) -> bool {
+        self.active_process.is_some() || self.control_process.is_some()
+    }
+
+    pub fn reject_drop_while_active(&mut self) {
+        self.status = "File drop ignored while a local operation is active".to_owned();
+    }
+
+    fn can_control(&self) -> bool {
+        self.active_action == Some("run")
+            && self.active_process.is_some()
+            && self.control_process.is_none()
+    }
+
     pub fn use_input(&mut self, path: &Path) {
         // Native OS drop events bypass disabled text fields. Never silently
         // switch the displayed source while an earlier batch still owns it.
-        if self.active_process.is_some() || self.control_process.is_some() {
-            self.status = "Source drop ignored while a batch operation is active".to_owned();
+        if self.is_busy() {
+            self.reject_drop_while_active();
             return;
         }
         self.input_path = path.to_string_lossy().to_string();
@@ -471,13 +487,46 @@ impl BatchUi {
         }
     }
 
+    /// Show the *same* guarded pause/cancel controls regardless of workspace.
+    /// This sidebar is outside the central scroll area, keeping critical run
+    /// actions reachable even when the user scrolls the evidence/queue page.
+    pub fn draw_sidebar_activity(&mut self, ui: &mut egui::Ui) {
+        use crate::ui_theme;
+        use egui::RichText;
+        let Some(label) = self.activity_label() else {
+            return;
+        };
+        egui::Frame::new()
+            .fill(ui_theme::accent_soft())
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(RichText::new(label).size(12.0).strong().color(ui_theme::accent()));
+                ui.label(RichText::new(&self.status).size(11.0).color(ui_theme::muted()));
+                if self.can_control() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Pause").clicked() {
+                            self.request_control("pause");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.request_control("cancel");
+                        }
+                    });
+                } else if self.control_process.is_some() {
+                    ui.label(
+                        RichText::new("Control request pending")
+                            .size(11.0)
+                            .color(ui_theme::muted()),
+                    );
+                }
+            });
+    }
+
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         use crate::ui_theme;
         use egui::RichText;
-        let busy = self.active_process.is_some() || self.control_process.is_some();
-        let can_control = self.active_action == Some("run")
-            && self.active_process.is_some()
-            && self.control_process.is_none();
+        let busy = self.is_busy();
+        let can_control = self.can_control();
 
         ui_theme::kicker(ui, "OFFLINE WORKSPACE / FILE RECOVERY");
         ui_theme::headline(
@@ -1072,6 +1121,20 @@ mod tests {
         assert!(!row_matches_filter(&row, "done_partial"));
         row.outcome = Some("partial".to_owned());
         assert!(row_matches_filter(&row, "partial"));
+    }
+
+    #[test]
+    fn idle_state_disables_run_controls_and_allows_new_source_drops() {
+        let mut surface = BatchUi::default();
+        assert!(!surface.is_busy());
+        assert!(!surface.can_control());
+        surface.use_input(Path::new("synthetic-folder"));
+        assert_eq!(surface.input_path, "synthetic-folder");
+        surface.reject_drop_while_active();
+        assert_eq!(
+            surface.status,
+            "File drop ignored while a local operation is active"
+        );
     }
 
     #[test]

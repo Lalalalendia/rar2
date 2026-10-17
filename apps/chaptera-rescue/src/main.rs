@@ -441,6 +441,13 @@ impl eframe::App for RescueApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input(|input| input.raw.dropped_files.clone());
         for file in dropped {
+            // A native OS drop bypasses disabled text inputs. Do not inspect,
+            // hash or change *either* workspace's selected PUB or receipt while
+            // the GUI owns an active recovery or control process.
+            if self.batch_ui.is_busy() {
+                self.batch_ui.reject_drop_while_active();
+                continue;
+            }
             let Some(path) = file.path else {
                 continue;
             };
@@ -590,25 +597,14 @@ impl eframe::App for RescueApp {
                 {
                     self.view = RescueView::Evidence;
                 }
-                if let Some(label) = self.batch_ui.activity_label() {
+                if self.batch_ui.activity_label().is_some() {
                     ui.add_space(16.0);
-                    egui::Frame::new()
-                        .fill(ui_theme::accent_soft())
-                        .corner_radius(egui::CornerRadius::same(10))
-                        .inner_margin(egui::Margin::same(10))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(label)
-                                    .size(12.0)
-                                    .strong()
-                                    .color(ui_theme::accent()),
-                            );
-                            if self.view == RescueView::Evidence
-                                && ui.button("Open recovery controls").clicked()
-                            {
-                                self.view = RescueView::Batch;
-                            }
-                        });
+                    self.batch_ui.draw_sidebar_activity(ui);
+                    if self.view == RescueView::Evidence
+                        && ui.button("Open recovery controls").clicked()
+                    {
+                        self.view = RescueView::Batch;
+                    }
                 }
                 ui.add_space(20.0);
                 ui.separator();
