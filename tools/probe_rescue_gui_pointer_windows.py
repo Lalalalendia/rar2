@@ -85,7 +85,10 @@ class OsInput:
         self.user.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
         self.user.SetCursorPos.restype = wintypes.BOOL
         self.user.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        self.user.SetForegroundWindow.argtypes = (wintypes.HWND,)
         self.user.SetForegroundWindow.restype = wintypes.BOOL
+        self.user.GetForegroundWindow.argtypes = ()
+        self.user.GetForegroundWindow.restype = wintypes.HWND
         self.user.OpenClipboard.argtypes = (wintypes.HWND,)
         self.user.OpenClipboard.restype = wintypes.BOOL
         self.user.CloseClipboard.argtypes = ()
@@ -112,7 +115,24 @@ class OsInput:
         return slot_coordinates(rect.right - rect.left, rect.bottom - rect.top,
                                 self.user.GetDpiForWindow(self.hwnd) or 96)
 
+    def _require_foreground(self) -> None:
+        # SendInput is a global OS input facility: it does NOT target a HWND.
+        # Never inject into a desktop when the actual Rescue top-level window
+        # is not foreground (e.g. another app stole focus on hosted Windows).
+        if self.user.GetForegroundWindow() != self.hwnd:
+            raise RuntimeError("Rescue GUI is not foreground; refusing global SendInput")
+
+    def _focus_target(self) -> None:
+        self.user.SetForegroundWindow(self.hwnd)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if self.user.GetForegroundWindow() == self.hwnd:
+                return
+            time.sleep(0.02)
+        self._require_foreground()
+
     def _send(self, event: Input) -> None:
+        self._require_foreground()
         if self.user.SendInput(1, ctypes.byref(event), ctypes.sizeof(Input)) != 1:
             raise OSError(ctypes.get_last_error(), "SendInput not delivered")
 
@@ -137,7 +157,7 @@ class OsInput:
         screen = wintypes.POINT(*point)
         if not self.user.ClientToScreen(self.hwnd, ctypes.byref(screen)):
             raise OSError(ctypes.get_last_error(), "ClientToScreen failed")
-        self.user.SetForegroundWindow(self.hwnd)
+        self._focus_target()
         if not self.user.SetCursorPos(screen.x, screen.y):
             raise OSError(ctypes.get_last_error(), "SetCursorPos failed")
         time.sleep(0.08)
@@ -147,6 +167,7 @@ class OsInput:
         time.sleep(0.15)
 
     def clipboard(self, value: str | None = None) -> str:
+        self._require_foreground()
         if not self.user.OpenClipboard(self.hwnd):
             raise OSError(ctypes.get_last_error(), "OpenClipboard failed")
         try:
