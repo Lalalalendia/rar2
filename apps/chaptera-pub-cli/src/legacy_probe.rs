@@ -85,7 +85,11 @@ fn receipt(
         (0, 0, 0)
     };
     let status = if proven > 0 {
-        if ambiguous > 0 { "verified_partial" } else { "verified" }
+        if ambiguous > 0 {
+            "verified_partial"
+        } else {
+            "verified"
+        }
     } else if ambiguous > 0 {
         "ambiguous"
     } else {
@@ -96,7 +100,11 @@ fn receipt(
         source_sha256: sha.to_string(),
         source_byte_len: byte_len,
         family,
-        status: if family == "unclassified" { "ineligible" } else { status },
+        status: if family == "unclassified" {
+            "ineligible"
+        } else {
+            status
+        },
         confirmed_story_ranges: proven,
         ambiguous_story_ranges: ambiguous,
         graph_diagnostic_count: diagnostics,

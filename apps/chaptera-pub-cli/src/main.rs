@@ -1,5 +1,5 @@
-mod text_export;
 mod legacy_probe;
+mod text_export;
 
 use anyhow::{Context, Result};
 use chaptera_suite_handoff::AdmittedSource;
@@ -97,9 +97,11 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::ProbeLegacyText { file } => {
-            let value = legacy_probe::probe(&file)
-                .context("source_safe_legacy_probe_failed")?;
-            println!("{}", serde_json::to_string(&value).context("serialize_legacy_probe")?);
+            let value = legacy_probe::probe(&file).context("source_safe_legacy_probe_failed")?;
+            println!(
+                "{}",
+                serde_json::to_string(&value).context("serialize_legacy_probe")?
+            );
             Ok(())
         }
     }

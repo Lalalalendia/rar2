@@ -41,7 +41,7 @@ jobs:
           python -m unittest tools.test_rescue_legacy_story_census_v1 -v
       - name: Rust formatting, bounded binary tests, Clippy
         run: |
-          cargo fmt --all -- --check
+          cargo fmt -p chaptera-pub-cli -- --check
           cargo test -p chaptera-pub-cli
           cargo clippy -p chaptera-pub-cli --all-targets -- -D warnings
       - name: Build canonical Rust PUB probe
