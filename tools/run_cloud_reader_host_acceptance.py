@@ -19,10 +19,12 @@ import json
 import os
 import pathlib
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -285,7 +287,7 @@ def guest_mutation_headers(origin: str, csrf: str) -> dict[str, str]:
     return {"origin": origin, "x-csrf-token": csrf, **trace_headers()}
 
 
-def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: int) -> dict[str, Any]:
+def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: int, witness: dict[str, Any] | None = None) -> dict[str, Any]:
     csrf = hashlib.sha256(os.urandom(32)).hexdigest()
     common = guest_mutation_headers(origin, csrf)
 
@@ -388,7 +390,14 @@ def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: i
     else:
         page_count = None
 
-    # Token/session identifiers deliberately never leave this function.
+    # Only the explicitly requested operator-side witness retains an
+    # ephemeral identity. Never insert it into a source-neutral receipt.
+    if witness is not None:
+        witness.update({
+            "session_id": session_id,
+            "token": token,
+            "expires_at_ms": issued.get("expires_at_ms"),
+        })
     return {
         "classification": classification,
         "compatibility_state": report.get("state"),
@@ -399,6 +408,107 @@ def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: i
             "open": open_ms,
             "scene_read": scene_ms,
         },
+    }
+
+
+# This proof is opt-in and strictly read-only on private storage. The
+# production service itself owns expiration, physical deletion and release.
+GUEST_TENANT = "tenant:cloud-reader-guest-service"
+
+
+def private_storage_config(path: pathlib.Path) -> pathlib.Path:
+    with path.open("rb") as handle:
+        config = tomllib.load(handle)
+    if config.get("storage", {}).get("provider") != "filesystem":
+        raise AcceptanceError("private expiry proof requires filesystem provider")
+    sqlite_value = config.get("sqlite", {}).get("path")
+    if not isinstance(sqlite_value, str) or not sqlite_value.startswith("/"):
+        raise AcceptanceError("private expiry SQLite path is invalid")
+    sqlite_path = pathlib.Path(sqlite_value)
+    if not sqlite_path.is_file():
+        raise AcceptanceError("private expiry SQLite database is missing")
+    return sqlite_path
+
+
+def private_storage_snapshot(sqlite_path: pathlib.Path, session_id: str) -> dict[str, bool]:
+    # The exact session was issued by our in-memory public API witness, not
+    # supplied via argv/logs. All binding identity checks fail closed.
+    if not re.fullmatch(r"guest:[0-9a-f]{32}", session_id):
+        raise AcceptanceError("private expiry witness session shape invalid")
+    suffix = session_id.split(":", 1)[1]
+    upload = f"guest-upload:{suffix}"
+    reservation = f"guest-reservation:{suffix}"
+    path = (sqlite_path.parent / "blob-store" / "quarantine" / GUEST_TENANT / upload)
+    if path.is_symlink():
+        raise AcceptanceError("private expiry quarantine path is a symlink")
+    uri = "file:" + urllib.parse.quote(str(sqlite_path), safe="/") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        row = conn.execute(
+            "SELECT upload_id, reservation_id FROM reader_guest_sessions WHERE session_id=?",
+            (session_id.encode("ascii"),),
+        ).fetchone()
+        if row is not None and row != (upload.encode("ascii"), reservation.encode("ascii")):
+            raise AcceptanceError("private expiry session binding mismatch")
+        reservation_row = conn.execute(
+            "SELECT released_at_ms FROM upload_admission_reservations WHERE reservation_id=?",
+            (reservation.encode("ascii"),),
+        ).fetchone()
+    except sqlite3.Error:
+        raise AcceptanceError("private expiry SQLite read failed") from None
+    finally:
+        conn.close()
+    return {
+        "session_present": row is not None,
+        "quarantine_file_present": path.is_file(),
+        "reservation_active": reservation_row is not None and reservation_row[0] is None,
+        "reservation_record_present": reservation_row is not None,
+    }
+
+
+def private_expiry_receipt(
+    origin: str, sqlite_path: pathlib.Path, witness: dict[str, Any], *, timeout: int,
+) -> dict[str, Any]:
+    session_id = witness.get("session_id")
+    token = witness.get("token")
+    expiry = witness.get("expires_at_ms")
+    if not isinstance(session_id, str) or not isinstance(token, str) or type(expiry) is not int:
+        raise AcceptanceError("private expiry witness is incomplete")
+    before = private_storage_snapshot(sqlite_path, session_id)
+    if not all((
+        before["session_present"],
+        before["quarantine_file_present"],
+        before["reservation_active"],
+        before["reservation_record_present"],
+    )):
+        raise AcceptanceError("private expiry precondition not physically present")
+
+    remaining_ms = expiry - int(time.time() * 1000)
+    if not 0 <= remaining_ms <= 3_600_000:
+        raise AcceptanceError("private expiry deadline outside bounded session TTL")
+    time.sleep(remaining_ms / 1000.0 + 3)
+    status, _headers, _body = request_json(
+        origin,
+        f"/v1/reader/guest-sessions/{session_id}/scene",
+        headers={"x-chaptera-reader-session": token, **trace_headers()},
+        timeout=timeout,
+    )
+    if status not in {404, 410}:
+        raise AcceptanceError("private expiry access was not revoked")
+    after = private_storage_snapshot(sqlite_path, session_id)
+    verified = (
+        not after["session_present"]
+        and not after["quarantine_file_present"]
+        and not after["reservation_active"]
+    )
+    # No session/upload/reservation identity, file path, token or body in output.
+    return {
+        "verified": verified,
+        "expired_scene_denied": True,
+        "sqlite_session_absent": not after["session_present"],
+        "quarantine_file_absent": not after["quarantine_file_present"],
+        "admission_reservation_inactive": not after["reservation_active"],
     }
 
 
@@ -528,6 +638,43 @@ def self_test() -> int:
     }
     assert sample_current["state"] == "current"
     assert SERVICES == ("chaptera-reader.service",)
+    with tempfile.TemporaryDirectory(prefix="chaptera-private-expiry-test-") as tmp:
+        db = pathlib.Path(tmp) / "chaptera.sqlite"
+        sid = "guest:" + "a" * 32
+        upload = "guest-upload:" + "a" * 32
+        reservation = "guest-reservation:" + "a" * 32
+        with sqlite3.connect(db) as con:
+            con.execute(
+                "CREATE TABLE reader_guest_sessions (session_id BLOB, upload_id BLOB, reservation_id BLOB)"
+            )
+            con.execute(
+                "CREATE TABLE upload_admission_reservations (reservation_id BLOB, released_at_ms INTEGER)"
+            )
+            con.execute(
+                "INSERT INTO reader_guest_sessions VALUES (?,?,?)",
+                (sid.encode(), upload.encode(), reservation.encode()),
+            )
+            con.execute(
+                "INSERT INTO upload_admission_reservations VALUES (?,NULL)",
+                (reservation.encode(),),
+            )
+        quarantine = db.parent / "blob-store" / "quarantine" / GUEST_TENANT / upload
+        quarantine.parent.mkdir(parents=True)
+        quarantine.write_bytes(b"synthetic source")
+        pre = private_storage_snapshot(db, sid)
+        assert pre["session_present"] and pre["quarantine_file_present"]
+        assert pre["reservation_active"]
+        with sqlite3.connect(db) as con:
+            con.execute("DELETE FROM reader_guest_sessions WHERE session_id=?", (sid.encode(),))
+            con.execute(
+                "UPDATE upload_admission_reservations SET released_at_ms=123 WHERE reservation_id=?",
+                (reservation.encode(),),
+            )
+        quarantine.unlink()
+        post = private_storage_snapshot(db, sid)
+        assert not post["session_present"] and not post["quarantine_file_present"]
+        assert not post["reservation_active"] and post["reservation_record_present"]
+
     try:
         run([sys.executable, "-c",
              "import sys; sys.stderr.write('sensitive-test-sentinel'); sys.exit(7)"],
@@ -588,6 +735,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=120)
     parser.add_argument("--exercise-restart", action="store_true")
     parser.add_argument("--exercise-rollback", action="store_true")
+    parser.add_argument("--verify-private-expiry", action="store_true")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("target/cloud-reader-server7/receipt.json"))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -643,8 +791,10 @@ def main() -> int:
     listener = loopback_listener_receipt(args.app_port)
     local = local_health(args.app_port)
     edge = edge_receipt(args.origin)
+    private_witness: dict[str, Any] = {}
     initial_probe = guest_probe(
-        args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
+        args.origin, fixture, fixture_sha, timeout=args.timeout_seconds,
+        witness=private_witness if args.verify_private_expiry else None,
     )
     capacity_before = service_snapshot()
     capacity = concurrent_reader_receipt(
@@ -726,21 +876,26 @@ def main() -> int:
         and rollback.get("exercised")
         and rollback.get("restored_current")
     )
-    # This harness exercises host identity, public Reader, restart, rollback
-    # and capacity; it does not independently inspect private quarantine
-    # generations, expired SQLite rows or upload-admission reservations.
-    # Never label #528 FULLY CLOSED merely because host rollback succeeded.
-    private_cleanup_verified = False
+    # No private deletion is inferred from HTTP TTL or rollback alone. An
+    # explicit operator proof reads exact owned SQLite/quarantine identities
+    # and waits until the server, not this harness, removes the test source.
+    private_cleanup: dict[str, Any] = {
+        "verified": False,
+        "reason": "private_expiry_not_requested",
+    }
+    if args.verify_private_expiry:
+        db_path = private_storage_config(args.config)
+        private_cleanup = private_expiry_receipt(
+            args.origin, db_path, private_witness, timeout=args.timeout_seconds
+        )
+    private_cleanup_verified = private_cleanup["verified"]
     complete = host_operability_complete and private_cleanup_verified
 
     receipt = {
         "protocol_version": PROTOCOL,
         "complete": complete,
         "host_operability_complete": host_operability_complete,
-        "private_cleanup": {
-            "verified": private_cleanup_verified,
-            "reason": "host_private_backing_expiry_not_inspected",
-        },
+        "private_cleanup": private_cleanup,
         "release": {
             "current_target": current_target,
             "current_binary_sha256": binary_sha,
