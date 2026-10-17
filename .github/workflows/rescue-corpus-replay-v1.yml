@@ -1,0 +1,89 @@
+name: Rescue corpus replay v1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_corpus_replay_v1.py'
+      - 'tools/test_rescue_corpus_replay_v1.py'
+      - '.github/workflows/rescue-corpus-replay-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/rescue_corpus_replay_v1.py'
+      - 'tools/test_rescue_corpus_replay_v1.py'
+      - '.github/workflows/rescue-corpus-replay-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rescue-corpus-replay-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-safe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test corpus replay and CFB identity contracts
+        run: |
+          python -m unittest tools.test_rescue_corpus_replay_v1 tools.test_rescue_cfb_stream_identity -v
+          python -m py_compile tools/rescue_corpus_replay_v1.py tools/test_rescue_corpus_replay_v1.py
+      - name: Run real physical exporter and verifier through corpus CLI
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json, subprocess, sys, tempfile
+          from pathlib import Path
+          from tools.test_rescue_cfb_stream_identity import collision_fixture
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              source = root / 'source'
+              source.mkdir()
+              raw = collision_fixture()
+              sha = hashlib.sha256(raw).hexdigest()
+              original = source / (sha + '.pub')
+              original.write_bytes(raw)
+              authority = root / 'authority.sha256.txt'
+              authority.write_text(sha + '\n', encoding='ascii')
+              out = root / 'out'
+              command = [sys.executable, 'tools/rescue_corpus_replay_v1.py',
+                         '--root', str(source), '--authority', str(authority), '--output', str(out)]
+              def execute():
+                  completed = subprocess.run(command, capture_output=True, check=False)
+                  return completed.returncode, json.loads((out / 'summary.json').read_text())
+              code, first = execute()
+              assert code == 0 and first['counts'] == {'extracted': 1}, first
+              assert first['entries'][0]['verified_streams'] == 2
+              code, second = execute()
+              assert code == 0 and second['counts'] == {'reused': 1}, second
+              bundle = out / 'bundles' / sha
+              artifact = sorted((bundle / 'streams').glob('*.bin'))[0]
+              artifact.write_bytes(b'bad')
+              code, third = execute()
+              assert code == 1 and third['counts'] == {'failed': 1}, third
+              assert third['entries'][0]['reason'] == 'invalid_existing_bundle'
+              assert original.read_bytes() == raw
+              print(json.dumps({'fixture_sha256': sha, 'verified_streams': 2,
+                                'first': 'extracted', 'second': 'reused',
+                                'tamper': 'failed_closed', 'source_unchanged': True}, sort_keys=True))
+          PY
+
+  windows-lock:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify crash recovery, live lock contention and atomic CSV on Windows
+        shell: pwsh
+        run: |
+          python -m unittest tools.test_rescue_corpus_replay_v1.ReplayTests.test_abrupt_child_exit_does_not_block_resume tools.test_rescue_corpus_replay_v1.ReplayTests.test_output_lock_survives_prior_run_and_rejects_live_contention tools.test_rescue_corpus_replay_v1.ReplayTests.test_csv_write_is_atomic_when_serialization_fails -v
