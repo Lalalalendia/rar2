@@ -1,0 +1,77 @@
+name: Rescue legacy Story diagnostic 1050
+
+on:
+  push:
+    branches:
+      - feat/RESCUE-LEGACY-STORY-ADMISSION-01
+    paths:
+      - apps/chaptera-pub-cli/src/main.rs
+      - apps/chaptera-pub-cli/src/legacy_probe.rs
+      - tools/rescue_legacy_story_census_v1.py
+      - tools/test_rescue_legacy_story_census_v1.py
+      - .github/workflows/rescue-legacy-story-diagnostic.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  legacy-story-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: chaptera-legacy-story-probe-v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Source-free unit and syntax tests
+        run: |
+          python -m py_compile tools/rescue_legacy_story_census_v1.py tools/test_rescue_legacy_story_census_v1.py
+          python -m unittest tools.test_rescue_legacy_story_census_v1 -v
+      - name: Rust formatting, bounded binary tests, Clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p chaptera-pub-cli
+          cargo clippy -p chaptera-pub-cli --all-targets -- -D warnings
+      - name: Build canonical Rust PUB probe
+        run: cargo build -p chaptera-pub-cli --release
+      - name: Fetch pinned physical 1050 PUB only into ephemeral runner
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/11038217075/zip" \
+            -o "$RUNNER_TEMP/physical-pub-corpus.zip"
+          printf '%s  %s\n' \
+            "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e" \
+            "$RUNNER_TEMP/physical-pub-corpus.zip" | sha256sum --check --status
+      - name: Probe all 1050 by source-exact Rust legacy Reader graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_legacy_story_census_v1 \
+            --binary target/release/pub \
+            --archive "$RUNNER_TEMP/physical-pub-corpus.zip" \
+            --output "$RUNNER_TEMP/legacy-source-free"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-legacy-1050-source-free-receipts
+          path: ${{ runner.temp }}/legacy-source-free/
+          if-no-files-found: warn
+          retention-days: 7

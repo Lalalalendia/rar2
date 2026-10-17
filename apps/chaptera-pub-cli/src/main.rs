@@ -1,4 +1,5 @@
 mod text_export;
+mod legacy_probe;
 
 use anyhow::{Context, Result};
 use chaptera_suite_handoff::AdmittedSource;
@@ -35,6 +36,11 @@ enum Command {
         /// Dedicated directory for private stories.json and stories.txt.
         #[arg(long)]
         output: PathBuf,
+    },
+    /// Count strict old-family source-backed Stories, without displaying text.
+    ProbeLegacyText {
+        /// Exact source PUB (the output contains only its SHA and typed counts).
+        file: PathBuf,
     },
 }
 
@@ -90,6 +96,12 @@ fn run() -> Result<()> {
             println!("confirmed_story_ranges={count}; native_pub_repair=false");
             Ok(())
         }
+        Command::ProbeLegacyText { file } => {
+            let value = legacy_probe::probe(&file)
+                .context("source_safe_legacy_probe_failed")?;
+            println!("{}", serde_json::to_string(&value).context("serialize_legacy_probe")?);
+            Ok(())
+        }
     }
 }
 
@@ -122,7 +134,9 @@ mod tests {
                 assert_eq!(output, PathBuf::from("assets"));
                 assert!(json);
             }
-            Command::ExtractText { .. } => panic!("must not enter story command"),
+            Command::ExtractText { .. } | Command::ProbeLegacyText { .. } => {
+                panic!("must not enter story command")
+            }
         }
     }
 
@@ -141,7 +155,21 @@ mod tests {
                 assert_eq!(file, PathBuf::from("example.pub"));
                 assert_eq!(output, PathBuf::from("recovered"));
             }
-            Command::ExtractAssets { .. } => panic!("must not enter asset command"),
+            Command::ExtractAssets { .. } | Command::ProbeLegacyText { .. } => {
+                panic!("must not enter asset command")
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_probe_cli_accepts_source_only_without_export_path() {
+        let cli = Cli::try_parse_from(["pub", "probe-legacy-text", "source.pub"])
+            .expect("legacy probe CLI shape");
+        match cli.command {
+            Command::ProbeLegacyText { file } => {
+                assert_eq!(file, PathBuf::from("source.pub"));
+            }
+            _ => panic!("must be the source-safe probe"),
         }
     }
 
