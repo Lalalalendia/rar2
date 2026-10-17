@@ -514,6 +514,66 @@ def private_expiry_receipt(
     }
 
 
+def require_private_only_origin(origin: str, config_path: pathlib.Path, app_port: int) -> None:
+    """Prevent a root-owned expiry witness from uploading its fixture to a
+    substituted host or a non-production application listener."""
+    parsed = urllib.parse.urlsplit(origin)
+    if (parsed.scheme != "https" or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise AcceptanceError("private expiry origin is not a bare HTTPS origin")
+    with config_path.open("rb") as handle:
+        configured = tomllib.load(handle)
+    if origin != configured.get("public_origin"):
+        raise AcceptanceError("private expiry origin differs from installed config")
+    if configured.get("listen") != f"127.0.0.1:{app_port}":
+        raise AcceptanceError("private expiry app-port differs from installed loopback")
+
+
+def private_only_host_receipt(
+    *, origin: str, fixture: bytes, fixture_sha: str,
+    config: pathlib.Path, app_port: int, timeout: int,
+    release_target: str, binary_sha: str,
+) -> dict[str, Any]:
+    if not 1 <= timeout <= 120:
+        raise AcceptanceError("private expiry timeout outside accepted bound")
+    require_private_only_origin(origin, config, app_port)
+    schema = migration_status(binary_for_target(release_target), config)
+    if schema["state"] != "current" or schema["pending_count"] != 0:
+        raise AcceptanceError("private expiry requires current SQLite schema")
+    assert_services_active(service_snapshot())
+    local_health(app_port)
+    sqlite_path = private_storage_config(config)
+
+    # A fresh, test-only session is deliberately created by the same public
+    # upload/open path as a user session; no private storage writer is used.
+    # All identities and the bearer live only in this process memory.
+    witness: dict[str, Any] = {}
+    opened = guest_probe(origin, fixture, fixture_sha, timeout=timeout, witness=witness)
+    cleanup = private_expiry_receipt(origin, sqlite_path, witness, timeout=timeout)
+    return {
+        "protocol_version": PROTOCOL,
+        "scope": "private_expiry_only",
+        # This check is NOT the capacity/restart/rollback/edge/doctor audit.
+        "complete": False,
+        "private_cleanup": cleanup,
+        "release": {
+            "current_sha": release_target.rsplit("/", 1)[-1],
+            "binary_sha256": binary_sha,
+        },
+        "guest_probe": opened,
+        "claims": {
+            "test_session_created_via_public_api": True,
+            "direct_database_writes": False,
+            "manual_quarantine_deletion": False,
+            "systemd_restart_exercised": False,
+            "rollback_exercised": False,
+            "full_host_acceptance_complete": False,
+            "session_identity_or_bearer_emitted": False,
+        },
+    }
+
+
 def require_probe_equivalence(baseline: dict[str, Any], candidate: dict[str, Any], label: str) -> None:
     for key in ("classification", "compatibility_state", "page_count"):
         if candidate.get(key) != baseline.get(key):
@@ -640,6 +700,27 @@ def self_test() -> int:
     }
     assert sample_current["state"] == "current"
     assert SERVICES == ("chaptera-reader.service",)
+    # Production private-only proof must accept only the configured TLS host.
+    with tempfile.TemporaryDirectory(prefix="chaptera-private-origin-") as tmp:
+        cfg = pathlib.Path(tmp) / "chaptera.toml"
+        cfg.write_text(
+            'public_origin = "https://reader.chaptera.online"\\n'
+            'listen = "127.0.0.1:8080"\\n',
+            encoding="utf-8",
+        )
+        require_private_only_origin("https://reader.chaptera.online", cfg, 8080)
+        for candidate, port in [
+            ("https://unexpected.example", 8080),
+            ("http://reader.chaptera.online", 8080),
+            ("https://reader.chaptera.online", 9999),
+        ]:
+            try:
+                require_private_only_origin(candidate, cfg, port)
+            except AcceptanceError:
+                pass
+            else:
+                raise AssertionError("wrong private-only origin or listener admitted")
+    assert "--private-expiry-only" != "--verify-private-expiry"
     with tempfile.TemporaryDirectory(prefix="chaptera-private-expiry-test-") as tmp:
         db = pathlib.Path(tmp) / "chaptera.sqlite"
         sid = "guest:" + "a" * 32
@@ -740,12 +821,17 @@ def main() -> int:
     parser.add_argument("--exercise-restart", action="store_true")
     parser.add_argument("--exercise-rollback", action="store_true")
     parser.add_argument("--verify-private-expiry", action="store_true")
+    parser.add_argument("--private-expiry-only", action="store_true")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("target/cloud-reader-server7/receipt.json"))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
         return self_test()
+    if args.private_expiry_only and (
+        args.exercise_restart or args.exercise_rollback or args.verify_private_expiry
+    ):
+        parser.error("--private-expiry-only cannot be combined with full host exercise flags")
 
     required = {
         "--origin": args.origin,
@@ -786,6 +872,33 @@ def main() -> int:
         raise AcceptanceError("installed current binary SHA-256 differs from expected release")
 
     version = run([str(current_binary), "--version"]).stdout.strip()
+    if args.private_expiry_only:
+        # Isolated physical-retention experiment. The public Nginx Server
+        # header is a separate edge issue; this mode never calls edge_receipt,
+        # capacity, restart, rollback, or the release-switching helper.
+        receipt = private_only_host_receipt(
+            origin=args.origin,
+            fixture=fixture,
+            fixture_sha=fixture_sha,
+            config=args.config,
+            app_port=args.app_port,
+            timeout=args.timeout_seconds,
+            release_target=current_target,
+            binary_sha=binary_sha,
+        )
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(
+            json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps({
+            "protocol_version": PROTOCOL,
+            "scope": "private_expiry_only",
+            "verified": receipt["private_cleanup"]["verified"],
+            "complete": False,
+        }, sort_keys=True))
+        return 0 if receipt["private_cleanup"]["verified"] else 3
+
     status = migration_status(current_binary, args.config)
     if status["state"] != "current" or status["pending_count"] != 0:
         raise AcceptanceError("current release database schema is not current")
