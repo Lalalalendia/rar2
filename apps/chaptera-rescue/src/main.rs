@@ -474,8 +474,7 @@ fn rescue_gui_options() -> eframe::NativeOptions {
         // DX12 supports both hardware adapters and WARP (software rendering)
         // on Windows 10/11; avoid an unconditional OpenGL 2.0 requirement.
         options.renderer = eframe::Renderer::Wgpu;
-        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) =
-            &mut options.wgpu_options.wgpu_setup
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
         {
             setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
         }
@@ -545,7 +544,10 @@ mod tests {
         assert!(matches!(options.renderer, eframe::Renderer::Wgpu));
         match options.wgpu_options.wgpu_setup {
             eframe::egui_wgpu::WgpuSetup::CreateNew(setup) => {
-                assert_eq!(setup.instance_descriptor.backends, eframe::wgpu::Backends::DX12);
+                assert_eq!(
+                    setup.instance_descriptor.backends,
+                    eframe::wgpu::Backends::DX12
+                );
             }
             eframe::egui_wgpu::WgpuSetup::Existing(_) => {
                 panic!("Rescue GUI must configure a new DX12 device");
