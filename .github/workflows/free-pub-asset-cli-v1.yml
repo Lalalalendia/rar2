@@ -99,6 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m unittest tools.test_verify_rescue_text_evidence_v1 -v
           result="$RUNNER_TEMP/stories-private"
           cargo run --quiet --manifest-path apps/chaptera-pub-cli/Cargo.toml -- \
             extract-text "$CHAPTERA_SAMPLE_NEWSLETTER" --output "$result"
