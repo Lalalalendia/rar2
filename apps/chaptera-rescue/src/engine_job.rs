@@ -182,7 +182,11 @@ mod tests {
         let mut inside: i32 = 0;
         assert_ne!(
             unsafe {
-                IsProcessInJob(engine.as_raw_handle(), job.0.as_raw_handle(), &raw mut inside)
+                IsProcessInJob(
+                    engine.as_raw_handle(),
+                    job.0.as_raw_handle(),
+                    &raw mut inside,
+                )
             },
             0,
             "IsProcessInJob failed"
