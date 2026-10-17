@@ -1,4 +1,6 @@
 """Source-free cross-platform checks for real Windows pointer probe geometry."""
+import ctypes
+import os
 import unittest
 
 from tools.probe_rescue_gui_pointer_windows import (
@@ -33,6 +35,13 @@ class GeometryTests(unittest.TestCase):
 
     def test_receipt_contract_cannot_be_mistaken_for_full_gui_acceptance(self):
         self.assertEqual(SCHEMA, "chaptera.rescue-gui-pointer-scan.v1")
+
+    @unittest.skipUnless(os.name == "nt", "physical Win64 ABI requires Windows")
+    def test_physical_win64_sendinput_abi(self):
+        self.assertEqual(ctypes.sizeof(ctypes.c_void_p), 8)
+        self.assertEqual(ctypes.sizeof(Input), 40)
+        self.assertEqual(ctypes.sizeof(KeyInput), 24)
+        self.assertEqual(ctypes.sizeof(MouseInput), 32)
 
 
 
