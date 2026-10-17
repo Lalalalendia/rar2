@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { imageOnlyAblation } from "./product-worst-visual-resources.mjs";
 
 const cases = {
   "020": { source: "6c6af8064f91ad5321f76c97c00b1a6564794d92614373334de23e2759294aaa", pages: 1 },
@@ -16,39 +17,61 @@ const cases = {
   "043": { source: "e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b", pages: 2 },
 };
 const id = process.env.CHAPTERA_PRODUCT_MULTI_ID;
-const expected = cases[id];
+const planPath = process.env.CHAPTERA_PRODUCT_CASE_PLAN;
+const pinnedPlan = planPath ? JSON.parse(await readFile(planPath, "utf8")) : null;
+if (pinnedPlan && (pinnedPlan.id !== id ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.source_sha256 ?? "") ||
+    !Number.isSafeInteger(pinnedPlan.pages) ||
+    !(pinnedPlan.pages > 0 && pinnedPlan.pages <= 100))) {
+  throw new Error("Product visual case plan must be an exact pinned eligible fixture");
+}
+const expected = pinnedPlan
+  ? {source: pinnedPlan.source_sha256, pages: pinnedPlan.pages} : cases[id];
+if (pinnedPlan && cases[id] &&
+    (expected.source !== cases[id].source || expected.pages !== cases[id].pages)) {
+  throw new Error("Product visual case plan differs from established pilot");
+}
 const scenePath = process.env.CHAPTERA_PREVIEW_PROBE_SCENE_OUT;
 const outputPath = process.env.CHAPTERA_PREVIEW_BROWSER_OUTPUT;
 const head = process.env.REPOSITORY_COMMIT_SHA;
+const phasePath = process.env.CHAPTERA_PRODUCT_VISUAL_PHASE_FILE;
+const fixedPhases = new Set([
+  "scene_input", "ablation_ready", "chromium_init",
+  "before_navigate", "before_render", "before_page_membership", "before_raster",
+  "after_navigate", "after_render", "after_page_membership", "after_raster",
+  "final_checks", "finished",
+]);
+async function markPrivatePhase(phase) {
+  assert.ok(fixedPhases.has(phase), "unrecognized Product visual test phase");
+  await writeFile(resolve(phasePath), phase + "\n", "utf8");
+}
 assert.ok(expected, "only pinned worst Product020/026/043 may enter visual comparison");
-assert.ok(scenePath && outputPath, "private accepted scene and private output are required");
+assert.ok(scenePath && outputPath && phasePath, "private accepted scene/output/phase are required");
 assert.match(head ?? "", /^[0-9a-f]{40}$/, "exact repository head is required");
 
+await markPrivatePhase("scene_input");
 const scene = JSON.parse(await readFile(resolve(scenePath), "utf8"));
 assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
 assert.equal(scene.source_hash, expected.source);
 assert.equal(scene.pages?.length, expected.pages, "pinned Publisher PAGE count drift");
-assert.equal(scene.fidelity?.state, "partial", "unproved color must remain Partial");
+assert.ok(["supported", "partial"].includes(scene.fidelity?.state),
+  "real Product fidelity disposition required");
 const images = new Set(["image/png", "image/jpeg"]);
-const accepted = (scene.resources ?? []).filter(r =>
+const resources = scene.resources ?? [];
+assert.ok(Array.isArray(resources), "Product Scene resources must be an array if present");
+const accepted = resources.filter(r =>
   images.has(r.mime) && r.availability === "inline_data_url" &&
   typeof r.inline_data_url === "string");
 assert.ok(accepted.length <= 96, "bounded host-owned image resources required");
+if (accepted.length) {
+  assert.equal(scene.fidelity.state, "partial",
+    "unproved color on admitted host images must remain Partial");
+}
 assert.equal(new Set(accepted.map(r => r.resource_id)).size, accepted.length,
   "duplicate Product resource IDs");
 
-const without = structuredClone(scene);
-for (const resource of without.resources ?? []) {
-  if (images.has(resource.mime)) {
-    delete resource.inline_data_url;
-    resource.availability = "descriptor_only";
-  }
-}
-assert.deepEqual(
-  without.resources.filter(r => !images.has(r.mime)),
-  scene.resources.filter(r => !images.has(r.mime)),
-  "font/nonimage resources must be byte-preserved by image-only ablation"
-);
+const without = imageOnlyAblation(scene);
+await markPrivatePhase("ablation_ready");
 const root = dirname(fileURLToPath(import.meta.url));
 const server = createServer(async (request, response) => {
   try {
@@ -80,7 +103,10 @@ const errors = [];
 const external = [];
 
 async function capture(page, data, mode) {
+  assert.ok(mode === "before" || mode === "after");
+  await markPrivatePhase(mode === "before" ? "before_navigate" : "after_navigate");
   await page.goto(origin, { waitUntil: "domcontentloaded" });
+  await markPrivatePhase(mode === "before" ? "before_render" : "after_render");
   await page.evaluate(async payload => {
     const { renderReaderScene } = await import("/render-v1.mjs");
     await renderReaderScene(document.querySelector("#pages"), payload, {
@@ -100,6 +126,7 @@ async function capture(page, data, mode) {
       }
     }));
   }, data);
+  await markPrivatePhase(mode === "before" ? "before_page_membership" : "after_page_membership");
   const svgs = page.locator("#pages svg.page");
   assert.equal(await svgs.count(), expected.pages, "source PAGE membership cannot change");
   const painted = await page.locator("#pages svg image").evaluateAll(nodes => nodes.map(node => ({
@@ -119,6 +146,7 @@ async function capture(page, data, mode) {
     const vb=await svg.evaluate(el => ({w:el.viewBox.baseVal.width,h:el.viewBox.baseVal.height}));
     assert.ok(Math.abs(vb.w-model.width_emu)<1 && Math.abs(vb.h-model.height_emu)<1,
       "browser projected page extent differs from Product Scene");
+    await markPrivatePhase(mode === "before" ? "before_raster" : "after_raster");
     const png=await svg.screenshot({path:join(resolve(outputPath),mode + "-page-" + (i+1) + ".png")});
     assert.equal(png.subarray(0,8).toString("hex"),"89504e470d0a1a0a");
     captures.push({page:i+1,page_id_sha256:sha256(Buffer.from(model.page_id,"utf8")),
@@ -133,6 +161,7 @@ async function capture(page, data, mode) {
   };
 }
 try {
+  await markPrivatePhase("chromium_init");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({
     viewport: { width: 2500, height: 2500 }, deviceScaleFactor: 1,
@@ -145,6 +174,7 @@ try {
   });
   const before = await capture(page, without, "before");
   const after = await capture(page, scene, "after");
+  await markPrivatePhase("final_checks");
   assert.equal(before.image_count, 0, "negative scene must have no images");
   assert.ok(after.image_count >= accepted.length, "all host-owned resources must paint");
   assert.equal(after.unique_painted_resource_ids, accepted.length);
@@ -169,10 +199,12 @@ try {
     external_url_request_count: 0,
     page_error_count: 0,
     host_resource_count: accepted.length,
+    fidelity_state: scene.fidelity.state,
     before, after,
   };
   await writeFile(join(resolve(outputPath), "browser-receipt.json"),
     JSON.stringify(receipt, null, 2) + "\n", "utf8");
+  await markPrivatePhase("finished");
   console.log("PRODUCT_WORST_PUBLISHER_AB " + JSON.stringify({fixture:id,pages:expected.pages,host_images:accepted.length,real_chromium:true}));
 } finally {
   if (browser) await browser.close();
