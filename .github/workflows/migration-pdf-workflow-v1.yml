@@ -1,0 +1,31 @@
+name: Migration local PDF workflow V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/migration_pdf_workflow_v1.py'
+      - 'tools/test_migration_pdf_workflow_v1.py'
+      - 'tools/migration_pdf_workflow_v1.md'
+      - '.github/workflows/migration-pdf-workflow-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  offline-verified-pdf-batch-composition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile source-free workflow and tests
+        run: python3 -m compileall -q tools/migration_pdf_workflow_v1.py tools/test_migration_pdf_workflow_v1.py
+      - name: Prove one-command folder and ZIP, restart, safety and loss handoff
+        run: python3 -m unittest discover -s tools -p 'test_migration_pdf_workflow_v1.py' -v
