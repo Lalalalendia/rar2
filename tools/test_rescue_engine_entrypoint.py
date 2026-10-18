@@ -19,7 +19,9 @@ class PortableEntrypointTests(unittest.TestCase):
 
     def test_private_internal_modules_are_not_dispatch_targets(self):
         for name in ("tools.rescue_batch_text_v1",
-                     "tools.verify_rescue_text_evidence_v1"):
+                     "tools.verify_rescue_text_evidence_v1",
+                     "tools.rescue_batch_table_v1",
+                     "tools.verify_rescue_table_text_evidence_v1"):
             with self.subTest(module=name), contextlib.redirect_stdout(StringIO()) as output:
                 self.assertEqual(engine.dispatch(["-m", name]), 2)
             self.assertEqual(json.loads(output.getvalue())["error"], "unsupported_child_module")
@@ -63,7 +65,7 @@ class PortableEntrypointTests(unittest.TestCase):
         self.assertEqual(loader.call_count, len(engine.REQUIRED_IMPORT_MODULES))
         result = json.loads(output.getvalue())
         self.assertTrue(result["ok"])
-        self.assertEqual(result["module_count"], 6)
+        self.assertEqual(result["module_count"], 8)
 
     def test_self_check_fails_if_dependency_missing(self):
         with patch.object(engine.importlib, "import_module", side_effect=ImportError("missing")):

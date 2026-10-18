@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'tools/rescue_legacy_story_batch_acceptance_v1.py'
+      - 'tools/rescue_batch_table_v1.py'
+      - 'tools/verify_rescue_table_text_evidence_v1.py'
       - '.github/workflows/rescue-legacy-story-batch-1050.yml'
   workflow_dispatch:
 
@@ -118,6 +120,11 @@ jobs:
               raise SystemExit('incomplete_real_batch_shards')
           rows = [json.load(open(path, encoding='utf-8')) for path in paths]
           if (sorted(row['shard'] for row in rows) != [0, 1]
+                  or any(row['table_profile'] != 'legacy_table_cells_v1'
+                         or not row['table_profile_idempotent']
+                         or (row['table_verified_files'] > 0
+                             and not row['table_tamper_fail_closed'])
+                         for row in rows)
                   or any(row['schema_version'] != 'chaptera.rescue-legacy-batch-1050.v1'
                          or not row['source_free'] or not row['originals_unchanged']
                          or not row['same_profile_reuse'] or not row['tamper_fail_closed']
@@ -139,6 +146,12 @@ jobs:
               'final_verified_files': sum(r['final_verified_files'] for r in rows),
               'final_ranges': sum(r['final_ranges'] for r in rows),
               'new_legacy_verified_files': sum(r['new_legacy_verified_files'] for r in rows),
+              'verified_new_table_story_ranges': sum(r['table_verified_story_ranges'] for r in rows),
+              'verified_new_table_story_files': sum(r['table_verified_files'] for r in rows),
+              'table_profile_idempotent': True,
+              'table_tamper_fail_closed': all(
+                  not r['table_verified_files'] or r['table_tamper_fail_closed']
+                  for r in rows),
               'status_counts': dict(sorted(counts.items())),
               'source_immutable': True,
               'same_profile_reuse': True,
@@ -155,7 +168,10 @@ jobs:
                   or result['baseline_ranges'] != 5506
                   or result['new_legacy_verified_files'] != 629
                   or result['final_verified_files'] != 1011
-                  or result['final_ranges'] != 11664):
+                  or result['final_ranges'] != 11664
+                  or result['verified_new_table_story_ranges'] != 166
+                  or result['verified_new_table_story_files'] != 62
+                  or not result['table_tamper_fail_closed']):
               raise SystemExit('measured_legacy_batch_replay_regression')
           PY
       - uses: actions/upload-artifact@v4

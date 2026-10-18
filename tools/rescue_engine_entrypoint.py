@@ -23,6 +23,7 @@ ALLOWED_MODULES = frozenset({
 # In particular rescue_batch_text_v1 has no standalone main entrypoint.
 REQUIRED_IMPORT_MODULES = ALLOWED_MODULES | frozenset({
     "tools.rescue_batch_text_v1", "tools.verify_rescue_text_evidence_v1",
+    "tools.rescue_batch_table_v1", "tools.verify_rescue_table_text_evidence_v1",
 })
 
 

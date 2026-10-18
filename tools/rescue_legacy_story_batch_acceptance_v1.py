@@ -15,6 +15,7 @@ import time
 
 from tools import rescue_corpus_1050_acceptance as cohort
 from tools import rescue_desktop_batch_v1 as batch
+from tools import rescue_batch_table_v1 as table_batch
 from tools import rescue_salvage_bundle_v1 as salvage
 
 
@@ -73,6 +74,41 @@ def run(archive: Path, pub_cli: Path, shard: int, receipt: Path) -> dict:
                        for sha, row in by_repeat.items())):
             raise ValueError("legacy_batch_restart_not_idempotent")
 
+        # Explicit second capability profile: do not mutate existing Story
+        # manifests, status rows or source CFB/galley evidence.
+        table_accepted = table_batch.admit_completed(
+            output, pub_cli, timeout=45, file_timeout=180)
+        table_summary = table_accepted["statuses"]
+        table_files = table_summary.get("verified_new", 0)
+        table_ranges = table_accepted["verified_table_story_ranges"]
+        table_receipts = output / "recovered-table-text-profiles"
+        for row in private["entries"]:
+            sha = row["sha256"]
+            path = table_receipts / f"{sha}.json"
+            if not path.is_file():
+                raise ValueError("table_version_profile_missing")
+        table_repeated = table_batch.admit_completed(
+            output, pub_cli, timeout=45, file_timeout=180)
+        if (table_repeated["verified_table_story_ranges"] != table_ranges
+                or table_repeated["statuses"].get("verified_reused", 0) != table_files
+                or table_repeated["statuses"].get("verified_new", 0) != 0):
+            raise ValueError("table_profile_restart_not_idempotent")
+        table_tamper_ok = False
+        if table_files:
+            for row in private["entries"]:
+                sha = row["sha256"]
+                private_table = output / "recovered-table-text-v1" / sha / "stories.txt"
+                if private_table.is_file():
+                    private_table.write_bytes(b"mutated_private_table_evidence")
+                    try:
+                        table_batch.admit_completed(
+                            output, pub_cli, timeout=45, file_timeout=180)
+                    except table_batch.TableBatchError:
+                        table_tamper_ok = True
+                    break
+        if table_files and not table_tamper_ok:
+            raise ValueError("table_tamper_was_accepted")
+
         # Deliberate corruption is confined to disposable private output.
         tamper_ok = False
         if newly_verified:
@@ -99,6 +135,11 @@ def run(archive: Path, pub_cli: Path, shard: int, receipt: Path) -> dict:
             "final_ranges": final_ranges, "new_legacy_verified_files": len(newly_verified),
             "status_counts": dict(sorted(Counter(r["status"] for r in post.values()).items())),
             "same_profile_reuse": True, "tamper_fail_closed": tamper_ok,
+            "table_profile": "legacy_table_cells_v1",
+            "table_verified_story_ranges": table_ranges,
+            "table_verified_files": table_files,
+            "table_profile_idempotent": True,
+            "table_tamper_fail_closed": table_tamper_ok,
             "originals_unchanged": True, "native_pub_repaired": False,
             "elapsed_seconds": round(time.monotonic() - begin, 3),
         }
