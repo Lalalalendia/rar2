@@ -1,4 +1,5 @@
 mod legacy_probe;
+mod table_cell_proof;
 mod text_export;
 
 use anyhow::{Context, Result};
@@ -43,6 +44,11 @@ enum Command {
     /// Count strict old-family source-backed Stories, without displaying text.
     ProbeLegacyText {
         /// Exact source PUB (the output contains only its SHA and typed counts).
+        file: PathBuf,
+    },
+    /// Independently check source-backed table cell projections without exposing text.
+    ProbeLegacyTableCells {
+        /// Exact source PUB (only typed counts and SHA are emitted).
         file: PathBuf,
     },
 }
@@ -111,6 +117,14 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
+        Command::ProbeLegacyTableCells { file } => {
+            let value = table_cell_proof::probe(&file).context("source_safe_cell_probe_failed")?;
+            println!(
+                "{}",
+                serde_json::to_string(&value).context("serialize_cell_probe")?
+            );
+            Ok(())
+        }
     }
 }
 
@@ -143,7 +157,9 @@ mod tests {
                 assert_eq!(output, PathBuf::from("assets"));
                 assert!(json);
             }
-            Command::ExtractText { .. } | Command::ProbeLegacyText { .. } => {
+            Command::ExtractText { .. }
+            | Command::ProbeLegacyText { .. }
+            | Command::ProbeLegacyTableCells { .. } => {
                 panic!("must not enter story command")
             }
         }
@@ -169,7 +185,9 @@ mod tests {
                 assert_eq!(output, PathBuf::from("recovered"));
                 assert!(!include_legacy);
             }
-            Command::ExtractAssets { .. } | Command::ProbeLegacyText { .. } => {
+            Command::ExtractAssets { .. }
+            | Command::ProbeLegacyText { .. }
+            | Command::ProbeLegacyTableCells { .. } => {
                 panic!("must not enter asset command")
             }
         }
@@ -201,6 +219,18 @@ mod tests {
                 assert_eq!(file, PathBuf::from("source.pub"));
             }
             _ => panic!("must be the source-safe probe"),
+        }
+    }
+
+    #[test]
+    fn table_cell_source_probe_is_not_an_export_command() {
+        let cli = Cli::try_parse_from(["pub", "probe-legacy-table-cells", "source.pub"])
+            .expect("table cell source probe CLI");
+        match cli.command {
+            Command::ProbeLegacyTableCells { file } => {
+                assert_eq!(file, PathBuf::from("source.pub"));
+            }
+            _ => panic!("must be source-safe table cell probe"),
         }
     }
 

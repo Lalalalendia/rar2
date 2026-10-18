@@ -36,7 +36,7 @@ pub(crate) struct LegacyProbeReceipt {
 /// private object IDs, or file names appear in this protocol.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct UnadmittedReasonCounts {
-    projection_only_exact: usize,
+    pub(crate) projection_only_exact: usize,
     missing_exact_semantic: usize,
     unsafe_story_key: usize,
     resource_or_utf16_limit: usize,
@@ -51,7 +51,7 @@ impl UnadmittedReasonCounts {
     }
 }
 
-fn safe_story_key(key: &str) -> bool {
+pub(crate) fn safe_story_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 96
         && key
@@ -59,7 +59,25 @@ fn safe_story_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
 }
 
-fn count_proven(graph: &PubSourceGraph) -> (usize, usize, usize, UnadmittedReasonCounts) {
+pub(crate) fn is_projection_only_exact(
+    graph: &PubSourceGraph,
+    story: &pub_model::Story,
+) -> bool {
+    !story.source_refs.iter().any(|source_ref| source_ref.role == SourceRole::Semantic)
+        && story.source_refs.iter().any(|source_ref| {
+            source_ref.role == SourceRole::Projection
+                && source_ref.authority == AuthorityClass::Authoritative
+                && source_ref.confidence == Some(ReadConfidence::Exact)
+                && source_ref.validate_primary_source(&graph.source).is_ok()
+                && source_ref
+                    .byte_range
+                    .is_some_and(|span| span.length > 0 && span.end().is_some())
+        })
+}
+
+pub(crate) fn count_proven(
+    graph: &PubSourceGraph,
+) -> (usize, usize, usize, UnadmittedReasonCounts) {
     let mut proven = 0usize;
     let mut ambiguous = 0usize;
     let mut empty = 0usize;
@@ -92,20 +110,7 @@ fn count_proven(graph: &PubSourceGraph) -> (usize, usize, usize, UnadmittedReaso
             reasons.resource_or_utf16_limit += 1;
         } else if !safe_story_key(&key) {
             reasons.unsafe_story_key += 1;
-        } else if !story
-            .source_refs
-            .iter()
-            .any(|source_ref| source_ref.role == SourceRole::Semantic)
-            && story.source_refs.iter().any(|source_ref| {
-                source_ref.role == SourceRole::Projection
-                    && source_ref.authority == AuthorityClass::Authoritative
-                    && source_ref.confidence == Some(ReadConfidence::Exact)
-                    && source_ref.validate_primary_source(&graph.source).is_ok()
-                    && source_ref
-                        .byte_range
-                        .is_some_and(|span| span.length > 0 && span.end().is_some())
-            })
-        {
+        } else if is_projection_only_exact(graph, story) {
             // Table aggregate Stories can be source-backed projections without
             // being directly witnessed semantic text. Never auto-promote them.
             reasons.projection_only_exact += 1;
@@ -171,6 +176,24 @@ fn receipt(
     }
 }
 
+pub(crate) fn build_provenance_graph(
+    bytes: &[u8],
+    sha: Sha256Digest,
+) -> (&'static str, Option<PubSourceGraphBuild>) {
+    // This selection is shared by both source-safe probes. Never reinterpret
+    // a mature or Quill-bearing document as an old no-Quill publication.
+    if let Ok(build) = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes), sha) {
+        return ("mature_0x2c", Some(build));
+    }
+    if let Ok(build) = pub_reader::build_legacy_0x22_quill_source_graph(Cursor::new(bytes), sha) {
+        return ("legacy_0x22_quill", Some(build));
+    }
+    if let Ok(build) = pub_reader::build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), sha) {
+        return ("legacy_0x22_noquill", Some(build));
+    }
+    ("unclassified", None)
+}
+
 pub(crate) fn probe(file: &Path) -> Result<LegacyProbeReceipt> {
     let admitted = AdmittedSource::open(file)
         .map_err(|_| anyhow::anyhow!("legacy_probe_source_unavailable"))?;
@@ -180,21 +203,8 @@ pub(crate) fn probe(file: &Path) -> Result<LegacyProbeReceipt> {
         sha.to_string() == admitted.sha256(),
         "source_snapshot_sha_mismatch"
     );
-    let len = bytes.len();
-    // Mature acceptance is authoritative. Never reinterpret an admitted
-    // mature file as an older family just to obtain another Story count.
-    if let Ok(build) = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes), sha) {
-        return Ok(receipt(sha, len, "mature_0x2c", Some(build)));
-    }
-    // The Quill-bearing old family takes precedence over the Contents-only
-    // path. Each builder has its own strict historical version grammar.
-    if let Ok(build) = pub_reader::build_legacy_0x22_quill_source_graph(Cursor::new(bytes), sha) {
-        return Ok(receipt(sha, len, "legacy_0x22_quill", Some(build)));
-    }
-    if let Ok(build) = pub_reader::build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), sha) {
-        return Ok(receipt(sha, len, "legacy_0x22_noquill", Some(build)));
-    }
-    Ok(receipt(sha, len, "unclassified", None))
+    let (family, build) = build_provenance_graph(bytes, sha);
+    Ok(receipt(sha, bytes.len(), family, build))
 }
 
 #[cfg(test)]
