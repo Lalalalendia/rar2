@@ -16,5 +16,6 @@ sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chaptera-suite-handoff = { path = "../../crates/chaptera-suite-handoff" }
+pub-cfb = { path = "../../vendor/producer-a/crates/pub-cfb" }
 pub-model = { path = "../../vendor/producer-a/crates/pub-model" }
 pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }

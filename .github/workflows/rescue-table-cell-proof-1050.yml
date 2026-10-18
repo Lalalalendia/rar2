@@ -1,0 +1,110 @@
+name: Rescue exact source table-cell proof 1050
+
+on:
+  pull_request:
+    paths:
+      - apps/chaptera-pub-cli/src/main.rs
+      - apps/chaptera-pub-cli/src/legacy_probe.rs
+      - apps/chaptera-pub-cli/src/table_cell_proof.rs
+      - apps/chaptera-pub-cli/Cargo.toml
+      - tools/rescue_legacy_table_cell_proof_census_v1.py
+      - tools/test_rescue_legacy_table_cell_proof_census_v1.py
+      - .github/workflows/rescue-table-cell-proof-1050.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cell-proof:
+    name: Check exact legacy cell sources against 1050 SHA-pinned PUB
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: chaptera-rescue-cell-proof
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Source-safe protocol negative unit tests
+        run: |
+          python -m py_compile tools/rescue_legacy_table_cell_proof_census_v1.py tools/test_rescue_legacy_table_cell_proof_census_v1.py
+          python -m unittest tools.test_rescue_legacy_table_cell_proof_census_v1 tools.test_rescue_legacy_story_census_v1 -v
+      - name: Rust task-scoped formatting tests and Clippy
+        run: |
+          cargo fmt -p chaptera-pub-cli -- --check
+          cargo test -p chaptera-pub-cli
+          cargo clippy -p chaptera-pub-cli --all-targets -- -D warnings
+      - name: Build sole canonical Publisher CLI
+        run: cargo build -p chaptera-pub-cli --release
+      - name: Fetch exact old 1050 real PUB privately into ephemeral runner
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/11038217075/zip" \
+            -o "$RUNNER_TEMP/physical-pub-corpus.zip"
+          printf '%s  %s\n' \
+            "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e" \
+            "$RUNNER_TEMP/physical-pub-corpus.zip" | sha256sum --check --status
+      - name: Exact source range and synthetic separator census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_legacy_table_cell_proof_census_v1 \
+            --binary target/release/pub \
+            --archive "$RUNNER_TEMP/physical-pub-corpus.zip" \
+            --output "$RUNNER_TEMP/rescue-cell-proof"
+      - name: Check complete typed source-only proof partition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "rescue-cell-proof"
+          summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+          ledger = json.loads((root / "sha-only-ledger.json").read_text(encoding="utf-8"))
+          assert summary["source_free"] is True
+          assert summary["exact_input_count"] == 1050
+          assert summary["previously_admitted_story_ranges"] == 11664
+          assert summary["projection_only_story_candidates"] == 228
+          assert summary["mixed_partial_files"] == 79
+          assert summary["unproven_text_files"] == 39
+          assert summary["semantic_aggregate_exported"] is False
+          assert summary["native_pub_repair_attempted"] is False
+          assert len(ledger["entries"]) == 1050
+          assert len({item["sha256"] for item in ledger["entries"]}) == 1050
+          assert sum(summary["refusal_counts"].values()) + summary["cell_proven_table_stories"] == 228
+          print(json.dumps({
+              "source_free": True,
+              "schema_version": "chaptera.rescue-table-cell-1050-accepted.v1",
+              "proven_table_stories": summary["cell_proven_table_stories"],
+              "proven_cells": summary["cell_proven_source_cells"],
+              "virtual_separators": summary["synthetic_virtual_separators"],
+              "refusal_counts": summary["refusal_counts"],
+          }, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-legacy-table-cell-proof-1050
+          path: ${{ runner.temp }}/rescue-cell-proof/
+          if-no-files-found: warn
+          retention-days: 7
