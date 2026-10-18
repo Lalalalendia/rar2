@@ -270,9 +270,15 @@ jobs:
               raise SystemExit("unsupported_originals_cohort_drift")
           with ZipFile(root/"rescue-historic-wayback.zip") as z:
               historical=json.loads(z.read("union/manifest.json"))
-          matching=[r for r in historical if r.get("sha256") in eight]
-          if len(matching)!=8 or {r["sha256"] for r in matching}!=eight:
-              raise SystemExit("diagnostic_source_manifest_mismatch")
+          # Historical manifests intentionally retain multiple Wayback captures
+          # of the same original. Deduplicate identities, not source evidence.
+          matching={}
+          for r in historical:
+              sha=r.get("sha256")
+              if sha in eight:
+                  matching.setdefault(sha,r)
+          if set(matching)!=eight:
+              raise SystemExit("diagnostic_source_sha_set_mismatch")
           allowed={
               "sector range":"sector_range",
               "DIFAT chain":"difat_chain",
@@ -291,7 +297,7 @@ jobs:
           report={"schema":"chaptera.rescue-cfb-unsupported-diagnostics.v1",
                   "source_free":True,"acceptance_credit":0,"target_count":8,
                   "sha_list_digest":digest,"entries":[]}
-          for item in sorted(matching,key=lambda x:x["sha256"]):
+          for item in (matching[k] for k in sorted(matching)):
               sha=item["sha256"]
               record={"source_sha256":sha,"status":"transport_unavailable",
                       "physical_error_category":"","source_length":0,
