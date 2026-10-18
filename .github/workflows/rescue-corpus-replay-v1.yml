@@ -165,3 +165,95 @@ jobs:
             ${{ runner.temp }}/uncovered-506.sha256.txt
           if-no-files-found: warn
           retention-days: 7
+
+public-originals-2:
+    name: Verify 2 previously uncovered public original PUB via real Replay
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reacquire two SHA-pinned public Apache POI originals privately on runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rescue-real-originals/sources"
+          curl --fail --location --silent --show-error --retry 2 --max-time 60 \
+            "https://raw.githubusercontent.com/apache/poi/trunk/test-data/publisher/SampleBrochure.pub" \
+            -o "$RUNNER_TEMP/rescue-real-originals/sources/ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87.pub"
+          curl --fail --location --silent --show-error --retry 2 --max-time 60 \
+            "https://raw.githubusercontent.com/apache/poi/trunk/test-data/publisher/SampleNewsletter.pub" \
+            -o "$RUNNER_TEMP/rescue-real-originals/sources/6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf.pub"
+          printf '%s\n' \
+            'ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87  '"$RUNNER_TEMP/rescue-real-originals/sources/ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87.pub" \
+            '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  '"$RUNNER_TEMP/rescue-real-originals/sources/6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf.pub" \
+            | sha256sum --check --status
+      - name: Existing CFB exporter + independent verifier on real original byte sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess, sys
+          from pathlib import Path
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY, load_authority, sha_file
+          root = Path(os.environ["RUNNER_TEMP"]) / "rescue-real-originals"
+          source = root / "sources"
+          output = root / "output"
+          expected = {
+              "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+              "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+          }
+          assert expected <= set(load_authority(DEFAULT_AUTHORITY))
+          assert {p.stem for p in source.glob("*.pub")} == expected
+          before = {p.stem: sha_file(p) for p in source.glob("*.pub")}
+          assert before == {sha: sha for sha in expected}
+          command = [sys.executable, "tools/rescue_corpus_replay_v1.py",
+                     "--root", str(source), "--output", str(output)]
+          def replay():
+              completed = subprocess.run(command, capture_output=True, check=False, timeout=480)
+              if completed.returncode != 1 or not (output / "summary.json").exists():
+                  # This CLI reports an incomplete 1556-authority replay as exit=1.
+                  raise SystemExit("untrusted_real_replay_execution")
+              return json.loads((output / "summary.json").read_text(encoding="utf-8"))
+          first = replay()
+          if (first["authority_count"] != 1556 or first["counts"].get("extracted") != 2
+                  or first["counts"].get("missing") != 1554):
+              raise SystemExit("real_original_extraction_or_denominator_failed")
+          second = replay()
+          if (second["counts"].get("reused") != 2
+                  or second["counts"].get("missing") != 1554
+                  or any(e["status"] != "reused" for e in second["entries"]
+                         if e["source_sha256"] in expected)
+                  or {p.stem: sha_file(p) for p in source.glob("*.pub")} != before):
+              raise SystemExit("real_original_immutable_reuse_failed")
+          streams = sum(e["verified_streams"] for e in second["entries"]
+                        if e["source_sha256"] in expected)
+          if streams < 1:
+              raise SystemExit("real_originals_no_independently_verified_cfb_streams")
+          receipt = {
+              "schema": "chaptera.rescue-corpus-public-originals-two.v1",
+              "source_free": True,
+              "authority_sha_count": 1556,
+              "physical_originals_verified": 2,
+              "source_sha256": sorted(expected),
+              "verified_streams": streams,
+              "restart_reused": 2,
+              "source_immutable": True,
+              "status": "partial_2_of_1556_not_full_corpus",
+              "native_pub_repaired": False,
+          }
+          path = Path(os.environ["RUNNER_TEMP"]) / "rescue-public-originals-two-receipt.json"
+          path.write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+                          encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-public-originals-two
+          path: ${{ runner.temp }}/rescue-public-originals-two-receipt.json
+          if-no-files-found: warn
+          retention-days: 7
