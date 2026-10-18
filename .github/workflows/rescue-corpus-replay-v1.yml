@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: rescue-corpus-replay-v1-${{ github.event.pull_request.number || github.ref }}
@@ -87,3 +88,80 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest tools.test_rescue_corpus_replay_v1.ReplayTests.test_abrupt_child_exit_does_not_block_resume tools.test_rescue_corpus_replay_v1.ReplayTests.test_output_lock_survives_prior_run_and_rejects_live_contention tools.test_rescue_corpus_replay_v1.ReplayTests.test_csv_write_is_atomic_when_serialization_fails -v
+
+authority-overlap:
+    name: Reconcile accepted 1050 SHAs against authority v5 (1556)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch immutable source-free 1050 SHA ledger, never PUB bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/12134191514/zip" \
+            -o "$RUNNER_TEMP/rescue-1050-source-free-ledger.zip"
+      - name: Prove exact 1556/1050 membership and emit SHA-only uncovered registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY, source_free_sha_overlap
+
+          source_free_zip = Path(os.environ["RUNNER_TEMP"]) / "rescue-1050-source-free-ledger.zip"
+          with ZipFile(source_free_zip) as z:
+              ledger_raw = z.read("rescue-cell-proof/sha-only-ledger.json")
+              summary_raw = z.read("rescue-cell-proof/summary.json")
+          if hashlib.sha256(ledger_raw).hexdigest() != "851321556a2d65ec53c4887decf3f50e5d75e1a8855ee29af3d21569806275ab":
+              raise SystemExit("source_free_ledger_identity_mismatch")
+          if hashlib.sha256(summary_raw).hexdigest() != "c278f10723f80f0ee251b35f80056e1da37a3b2032a85de3cbcb4c8d27ff39ff":
+              raise SystemExit("source_free_corpus_receipt_identity_mismatch")
+          accepted = json.loads(summary_raw)
+          if (accepted.get("source_artifact_id") != 11038217075
+                  or accepted.get("source_archive_sha256") != "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e"
+                  or accepted.get("source_free") is not True
+                  or accepted.get("source_immutable") is not True
+                  or accepted.get("exact_input_count") != 1050):
+              raise SystemExit("untrusted_real_corpus_proof")
+          ledger = json.loads(ledger_raw)
+          receipt, uncovered = source_free_sha_overlap(DEFAULT_AUTHORITY, ledger)
+          if (receipt["authority_count"] != 1556
+                  or receipt["authority_digest_sha256"] != "950af4b1a1346168a55835b80bda062bbe1ebf9d926a4c5dc92a3d8bdb855073"
+                  or receipt["evidence_count"] != 1050
+                  or receipt["covered_in_evidence"] != 1050
+                  or receipt["outside_authority"] != 0
+                  or receipt["not_covered_by_evidence"] != 506
+                  or len(uncovered) != 506):
+              raise SystemExit("sha_authority_overlap_regression")
+          output = Path(os.environ["RUNNER_TEMP"])
+          (output / "source-free-sha-overlap-1556-v1.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="ascii"
+          )
+          (output / "uncovered-506.sha256.txt").write_text(
+              "".join(sha + "\n" for sha in uncovered), encoding="ascii"
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-sha-overlap-1556-v1
+          path: |
+            ${{ runner.temp }}/source-free-sha-overlap-1556-v1.json
+            ${{ runner.temp }}/uncovered-506.sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
