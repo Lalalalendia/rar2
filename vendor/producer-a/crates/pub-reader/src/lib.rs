@@ -26,6 +26,7 @@ mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
 mod legacy22_page_role;
+mod legacy_character_style;
 #[cfg(feature = "master-authority-bridge")]
 mod master_bridge;
 pub mod mature_emf;
@@ -92,7 +93,7 @@ pub use failure_intake::{
 };
 pub use family_classifier::{
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
-    PubReaderRoute, classify_pub_family,
+    PubReaderRoute, classify_pub_family, format_profile,
 };
 use grouped_projection::{
     GroupedProjectionContext, coordinate_rect_i128, project_grouped_object_shape,
@@ -108,6 +109,7 @@ pub use intake_protocol::{
     IntakeDedupeDisposition, IntakeProtocolError, IntakeReceipt, build_intake_capability_request,
     exact_file_intake_eligible, validate_intake_capability_request, validate_intake_receipt,
 };
+pub use legacy_character_style::{PubLegacyCharacterStyleRun, PubLegacyUnderlineStyle};
 pub use legacy22_graph::{
     build_legacy_0x22_quill_from_streams, build_legacy_0x22_quill_source_graph, legacy22_object_key,
 };
@@ -283,10 +285,6 @@ use direct_transform::{
     bounded_direct_image_transform, bounded_direct_story_transform,
 };
 
-pub fn format_profile()
--> Result<pub_format_registry::FormatProfileEntry, pub_format_registry::RegistryError> {
-    pub_format_registry::resolve(PUB_FORMAT_PROFILE_ID)
-}
 pub const CONTENTS_STREAM_PATH: &str = "/Contents";
 pub const QUILL_STREAM_PATH: &str = "/Quill/QuillSub/CONTENTS";
 pub const ESCHER_STREAM_PATH: &str = "/Escher/EscherStm";
@@ -499,6 +497,7 @@ pub fn build_mature_0x2c_from_streams(
         source_page_paint_orders,
         diagnostics,
         typography_runs,
+        legacy_character_style_runs: Vec::new(),
         typography_size_runs,
         paragraph_alignments,
         paragraph_line_spacings,
