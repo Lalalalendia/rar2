@@ -1,0 +1,197 @@
+name: Rescue public training exact 29 PUB original replay
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rescue-public-training-29.yml'
+      - 'tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rescue-public-training-29-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  real-practice-sources:
+    name: Source-backed practice PUB ${{ matrix.key }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: publisher2007_sbs
+            archive_sha: ae0f92fd3604a6b056517ade69f78ed6a466cdbdd034dc0f75fa29028f0af4fd
+            sha_count: 13
+            observations: 13
+            cohort_digest: 9dcd49c0da2871213fb2102e27bedb8ba20a981f33691ff5f27c20244569aafa
+          - key: publisher2010_sbs
+            archive_sha: c82444b77c053985fa9c11db066fac3620f08ba8aa98932107d71e6adfcb961f
+            sha_count: 2
+            observations: 2
+            cohort_digest: 55a086ab3db8ba6d5f544125e9cd1c386f3fa2a75da25375b292debd144b251b
+          - key: office2013_sbs
+            archive_sha: e38e3e22bafb88ab52d61ffd12610d5d7f102b77b5a2de0c72d4506c0b135769
+            sha_count: 9
+            observations: 11
+            cohort_digest: a5a519d03723d4e1df7651895af9c2038cd8f480127cbffd8258a83704406c6e
+          - key: office2003_sbs
+            archive_sha: a3be1f1f9b16ebbdc74c2d2017104bedc00d96545457add1e6ec10a4a48851a6
+            sha_count: 5
+            observations: 7
+            cohort_digest: 36c86f5a2703f8a1d790409e55cf14339ae738bcacd2a7326267ddb288770964
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve current pinned archive's public source URL
+        shell: bash
+        env:
+          PACKAGE_KEY: ${{ matrix.key }}
+          SHA_COUNT: ${{ matrix.sha_count }}
+          OBS_COUNT: ${{ matrix.observations }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata=json.loads(Path("tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json").read_text(encoding="utf-8"))
+          matches=[p for p in metadata["packages"] if p["key"]==os.environ["PACKAGE_KEY"]]
+          if len(matches)!=1: raise SystemExit("untrusted_training_package_key")
+          p=matches[0]
+          url=p["source_download"]
+          if (not url.startswith("https://www.microsoftpressstore.com/content/images/")
+                  or not url.endswith(".zip")
+                  or p["expected_unique_sha_count"]!=int(os.environ["SHA_COUNT"])
+                  or p["expected_observation_count"]!=int(os.environ["OBS_COUNT"])):
+              raise SystemExit("training_archive_authority_changed")
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as fh:
+              fh.write("SOURCE_URL="+url+"\n")
+          PY
+      - name: Download official public practice archive, exact ZIP SHA required
+        shell: bash
+        env:
+          ARCHIVE_SHA: ${{ matrix.archive_sha }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 4 \
+            --connect-timeout 30 --max-time 900 --max-filesize 500000000 \
+            "$SOURCE_URL" -o "$RUNNER_TEMP/practice-original.zip"
+          printf '%s  %s\n' "$ARCHIVE_SHA" "$RUNNER_TEMP/practice-original.zip" \
+            | sha256sum --check --status
+      - name: Obtain old 1050 accepted SHA ledger (source-free)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/12134191514/zip" \
+            -o "$RUNNER_TEMP/accepted-1050-sha.zip"
+      - name: Re-admit exact source bytes with existing CFB exporter and independent verifier
+        shell: bash
+        env:
+          PACKAGE_KEY: ${{ matrix.key }}
+          SHA_COUNT: ${{ matrix.sha_count }}
+          OBS_COUNT: ${{ matrix.observations }}
+          COHORT_DIGEST: ${{ matrix.cohort_digest }}
+          ARCHIVE_SHA: ${{ matrix.archive_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import collections,hashlib,json,os,subprocess,sys
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY,sha_file,source_free_sha_overlap
+
+          base=Path(os.environ["RUNNER_TEMP"])
+          authority=json.loads(Path("tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json").read_text(encoding="utf-8"))
+          packages=[p for p in authority["packages"] if p["key"]==os.environ["PACKAGE_KEY"]]
+          if len(packages)!=1: raise SystemExit("ambiguous_official_package_identity")
+          package=packages[0]
+          rows=package["files"]
+          expected=int(os.environ["SHA_COUNT"])
+          if len(rows)!=int(os.environ["OBS_COUNT"]):
+              raise SystemExit("official_practice_observation_count_changed")
+          if sha_file(base/"practice-original.zip")!=os.environ["ARCHIVE_SHA"]:
+              raise SystemExit("official_practice_zip_changed")
+          with ZipFile(base/"accepted-1050-sha.zip") as accepted_zip:
+              source_free_raw=accepted_zip.read("rescue-cell-proof/sha-only-ledger.json")
+          if hashlib.sha256(source_free_raw).hexdigest()!="851321556a2d65ec53c4887decf3f50e5d75e1a8855ee29af3d21569806275ab":
+              raise SystemExit("pinned_old_1050_ledger_changed")
+          overlap,uncovered=source_free_sha_overlap(DEFAULT_AUTHORITY,json.loads(source_free_raw))
+          if (overlap["authority_count"],overlap["evidence_count"],
+                  overlap["not_covered_by_evidence"],overlap["outside_authority"])!=(1556,1050,506,0):
+              raise SystemExit("registered_authority_or_old_cohort_changed")
+          unique=sorted({r["sha256"] for r in rows})
+          digest=hashlib.sha256("".join(s+"\n" for s in unique).encode("ascii")).hexdigest()
+          if len(unique)!=expected or digest!=os.environ["COHORT_DIGEST"] or not set(unique)<=set(uncovered):
+              raise SystemExit("training29_identity_or_disjointness_changed")
+
+          sources=base/"real-source-pub"
+          sources.mkdir()
+          with ZipFile(base/"practice-original.zip") as z:
+              names=collections.Counter(i.filename for i in z.infolist())
+              if len(names)>100000: raise SystemExit("excessive_zip_member_count")
+              for row in rows:
+                  name=row["source_archive_path"]
+                  if (names[name]!=1 or name.startswith("/") or ".." in name.split("/")
+                          or int(row["size"])<=8 or int(row["size"])>32*1024*1024):
+                      raise SystemExit("untrusted_practice_archive_member")
+                  item=z.getinfo(name)
+                  if (item.is_dir() or item.file_size!=row["size"]
+                          or ((item.external_attr >> 16)&0o170000)==0o120000):
+                      raise SystemExit("practice_archive_member_metadata_mismatch")
+                  raw=z.read(item)
+                  sha=hashlib.sha256(raw).hexdigest()
+                  if (len(raw)!=row["size"] or sha!=row["sha256"]
+                          or raw[:8]!=bytes.fromhex("d0cf11e0a1b11ae1")):
+                      raise SystemExit("practice_original_pub_bytes_drift")
+                  dest=sources/(sha+".pub")
+                  if dest.exists() and sha_file(dest)!=sha:
+                      raise SystemExit("duplicate_original_pub_disagreement")
+                  if not dest.exists(): dest.write_bytes(raw)
+          if {p.stem for p in sources.glob("*.pub")}!=set(unique):
+              raise SystemExit("practice_original_sha_denominator_mismatch")
+          argv=[sys.executable,"-m","tools.rescue_corpus_replay_v1",
+                "--root",str(sources),"--output",str(base/"replay")]
+          def replay():
+              proc=subprocess.run(argv,capture_output=True,check=False,timeout=1800)
+              if proc.returncode!=1: raise SystemExit("unexpected_partial_1556_replay_exit")
+              return json.loads((base/"replay"/"summary.json").read_text(encoding="utf-8"))
+          first=replay()
+          if first["authority_count"]!=1556 or first["counts"]!={"extracted":expected,"missing":1556-expected}:
+              raise SystemExit("verified_practice_originals_extraction_failed")
+          second=replay()
+          if second["counts"]!={"reused":expected,"missing":1556-expected}:
+              raise SystemExit("verified_practice_original_reuse_failed")
+          if any(sha_file(sources/(sha+".pub"))!=sha for sha in unique):
+              raise SystemExit("original_practice_pub_mutation_detected")
+          streams=sum(r["verified_streams"] for r in second["entries"] if r["source_sha256"] in set(unique))
+          if streams<expected: raise SystemExit("missing_independent_physical_stream_proof")
+          receipt={"schema":"chaptera.rescue-public-training29-replay.v1","source_free":True,
+                   "cohort":os.environ["PACKAGE_KEY"],"archive_sha256":os.environ["ARCHIVE_SHA"],
+                   "authority_count":1556,"original_pub_count":expected,
+                   "source_sha_list_digest":digest,"verified_streams":streams,
+                   "reused_originals":expected,"originals_unchanged":True,
+                   "native_pub_repaired":False,"full_1556_replay":False}
+          (base/("training-receipt-"+os.environ["PACKAGE_KEY"]+".json")).write_text(
+              json.dumps(receipt,sort_keys=True,indent=2)+"\n",encoding="ascii")
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-public-practice-${{ matrix.key }}
+          path: ${{ runner.temp }}/training-receipt-*.json
+          if-no-files-found: warn
+          retention-days: 7
