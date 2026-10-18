@@ -103,7 +103,7 @@ fn render(stories: &[CellStory]) -> Result<Vec<u8>> {
     Ok(text)
 }
 
-fn exact_source_span<'a>(contents: &'a [u8], start: u64, len: u64) -> Result<&'a [u8]> {
+fn exact_source_span(contents: &[u8], start: u64, len: u64) -> Result<&[u8]> {
     let end = start.checked_add(len).context("cell_carrier_overflow")?;
     let first = usize::try_from(start).context("cell_carrier_offset_limit")?;
     let last = usize::try_from(end).context("cell_carrier_length_limit")?;
