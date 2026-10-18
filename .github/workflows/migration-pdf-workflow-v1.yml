@@ -3,6 +3,7 @@ name: Migration local PDF workflow V1
 on:
   pull_request:
     paths:
+      - 'tools/migration_pdf_review_index_v1.py'
       - 'tools/migration_pdf_workflow_v1.py'
       - 'tools/test_migration_pdf_workflow_v1.py'
       - 'tools/migration_pdf_workflow_v1.md'

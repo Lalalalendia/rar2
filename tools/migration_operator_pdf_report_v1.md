@@ -50,3 +50,24 @@ python3 -m unittest discover -s tools -p 'test_migration_operator_pdf_report_v1.
 These tests use synthetic PDF and loss sidecars and cannot prove Publisher-fidelity, real PDF/A conformance or customer acceptance. The existing separate real-Rust-PUB-CLI PDF batch acceptance remains authoritative for actual conversion.
 
 **Next, separately owned:** complete the Migration pilot's representative-file customer acceptance; route normal files to existing PDF/IDML/ODG only after certified gates; present source-safe exceptions and controlled Editor/Rescue handoffs via their owning tasks. Full GUI wizard is parked under `MIGRATION-UX-01` and must not be silently reactivated here.
+## Offline inspection page (bounded follow-up)
+
+The operator report also produces `review-index.html` in the private report directory.
+Double-click this file to view a local, static table of files, loss status and
+exceptions. For already integrity-confirmed PDFs only, it links to the matching
+local PDF and loss-text sidecar. No scripts, network calls, remote CSS or embedded
+document bytes are used. File names appear in the local page, so **do not upload
+this page** as a public artifact.
+
+The page is a snapshot of the canonical `operator-report.json`, not a second
+converter, compatibility-ranking system, approval database or independent
+validator. Failed/tampered files never have a clickable output link. Incomplete
+batches show an explicit not-processed count, with no fabricated filename. All
+files with verified hashes are labelled **Review PDF and losses** and remain
+not approved for delivery until independently visually inspected. If source or
+output files change, rerun the workflow before relying on this page.
+
+The full managed Chaptera Migration dashboard (`MIGRATION-UX-01`), actual-output
+certification and customer delivery bundle remain separately gated. This is a
+local operator inspection convenience only, not the Windows application or a
+customer-facing online service.
