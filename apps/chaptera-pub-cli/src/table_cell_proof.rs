@@ -367,7 +367,6 @@ pub(crate) fn probe(file: &Path) -> Result<TableCellProofReceipt> {
     Ok(receipt)
 }
 
-
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VerifiedTableCell {
@@ -419,30 +418,50 @@ pub(crate) fn collect_verified_tables(
             refused += 1;
             continue;
         }
-        let owner = graph.nodes.values().find(|node| {
-            node.payload
-                .table
-                .as_ref()
-                .is_some_and(|table| table.story_id == Some(story.id))
-        }).ok_or_else(|| anyhow::anyhow!("verified_table_owner_missing"))?;
-        let table = owner.payload.table.as_ref()
+        let owner = graph
+            .nodes
+            .values()
+            .find(|node| {
+                node.payload
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| table.story_id == Some(story.id))
+            })
+            .ok_or_else(|| anyhow::anyhow!("verified_table_owner_missing"))?;
+        let table = owner
+            .payload
+            .table
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("verified_table_payload_missing"))?;
         let (_, projected_start, projected_end) = unique_source_range(
-            &story.source_refs, graph, &contents,
-            SourceRole::Projection, "legacy_table_text_projection",
-        ).ok_or_else(|| anyhow::anyhow!("verified_table_projection_missing"))?;
+            &story.source_refs,
+            graph,
+            &contents,
+            SourceRole::Projection,
+            "legacy_table_text_projection",
+        )
+        .ok_or_else(|| anyhow::anyhow!("verified_table_projection_missing"))?;
         let mut cells = Vec::with_capacity(table.cells.len());
         for (index, cell) in table.cells.iter().enumerate() {
-            let coords = cell.coordinates
+            let coords = cell
+                .coordinates
                 .ok_or_else(|| anyhow::anyhow!("verified_table_coordinates_missing"))?;
             let (cell_bytes, start, end) = unique_source_range(
-                &cell.source_refs, graph, &contents,
-                SourceRole::Semantic, "legacy_table_cell_text",
-            ).ok_or_else(|| anyhow::anyhow!("verified_table_cell_carrier_missing"))?;
+                &cell.source_refs,
+                graph,
+                &contents,
+                SourceRole::Semantic,
+                "legacy_table_cell_text",
+            )
+            .ok_or_else(|| anyhow::anyhow!("verified_table_cell_carrier_missing"))?;
             let (boundary_bytes, boundary_start, boundary_end) = unique_source_range(
-                &cell.source_refs, graph, &contents,
-                SourceRole::Relation, "legacy_table_cell_boundary",
-            ).ok_or_else(|| anyhow::anyhow!("verified_table_boundary_missing"))?;
+                &cell.source_refs,
+                graph,
+                &contents,
+                SourceRole::Relation,
+                "legacy_table_cell_boundary",
+            )
+            .ok_or_else(|| anyhow::anyhow!("verified_table_boundary_missing"))?;
             cells.push(VerifiedTableCell {
                 row: coords.start_row,
                 column: coords.start_column,

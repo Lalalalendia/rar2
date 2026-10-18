@@ -90,24 +90,26 @@ fn render(stories: &[CellStory]) -> Result<Vec<u8>> {
             format!(
                 "=== Story {} [utf16 {}..{}] ===\n",
                 story.story_key, story.utf16_start, story.utf16_end
-            ).as_bytes(),
+            )
+            .as_bytes(),
         );
         text.extend_from_slice(story.text.as_bytes());
         text.extend_from_slice(b"\n\n");
-        ensure!(text.len() <= MAX_TEXT + MAX_STORIES * 150, "table_story_text_limit");
+        ensure!(
+            text.len() <= MAX_TEXT + MAX_STORIES * 150,
+            "table_story_text_limit"
+        );
     }
     Ok(text)
 }
 
-fn exact_source_span<'a>(
-    contents: &'a [u8],
-    start: u64,
-    len: u64,
-) -> Result<&'a [u8]> {
+fn exact_source_span<'a>(contents: &'a [u8], start: u64, len: u64) -> Result<&'a [u8]> {
     let end = start.checked_add(len).context("cell_carrier_overflow")?;
     let first = usize::try_from(start).context("cell_carrier_offset_limit")?;
     let last = usize::try_from(end).context("cell_carrier_length_limit")?;
-    contents.get(first..last).context("cell_carrier_outside_contents")
+    contents
+        .get(first..last)
+        .context("cell_carrier_outside_contents")
 }
 
 /// This verifier independently reconstructs text from physical Contents bytes.
@@ -201,21 +203,14 @@ fn validate_private_manifest(
                     && (index == 0 || cell.carrier_byte_offset >= prev_carrier_end),
                 "table_cell_nonmonotone_or_outside_projection"
             );
-            let bytes = exact_source_span(
-                &contents,
-                cell.carrier_byte_offset,
-                cell.carrier_byte_len,
-            )?;
+            let bytes =
+                exact_source_span(&contents, cell.carrier_byte_offset, cell.carrier_byte_len)?;
             ensure!(
-                bytes.iter().all(u8::is_ascii)
-                    && sha(bytes) == cell.cell_text_sha256,
+                bytes.iter().all(u8::is_ascii) && sha(bytes) == cell.cell_text_sha256,
                 "table_cell_original_bytes_mismatch"
             );
-            let boundary = exact_source_span(
-                &contents,
-                cell.boundary_byte_offset,
-                cell.boundary_byte_len,
-            )?;
+            let boundary =
+                exact_source_span(&contents, cell.boundary_byte_offset, cell.boundary_byte_len)?;
             ensure!(
                 cell.boundary_byte_len > 0 && sha(boundary) == cell.boundary_sha256,
                 "table_cell_boundary_changed"
@@ -244,8 +239,7 @@ fn validate_private_manifest(
         );
     }
     ensure!(
-        render(&manifest.stories)? == txt
-            && separators == total_cells - manifest.story_count,
+        render(&manifest.stories)? == txt && separators == total_cells - manifest.story_count,
         "table_stories_txt_or_separator_mismatch"
     );
     Ok((total_cells, separators))
@@ -277,16 +271,22 @@ pub(crate) fn extract_table_text(source: &Path, output: &Path) -> Result<usize> 
     let admitted = AdmittedSource::open(source).map_err(anyhow::Error::msg)?;
     let bytes = admitted.bytes();
     let digest = super::source_sha256(bytes);
-    ensure!(digest.to_string() == admitted.sha256(), "table_source_sha_mismatch");
+    ensure!(
+        digest.to_string() == admitted.sha256(),
+        "table_source_sha_mismatch"
+    );
     let (family, built) = legacy_probe::build_provenance_graph(bytes, digest);
-    ensure!(family == "legacy_0x22_noquill", "no_eligible_legacy_table_source");
+    ensure!(
+        family == "legacy_0x22_noquill",
+        "no_eligible_legacy_table_source"
+    );
     let graph = built.context("no_canonical_legacy_table_graph")?.graph;
     let (proven, refused) = table_cell_proof::collect_verified_tables(&graph, bytes)?;
     ensure!(!proven.is_empty(), "no_cell_proven_table_story");
     let mut records = Vec::new();
     for story in proven {
-        let utf16_end = u32::try_from(story.text.encode_utf16().count())
-            .context("table_story_utf16_limit")?;
+        let utf16_end =
+            u32::try_from(story.text.encode_utf16().count()).context("table_story_utf16_limit")?;
         let record = CellStory {
             story_key: story.story_key,
             utf16_start: 0,
@@ -343,11 +343,17 @@ pub(crate) fn verify_table_text(source: &Path, output: &Path) -> Result<TableTex
     let admitted = AdmittedSource::open(source).map_err(anyhow::Error::msg)?;
     let bytes = admitted.bytes();
     let digest = super::source_sha256(bytes);
-    ensure!(digest.to_string() == admitted.sha256(), "table_verify_source_drift");
+    ensure!(
+        digest.to_string() == admitted.sha256(),
+        "table_verify_source_drift"
+    );
     check_output_directory(output)?;
     let json_path = output.join("stories.json");
     let text_path = output.join("stories.txt");
-    ensure!(fs::metadata(&json_path)?.len() <= MAX_MANIFEST as u64, "table_json_limit");
+    ensure!(
+        fs::metadata(&json_path)?.len() <= MAX_MANIFEST as u64,
+        "table_json_limit"
+    );
     ensure!(
         fs::metadata(&text_path)?.len() <= (MAX_TEXT + MAX_STORIES * 150) as u64,
         "table_txt_limit"
@@ -364,12 +370,10 @@ pub(crate) fn verify_table_text(source: &Path, output: &Path) -> Result<TableTex
     let (family, build) = legacy_probe::build_provenance_graph(bytes, digest);
     ensure!(family == "legacy_0x22_noquill", "table_verify_wrong_family");
     let graph = build.context("table_verify_missing_source_graph")?.graph;
-    let (mut expected, refused) =
-        table_cell_proof::collect_verified_tables(&graph, bytes)?;
+    let (mut expected, refused) = table_cell_proof::collect_verified_tables(&graph, bytes)?;
     expected.sort_by(|a, b| a.story_key.cmp(&b.story_key));
     ensure!(
-        expected.len() == manifest.stories.len()
-            && refused == manifest.unadmitted_projection_count,
+        expected.len() == manifest.stories.len() && refused == manifest.unadmitted_projection_count,
         "table_verify_admission_set_mismatch"
     );
     for (witness, entry) in expected.iter().zip(&manifest.stories) {
@@ -380,12 +384,14 @@ pub(crate) fn verify_table_text(source: &Path, output: &Path) -> Result<TableTex
                 && witness.projection_byte_len == entry.projection_byte_len
                 && witness.rows == entry.rows
                 && witness.columns == entry.columns
-                && serde_json::to_value(&witness.cells)?
-                    == serde_json::to_value(&entry.cells)?,
+                && serde_json::to_value(&witness.cells)? == serde_json::to_value(&entry.cells)?,
             "table_verify_source_graph_provenance_mismatch"
         );
     }
-    ensure!(super::source_sha256(admitted.bytes()) == digest, "source_changed_after_table_verify");
+    ensure!(
+        super::source_sha256(admitted.bytes()) == digest,
+        "source_changed_after_table_verify"
+    );
     Ok(TableTextVerification {
         schema_version: "chaptera.rescue-table-cell-verified.v1",
         source_sha256: digest.to_string(),

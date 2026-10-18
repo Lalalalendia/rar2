@@ -269,9 +269,13 @@ mod tests {
     #[test]
     fn table_text_export_and_verifier_are_explicit_commands() {
         let exported = Cli::try_parse_from([
-            "pub", "extract-legacy-table-text", "source.pub",
-            "--output", "private-table",
-        ]).expect("explicit cell export");
+            "pub",
+            "extract-legacy-table-text",
+            "source.pub",
+            "--output",
+            "private-table",
+        ])
+        .expect("explicit cell export");
         match exported.command {
             Command::ExtractLegacyTableText { file, output } => {
                 assert_eq!(file, PathBuf::from("source.pub"));
@@ -280,10 +284,17 @@ mod tests {
             _ => panic!("must select table export"),
         }
         let verified = Cli::try_parse_from([
-            "pub", "verify-legacy-table-text", "source.pub",
-            "--output", "private-table",
-        ]).expect("independent verifier");
-        assert!(matches!(verified.command, Command::VerifyLegacyTableText { .. }));
+            "pub",
+            "verify-legacy-table-text",
+            "source.pub",
+            "--output",
+            "private-table",
+        ])
+        .expect("independent verifier");
+        assert!(matches!(
+            verified.command,
+            Command::VerifyLegacyTableText { .. }
+        ));
     }
 
     #[test]
