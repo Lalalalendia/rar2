@@ -655,6 +655,8 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--pub-cli", type=Path)
     run_cmd.add_argument("--legacy-text-v1", action="store_true",
                          help="one version-scoped re-probe of unavailable Story evidence")
+    run_cmd.add_argument("--legacy-table-text-v1", action="store_true",
+                         help="explicit source-exact table cell export to separate immutable evidence")
     run_cmd.add_argument("--retain-original", action="store_true")
     run_cmd.add_argument("--run-token", help="opaque per-GUI-run identity; not an access credential")
     for name in ("status", "retry", "pause", "cancel"):
@@ -670,7 +672,17 @@ def main(argv: list[str] | None = None) -> int:
             result = run(args.output, workers=args.workers, timeout=args.timeout,
                          file_timeout=args.file_timeout, pub_cli=args.pub_cli,
                          retain_original=args.retain_original, run_token=args.run_token,
-                          legacy_text_v1=args.legacy_text_v1)
+                         legacy_text_v1=args.legacy_text_v1 or args.legacy_table_text_v1)
+            if args.legacy_table_text_v1:
+                if args.pub_cli is None:
+                    raise BatchError("table_text_requires_pub_cli")
+                # A separate SHA-bound profile preserves the original text queue
+                # and all older immutable galleries and stories.json evidence.
+                from tools import rescue_batch_table_v1
+                result["legacy_table_text_v1"] = rescue_batch_table_v1.admit_completed(
+                    args.output, args.pub_cli, timeout=args.timeout,
+                    file_timeout=args.file_timeout)
+
         elif args.cmd == "retry":
             result = retry(args.output)
         elif args.cmd in ("pause", "cancel"):

@@ -13,6 +13,9 @@ on:
       - '.github/workflows/rescue-desktop-portable-windows.yml'
       - 'tools/rescue_desktop_batch_v1.py'
       - 'tools/rescue_batch_text_v1.py'
+      - 'tools/rescue_batch_table_v1.py'
+      - 'tools/test_rescue_batch_table_v1.py'
+      - 'tools/verify_rescue_table_text_evidence_v1.py'
       - 'tools/test_rescue_batch_text_v1.py'
       - 'tools/verify_rescue_text_evidence_v1.py'
       - 'tools/rescue_salvage_bundle_v1.py'
@@ -45,13 +48,13 @@ jobs:
       - name: Offline entrypoint and existing batch/salvage tests
         shell: pwsh
         run: |
-          python -m unittest tools.test_rescue_engine_entrypoint tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity tools.test_rescue_windows_job_guard tools.test_rescue_batch_text_v1 tools.test_verify_rescue_text_evidence_v1 -v
+          python -m unittest tools.test_rescue_engine_entrypoint tools.test_rescue_desktop_batch_v1 tools.test_rescue_salvage_bundle_v1 tools.test_rescue_cfb_stream_identity tools.test_rescue_windows_job_guard tools.test_rescue_batch_text_v1 tools.test_rescue_batch_table_v1 tools.test_verify_rescue_table_text_evidence_v1 tools.test_verify_rescue_text_evidence_v1 -v
           python -m py_compile tools/rescue_engine_entrypoint.py tools/probe_rescue_portable_windows.py tools/probe_rescue_real_text_windows.py tools/rescue_windows_job_guard.py tools/test_rescue_windows_job_guard.py
       - name: Build frozen existing Python engine
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check pyinstaller==6.16.0
-          python -m PyInstaller --noconfirm --clean --onedir --console --name rescue-engine --distpath dist --workpath build/pyinstaller --specpath build/pyinstaller --paths . --hidden-import tools.rescue_desktop_batch_v1 --hidden-import tools.rescue_salvage_bundle_v1 --hidden-import tools.rescue_windows_job_guard --hidden-import tools.rescue_batch_text_v1 --hidden-import tools.verify_rescue_text_evidence_v1 --hidden-import tools.rescue_cfb_stream_export --hidden-import tools.verify_rescue_cfb_stream_export --hidden-import tools.corpus.cfb_physical tools/rescue_engine_entrypoint.py
+          python -m PyInstaller --noconfirm --clean --onedir --console --name rescue-engine --distpath dist --workpath build/pyinstaller --specpath build/pyinstaller --paths . --hidden-import tools.rescue_desktop_batch_v1 --hidden-import tools.rescue_salvage_bundle_v1 --hidden-import tools.rescue_windows_job_guard --hidden-import tools.rescue_batch_text_v1 --hidden-import tools.rescue_batch_table_v1 --hidden-import tools.verify_rescue_table_text_evidence_v1 --hidden-import tools.verify_rescue_text_evidence_v1 --hidden-import tools.rescue_cfb_stream_export --hidden-import tools.verify_rescue_cfb_stream_export --hidden-import tools.corpus.cfb_physical tools/rescue_engine_entrypoint.py
       - name: Build Rescue GUI and native image exporter
         shell: pwsh
         run: |

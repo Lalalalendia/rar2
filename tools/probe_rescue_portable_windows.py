@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 
 from tools.test_rescue_cfb_stream_identity import collision_fixture
+from tools.rescue_engine_entrypoint import REQUIRED_IMPORT_MODULES
 
 
 def sha(data: bytes) -> str:
@@ -48,8 +49,10 @@ def main() -> int:
     code, stdout = invoke(engine, ["--self-check"], env)
     assert code == 0, "frozen dependency import failed"
     check = json.loads(stdout)
+    # Compare the frozen self-check with the checked-in import authority.
+    # Keep this count source-derived as new internal modules are added.
     assert check == {"schema_version": "chaptera.rescue-portable-engine.v1", "ok": True,
-                     "frozen": True, "module_count": 6}, check
+                     "frozen": True, "module_count": len(REQUIRED_IMPORT_MODULES)}, check
 
     # Real Rust GUI binary must remain identifiable even when launched offline.
     code, stdout = invoke(gui, ["--self-check"], env)

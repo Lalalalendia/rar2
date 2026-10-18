@@ -6,9 +6,14 @@ on:
       - apps/chaptera-pub-cli/src/main.rs
       - apps/chaptera-pub-cli/src/legacy_probe.rs
       - apps/chaptera-pub-cli/src/table_cell_proof.rs
+      - apps/chaptera-pub-cli/src/table_text_export.rs
+      - apps/chaptera-pub-cli/src/text_export.rs
       - apps/chaptera-pub-cli/Cargo.toml
       - tools/rescue_legacy_table_cell_proof_census_v1.py
       - tools/test_rescue_legacy_table_cell_proof_census_v1.py
+      - tools/verify_rescue_table_text_evidence_v1.py
+      - tools/test_verify_rescue_table_text_evidence_v1.py
+      - tools/rescue_table_text_export_acceptance_v1.py
       - .github/workflows/rescue-table-cell-proof-1050.yml
   workflow_dispatch:
 
@@ -40,7 +45,8 @@ jobs:
       - name: Source-safe protocol negative unit tests
         run: |
           python -m py_compile tools/rescue_legacy_table_cell_proof_census_v1.py tools/test_rescue_legacy_table_cell_proof_census_v1.py
-          python -m unittest tools.test_rescue_legacy_table_cell_proof_census_v1 tools.test_rescue_legacy_story_census_v1 -v
+          python -m py_compile tools/verify_rescue_table_text_evidence_v1.py tools/test_verify_rescue_table_text_evidence_v1.py tools/rescue_table_text_export_acceptance_v1.py
+          python -m unittest tools.test_rescue_legacy_table_cell_proof_census_v1 tools.test_rescue_legacy_story_census_v1 tools.test_verify_rescue_table_text_evidence_v1 -v
       - name: Rust task-scoped formatting tests and Clippy
         run: |
           cargo fmt -p chaptera-pub-cli -- --check
@@ -101,10 +107,20 @@ jobs:
               "refusal_counts": summary["refusal_counts"],
           }, sort_keys=True))
           PY
+      - name: Explicit private table-cell export and independent Contents-byte verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_table_text_export_acceptance_v1 \
+            --binary target/release/pub \
+            --archive "$RUNNER_TEMP/physical-pub-corpus.zip" \
+            --output "$RUNNER_TEMP/rescue-table-export"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: source-free-legacy-table-cell-proof-1050
-          path: ${{ runner.temp }}/rescue-cell-proof/
+          path: |
+            ${{ runner.temp }}/rescue-cell-proof/
+            ${{ runner.temp }}/rescue-table-export/
           if-no-files-found: warn
           retention-days: 7

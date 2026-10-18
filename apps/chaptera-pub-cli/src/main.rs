@@ -1,5 +1,6 @@
 mod legacy_probe;
 mod table_cell_proof;
+mod table_text_export;
 mod text_export;
 
 use anyhow::{Context, Result};
@@ -50,6 +51,18 @@ enum Command {
     ProbeLegacyTableCells {
         /// Exact source PUB (only typed counts and SHA are emitted).
         file: PathBuf,
+    },
+    /// Explicit opt-in private extraction of source-exact table cell projections.
+    ExtractLegacyTableText {
+        file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Reverify private cell-backed text directly against original PUB Contents.
+    VerifyLegacyTableText {
+        file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -125,6 +138,21 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
+        Command::ExtractLegacyTableText { file, output } => {
+            let count = table_text_export::extract_table_text(&file, &output)
+                .context("source_exact_table_export_failed")?;
+            println!("verified_table_story_ranges={count}; native_pub_repair=false");
+            Ok(())
+        }
+        Command::VerifyLegacyTableText { file, output } => {
+            let value = table_text_export::verify_table_text(&file, &output)
+                .context("independent_cell_text_verification_failed")?;
+            println!(
+                "{}",
+                serde_json::to_string(&value).context("serialize_table_verification")?
+            );
+            Ok(())
+        }
     }
 }
 
@@ -159,7 +187,9 @@ mod tests {
             }
             Command::ExtractText { .. }
             | Command::ProbeLegacyText { .. }
-            | Command::ProbeLegacyTableCells { .. } => {
+            | Command::ProbeLegacyTableCells { .. }
+            | Command::ExtractLegacyTableText { .. }
+            | Command::VerifyLegacyTableText { .. } => {
                 panic!("must not enter story command")
             }
         }
@@ -187,7 +217,9 @@ mod tests {
             }
             Command::ExtractAssets { .. }
             | Command::ProbeLegacyText { .. }
-            | Command::ProbeLegacyTableCells { .. } => {
+            | Command::ProbeLegacyTableCells { .. }
+            | Command::ExtractLegacyTableText { .. }
+            | Command::VerifyLegacyTableText { .. } => {
                 panic!("must not enter asset command")
             }
         }
@@ -232,6 +264,37 @@ mod tests {
             }
             _ => panic!("must be source-safe table cell probe"),
         }
+    }
+
+    #[test]
+    fn table_text_export_and_verifier_are_explicit_commands() {
+        let exported = Cli::try_parse_from([
+            "pub",
+            "extract-legacy-table-text",
+            "source.pub",
+            "--output",
+            "private-table",
+        ])
+        .expect("explicit cell export");
+        match exported.command {
+            Command::ExtractLegacyTableText { file, output } => {
+                assert_eq!(file, PathBuf::from("source.pub"));
+                assert_eq!(output, PathBuf::from("private-table"));
+            }
+            _ => panic!("must select table export"),
+        }
+        let verified = Cli::try_parse_from([
+            "pub",
+            "verify-legacy-table-text",
+            "source.pub",
+            "--output",
+            "private-table",
+        ])
+        .expect("independent verifier");
+        assert!(matches!(
+            verified.command,
+            Command::VerifyLegacyTableText { .. }
+        ));
     }
 
     #[test]
