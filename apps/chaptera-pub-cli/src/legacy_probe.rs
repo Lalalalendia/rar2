@@ -82,8 +82,7 @@ fn count_proven(graph: &PubSourceGraph) -> (usize, usize, usize, UnadmittedReaso
                     .byte_range
                     .is_some_and(|span| span.length > 0 && span.end().is_some())
         });
-        let bounded = total_text_bytes <= MAX_TOTAL_TEXT_BYTES
-            && proven + ambiguous < MAX_STORIES;
+        let bounded = total_text_bytes <= MAX_TOTAL_TEXT_BYTES && proven + ambiguous < MAX_STORIES;
         if safe_story_key(&key) && length_ok && bounded && ref_ok {
             proven += 1;
             continue;
@@ -125,20 +124,20 @@ fn receipt(
     family: &'static str,
     build: Option<PubSourceGraphBuild>,
 ) -> LegacyProbeReceipt {
-    let (proven, ambiguous, empty, reasons, diagnostics, graph_stories) =
-        if let Some(build) = build {
-            let (a, b, e, reasons) = count_proven(&build.graph);
-            (
-                a,
-                b,
-                e,
-                reasons,
-                build.diagnostics.len().min(MAX_STORIES),
-                build.graph.stories.len(),
-            )
-        } else {
-            (0, 0, 0, UnadmittedReasonCounts::default(), 0, 0)
-        };
+    let (proven, ambiguous, empty, reasons, diagnostics, graph_stories) = if let Some(build) = build
+    {
+        let (a, b, e, reasons) = count_proven(&build.graph);
+        (
+            a,
+            b,
+            e,
+            reasons,
+            build.diagnostics.len().min(MAX_STORIES),
+            build.graph.stories.len(),
+        )
+    } else {
+        (0, 0, 0, UnadmittedReasonCounts::default(), 0, 0)
+    };
     let status = if proven > 0 {
         if ambiguous > 0 {
             "verified_partial"
