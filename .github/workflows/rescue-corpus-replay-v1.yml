@@ -257,3 +257,107 @@ jobs:
           path: ${{ runner.temp }}/rescue-public-originals-two-receipt.json
           if-no-files-found: warn
           retention-days: 7
+
+  public-training-6:
+    name: Verify 6 pinned training archive PUB via real Replay
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Acquire exactly pinned INTUIT Publisher practice archive privately
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 2 --max-time 75 \
+            "https://intuit.ru/upload/lections/course/228/1/publisher.zip" \
+            -o "$RUNNER_TEMP/rescue-publisher2002-original.zip"
+          printf '%s  %s\n' \
+            "29bf94cc61e081fff50031945750465de233234991aab3f79995f6edd2f1e261" \
+            "$RUNNER_TEMP/rescue-publisher2002-original.zip" | sha256sum --check --status
+      - name: Reverify six real originals against registered SHA and replay source-safely
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess, sys, tempfile
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY, load_authority, sha_file
+
+          receipt_meta = json.loads(Path("tools/corpus/receipts/publisher2002-sbs-06-input-2026-09-25.json").read_text(encoding="utf-8"))
+          expected = {f["filename"]: f["sha256"] for f in receipt_meta["files"]}
+          if len(expected) != 6 or len(set(expected.values())) != 6:
+              raise SystemExit("untrusted_publisher2002_authority")
+          if not set(expected.values()) <= set(load_authority(DEFAULT_AUTHORITY)):
+              raise SystemExit("publisher2002_not_in_current_authority")
+          carrier = Path(os.environ["RUNNER_TEMP"]) / "rescue-publisher2002-original.zip"
+          source = Path(os.environ["RUNNER_TEMP"]) / "publisher2002-originals"
+          output = Path(os.environ["RUNNER_TEMP"]) / "publisher2002-bundles"
+          source.mkdir()
+          with ZipFile(carrier) as archive:
+              pubs = [info for info in archive.infolist()
+                      if info.filename.lower().endswith(".pub") and not info.is_dir()]
+              if len(pubs) != 6 or len(archive.infolist()) > 256:
+                  raise SystemExit("unexpected_publisher2002_archive_members")
+              admitted = set()
+              for info in pubs:
+                  filename = info.filename.split("/")[-1]
+                  if (filename not in expected or filename in admitted
+                          or info.file_size < 8 or info.file_size > 8 * 1024 * 1024
+                          or ((info.external_attr >> 16) & 0o170000) == 0o120000):
+                      raise SystemExit("unsafe_or_unexpected_publisher2002_member")
+                  data = archive.read(info)
+                  actual = hashlib.sha256(data).hexdigest()
+                  if actual != expected[filename] or data[:8] != bytes.fromhex("d0cf11e0a1b11ae1"):
+                      raise SystemExit("publisher2002_source_bytes_changed")
+                  (source / (actual + ".pub")).write_bytes(data)
+                  admitted.add(filename)
+          if admitted != set(expected):
+              raise SystemExit("publisher2002_coverage_incomplete")
+          initial_hashes = {p.stem: sha_file(p) for p in source.glob("*.pub")}
+          assert set(initial_hashes) == set(expected.values())
+          command = [sys.executable, "tools/rescue_corpus_replay_v1.py",
+                     "--root", str(source), "--output", str(output)]
+          def replay():
+              proc = subprocess.run(command, capture_output=True, check=False, timeout=480)
+              if proc.returncode != 1 or not (output / "summary.json").exists():
+                  raise SystemExit("publisher2002_replay_untrusted_exit")
+              return json.loads((output / "summary.json").read_text(encoding="utf-8"))
+          first = replay()
+          if first["authority_count"] != 1556 or first["counts"] != {"extracted": 6, "missing": 1550}:
+              raise SystemExit("publisher2002_extraction_or_denominator_failed")
+          second = replay()
+          if (second["counts"] != {"missing": 1550, "reused": 6}
+                  or {p.stem: sha_file(p) for p in source.glob("*.pub")} != initial_hashes):
+              raise SystemExit("publisher2002_reuse_or_source_integrity_failed")
+          streams = sum(e["verified_streams"] for e in second["entries"]
+                        if e["source_sha256"] in set(expected.values()))
+          if streams < 6:
+              raise SystemExit("publisher2002_no_verified_stream_evidence")
+          receipt = {
+              "schema": "chaptera.rescue-corpus-public-training-six.v1",
+              "source_free": True,
+              "authority_count": 1556,
+              "physical_originals_verified": 6,
+              "source_sha256": sorted(expected.values()),
+              "verified_streams": streams,
+              "restart_reused": 6,
+              "source_immutable": True,
+              "status": "partial_6_of_1556_not_full_corpus",
+              "native_pub_repaired": False,
+          }
+          (Path(os.environ["RUNNER_TEMP"]) / "rescue-public-training-six-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-public-training-six
+          path: ${{ runner.temp }}/rescue-public-training-six-receipt.json
+          if-no-files-found: warn
+          retention-days: 7
