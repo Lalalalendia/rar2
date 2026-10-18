@@ -1,0 +1,100 @@
+name: Migration real Rust PUB to PDF workflow acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'tools/migration_pdf_workflow_real_cli_acceptance.py'
+      - 'tools/test_migration_pdf_workflow_real_cli_acceptance.py'
+      - 'tools/migration_pdf_workflow_real_cli_acceptance.md'
+      - '.github/workflows/migration-pdf-workflow-real-cli.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fail-closed-source-free-contract:
+    name: No leaked paths, unsafe source or false success
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile actual workflow/acceptance and source-free tests
+        run: |
+          python3 -m compileall -q \
+            tools/migration_pdf_workflow_v1.py \
+            tools/migration_operator_pdf_report_v1.py \
+            tools/migration_pdf_workflow_real_cli_acceptance.py \
+            tools/test_migration_pdf_workflow_real_cli_acceptance.py
+      - name: Prove pinned original and CI receipt fail closed
+        run: python3 -m unittest discover -s tools -p 'test_migration_pdf_workflow_real_cli_acceptance.py' -v
+
+  real-compiled-rust-pdf-and-operator-report:
+    name: Actual compiled PUB + SHA-pinned public Publisher → verified PDF/report
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout without persisted GitHub credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install the already-admitted Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+      - name: Build the real pre-existing PUB-to-PDF engine, not a stub
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-cli --bin pub --jobs 2
+          test -x vendor/producer-a/target/debug/pub
+      - name: Materialize existing explicitly licensed fallback font for this run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -q -p chaptera-desktop-fallback-font-resource \
+            --bin materialize-fallback-font -- "$RUNNER_TEMP/chaptera-fallback.ttf"
+          test -s "$RUNNER_TEMP/chaptera-fallback.ttf"
+      - name: Download permitted Apache POI SampleNewsletter at pinned Git SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --retry 3 --connect-timeout 30 --max-time 180 \
+            'https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub' \
+            --output "$RUNNER_TEMP/SampleNewsletter.pub"
+          test "$(wc -c < "$RUNNER_TEMP/SampleNewsletter.pub" | tr -d ' ')" = '291840'
+          printf '%s  %s\n' \
+            '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf' \
+            "$RUNNER_TEMP/SampleNewsletter.pub" | sha256sum --check --status
+      - name: Prove actual one-command folder/ZIP/restart/tamper/exception report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/migration_pdf_workflow_real_cli_acceptance.py \
+            --source "$RUNNER_TEMP/SampleNewsletter.pub" \
+            --source-sha256 \
+              '6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf' \
+            --font "$RUNNER_TEMP/chaptera-fallback.ttf" \
+            --pub-cli vendor/producer-a/target/debug/pub \
+            --workflow tools/migration_pdf_workflow_v1.py \
+            --receipt "$RUNNER_TEMP/migration-pdf-real-cli-proof.json"
+      - name: Publish only SHA/count/typed proof, never source/font/PDF/report contents
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-pdf-real-rust-cli-proof
+          path: ${{ runner.temp }}/migration-pdf-real-cli-proof.json
+          if-no-files-found: error
+          retention-days: 7
