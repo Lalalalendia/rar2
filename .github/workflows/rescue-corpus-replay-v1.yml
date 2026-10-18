@@ -166,7 +166,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-public-originals-2:
+  public-originals-2:
     name: Verify 2 previously uncovered public original PUB via real Replay
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
