@@ -59,11 +59,11 @@ pub(crate) fn safe_story_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
 }
 
-pub(crate) fn is_projection_only_exact(
-    graph: &PubSourceGraph,
-    story: &pub_model::Story,
-) -> bool {
-    !story.source_refs.iter().any(|source_ref| source_ref.role == SourceRole::Semantic)
+pub(crate) fn is_projection_only_exact(graph: &PubSourceGraph, story: &pub_model::Story) -> bool {
+    !story
+        .source_refs
+        .iter()
+        .any(|source_ref| source_ref.role == SourceRole::Semantic)
         && story.source_refs.iter().any(|source_ref| {
             source_ref.role == SourceRole::Projection
                 && source_ref.authority == AuthorityClass::Authoritative

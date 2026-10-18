@@ -186,11 +186,7 @@ fn unique_source_range<'a>(
     exact_source_range(single, graph, contents, role, path)
 }
 
-fn prove_story(
-    graph: &PubSourceGraph,
-    story: &Story,
-    contents: &[u8],
-) -> Result<Proof, Refusal> {
+fn prove_story(graph: &PubSourceGraph, story: &Story, contents: &[u8]) -> Result<Proof, Refusal> {
     let owners = graph
         .nodes
         .values()
@@ -222,12 +218,9 @@ fn prove_story(
     if expected == 0
         || expected > MAX_CELLS_PER_STORY
         || table.cells.len() != expected
-        || !table
-            .simple_table
-            .as_ref()
-            .is_some_and(|grid| grid.rows == table.rows
-                && grid.columns == table.columns
-                && grid.cells_are_row_major())
+        || !table.simple_table.as_ref().is_some_and(|grid| {
+            grid.rows == table.rows && grid.columns == table.columns && grid.cells_are_row_major()
+        })
         || pub_reader::materialize_bounded_simple_table_cells(table, story).is_err()
     {
         return Err(Refusal::Grid);
@@ -296,20 +289,25 @@ fn source_contents(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     let recovered =
         pub_cfb::recover_root_regular_stream_reader(Cursor::new(bytes), CONTENTS).ok()?;
-    if recovered.root_entry_names.iter().any(|name| {
-        name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
-    }) {
+    if recovered
+        .root_entry_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher"))
+    {
         return None;
     }
     Some(recovered.bytes)
 }
 
 pub(crate) fn probe(file: &Path) -> Result<TableCellProofReceipt> {
-    let admitted = AdmittedSource::open(file)
-        .map_err(|_| anyhow::anyhow!("table_cell_source_unavailable"))?;
+    let admitted =
+        AdmittedSource::open(file).map_err(|_| anyhow::anyhow!("table_cell_source_unavailable"))?;
     let bytes = admitted.bytes();
     let hash = super::source_sha256(bytes);
-    ensure!(hash.to_string() == admitted.sha256(), "table_cell_source_sha_drift");
+    ensure!(
+        hash.to_string() == admitted.sha256(),
+        "table_cell_source_sha_drift"
+    );
     let (family, build) = legacy_probe::build_provenance_graph(bytes, hash);
     let mut receipt = TableCellProofReceipt {
         schema_version: SCHEMA,
@@ -385,24 +383,19 @@ mod tests {
 
     #[test]
     fn synthetic_separator_is_not_mistaken_for_source_bytes() {
-        let proof = checked_join(
-            &[cell(b"one", 0, 0, 3), cell(b"two", 10, 3, 7)],
-            "one\rtwo",
-        )
-        .expect("exact ASCII cells and one virtual separator");
+        let proof = checked_join(&[cell(b"one", 0, 0, 3), cell(b"two", 10, 3, 7)], "one\rtwo")
+            .expect("exact ASCII cells and one virtual separator");
         assert_eq!((proof.cells, proof.bytes, proof.separators), (2, 6, 1));
     }
 
     #[test]
     fn corrupt_separator_or_utf16_position_is_not_admitted() {
         assert_eq!(
-            checked_join(&[cell(b"a", 0, 0, 1), cell(b"b", 4, 1, 3)], "a b")
-                .unwrap_err(),
+            checked_join(&[cell(b"a", 0, 0, 1), cell(b"b", 4, 1, 3)], "a b").unwrap_err(),
             Refusal::Projection
         );
         assert_eq!(
-            checked_join(&[cell(b"a", 0, 0, 1), cell(b"b", 4, 2, 3)], "a\rb")
-                .unwrap_err(),
+            checked_join(&[cell(b"a", 0, 0, 1), cell(b"b", 4, 2, 3)], "a\rb").unwrap_err(),
             Refusal::Projection
         );
     }
@@ -414,8 +407,7 @@ mod tests {
             Refusal::Carrier
         );
         assert_eq!(
-            checked_join(&[cell(b"ab", 0, 0, 2), cell(b"c", 1, 2, 4)], "ab\rc")
-                .unwrap_err(),
+            checked_join(&[cell(b"ab", 0, 0, 2), cell(b"c", 1, 2, 4)], "ab\rc").unwrap_err(),
             Refusal::Carrier
         );
     }
@@ -435,11 +427,8 @@ mod tests {
 
     #[test]
     fn empty_cell_still_requires_its_source_owned_position() {
-        let proof = checked_join(
-            &[cell(b"", 0, 0, 0), cell(b"x", 1, 0, 2)],
-            "\rx",
-        )
-        .expect("source-owned empty first cell");
+        let proof = checked_join(&[cell(b"", 0, 0, 0), cell(b"x", 1, 0, 2)], "\rx")
+            .expect("source-owned empty first cell");
         assert_eq!(proof.bytes, 1);
     }
 }
