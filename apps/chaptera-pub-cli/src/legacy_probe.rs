@@ -24,9 +24,31 @@ pub(crate) struct LegacyProbeReceipt {
     confirmed_story_ranges: usize,
     ambiguous_story_ranges: usize,
     graph_diagnostic_count: usize,
+    source_graph_story_count: usize,
+    empty_graph_story_count: usize,
+    unadmitted_reasons: UnadmittedReasonCounts,
     source_immutable: bool,
     native_pub_repair_attempted: bool,
     semantic_text_exposed: bool,
+}
+
+/// Bounded, mutually-exclusive admission failures. No source text, offsets,
+/// private object IDs, or file names appear in this protocol.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct UnadmittedReasonCounts {
+    projection_only_exact: usize,
+    missing_exact_semantic: usize,
+    unsafe_story_key: usize,
+    resource_or_utf16_limit: usize,
+}
+
+impl UnadmittedReasonCounts {
+    fn total(&self) -> usize {
+        self.projection_only_exact
+            + self.missing_exact_semantic
+            + self.unsafe_story_key
+            + self.resource_or_utf16_limit
+    }
 }
 
 fn safe_story_key(key: &str) -> bool {
@@ -37,16 +59,18 @@ fn safe_story_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
 }
 
-fn count_proven(graph: &PubSourceGraph) -> (usize, usize) {
+fn count_proven(graph: &PubSourceGraph) -> (usize, usize, usize, UnadmittedReasonCounts) {
     let mut proven = 0usize;
     let mut ambiguous = 0usize;
+    let mut empty = 0usize;
+    let mut reasons = UnadmittedReasonCounts::default();
     let mut total_text_bytes = 0usize;
     for story in graph.stories.values() {
         if story.text.is_empty() {
+            empty += 1;
             continue;
         }
-        let text_bytes = story.text.len();
-        total_text_bytes = total_text_bytes.saturating_add(text_bytes);
+        total_text_bytes = total_text_bytes.saturating_add(story.text.len());
         let key = story.id.as_canonical().to_string();
         let length_ok = story.text.encode_utf16().count() <= u32::MAX as usize;
         let ref_ok = story.source_refs.iter().any(|source_ref| {
@@ -58,18 +82,40 @@ fn count_proven(graph: &PubSourceGraph) -> (usize, usize) {
                     .byte_range
                     .is_some_and(|span| span.length > 0 && span.end().is_some())
         });
-        if safe_story_key(&key)
-            && length_ok
-            && total_text_bytes <= MAX_TOTAL_TEXT_BYTES
-            && proven + ambiguous < MAX_STORIES
-            && ref_ok
-        {
+        let bounded = total_text_bytes <= MAX_TOTAL_TEXT_BYTES && proven + ambiguous < MAX_STORIES;
+        if safe_story_key(&key) && length_ok && bounded && ref_ok {
             proven += 1;
+            continue;
+        }
+        ambiguous += 1;
+        if !length_ok || !bounded {
+            reasons.resource_or_utf16_limit += 1;
+        } else if !safe_story_key(&key) {
+            reasons.unsafe_story_key += 1;
+        } else if !story
+            .source_refs
+            .iter()
+            .any(|source_ref| source_ref.role == SourceRole::Semantic)
+            && story.source_refs.iter().any(|source_ref| {
+                source_ref.role == SourceRole::Projection
+                    && source_ref.authority == AuthorityClass::Authoritative
+                    && source_ref.confidence == Some(ReadConfidence::Exact)
+                    && source_ref.validate_primary_source(&graph.source).is_ok()
+                    && source_ref
+                        .byte_range
+                        .is_some_and(|span| span.length > 0 && span.end().is_some())
+            })
+        {
+            // Table aggregate Stories can be source-backed projections without
+            // being directly witnessed semantic text. Never auto-promote them.
+            reasons.projection_only_exact += 1;
         } else {
-            ambiguous += 1;
+            reasons.missing_exact_semantic += 1;
         }
     }
-    (proven, ambiguous)
+    debug_assert_eq!(reasons.total(), ambiguous);
+    debug_assert_eq!(proven + ambiguous + empty, graph.stories.len());
+    (proven, ambiguous, empty, reasons)
 }
 
 fn receipt(
@@ -78,11 +124,19 @@ fn receipt(
     family: &'static str,
     build: Option<PubSourceGraphBuild>,
 ) -> LegacyProbeReceipt {
-    let (proven, ambiguous, diagnostics) = if let Some(build) = build {
-        let (a, b) = count_proven(&build.graph);
-        (a, b, build.diagnostics.len().min(MAX_STORIES))
+    let (proven, ambiguous, empty, reasons, diagnostics, graph_stories) = if let Some(build) = build
+    {
+        let (a, b, e, reasons) = count_proven(&build.graph);
+        (
+            a,
+            b,
+            e,
+            reasons,
+            build.diagnostics.len().min(MAX_STORIES),
+            build.graph.stories.len(),
+        )
     } else {
-        (0, 0, 0)
+        (0, 0, 0, UnadmittedReasonCounts::default(), 0, 0)
     };
     let status = if proven > 0 {
         if ambiguous > 0 {
@@ -108,6 +162,9 @@ fn receipt(
         confirmed_story_ranges: proven,
         ambiguous_story_ranges: ambiguous,
         graph_diagnostic_count: diagnostics,
+        source_graph_story_count: graph_stories,
+        empty_graph_story_count: empty,
+        unadmitted_reasons: reasons,
         source_immutable: true,
         native_pub_repair_attempted: false,
         semantic_text_exposed: false,
@@ -158,6 +215,8 @@ mod tests {
         let value = receipt(sha, 18, "unclassified", None);
         assert_eq!(value.status, "ineligible");
         assert_eq!(value.confirmed_story_ranges, 0);
+        assert_eq!(value.source_graph_story_count, 0);
+        assert_eq!(value.unadmitted_reasons.total(), 0);
         assert!(!value.semantic_text_exposed);
     }
 }

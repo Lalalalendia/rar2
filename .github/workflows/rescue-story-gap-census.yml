@@ -1,0 +1,111 @@
+name: Rescue source-backed Story gap census
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-pub-cli/src/legacy_probe.rs"
+      - "tools/rescue_legacy_story_census_v1.py"
+      - "tools/test_rescue_legacy_story_census_v1.py"
+      - ".github/workflows/rescue-story-gap-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  reason-census:
+    name: Exact reasons for 39 no-text and 228 omitted Story candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: chaptera-rescue-story-gap-01
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Strict source-free protocol tests
+        run: |
+          python -m py_compile tools/rescue_legacy_story_census_v1.py tools/test_rescue_legacy_story_census_v1.py
+          python -m unittest tools.test_rescue_legacy_story_census_v1 -v
+      - name: Task-scoped Rust formatting, tests and Clippy
+        run: |
+          cargo fmt -p chaptera-pub-cli -- --check
+          cargo test -p chaptera-pub-cli
+          cargo clippy -p chaptera-pub-cli --all-targets -- -D warnings
+      - name: Compile canonical read-only probe
+        run: cargo build -p chaptera-pub-cli --release
+      - name: Download and SHA-verify existing physical PUB corpus
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/11038217075/zip" \
+            -o "$RUNNER_TEMP/physical-pub-corpus.zip"
+          printf '%s  %s\n' \
+            "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e" \
+            "$RUNNER_TEMP/physical-pub-corpus.zip" | sha256sum --check --status
+      - name: Classify 1050 original PUB without exposing text
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_legacy_story_census_v1 \
+            --binary target/release/pub \
+            --archive "$RUNNER_TEMP/physical-pub-corpus.zip" \
+            --output "$RUNNER_TEMP/rescue-story-gap-census"
+      - name: Validate previous exact Story admission and rejection partition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'rescue-story-gap-census'
+          summary = json.loads((root / 'summary.json').read_text(encoding='utf-8'))
+          ledger = json.loads((root / 'sha-only-ledger.json').read_text(encoding='utf-8'))
+          entries = ledger['entries']
+          print(json.dumps({
+              'schema_version': 'chaptera.rescue-story-gap-aggregate.v1',
+              'source_free': True,
+              'total_pubs': summary['exact_input_count'],
+              'no_proven_text': summary['unproven_text_files'],
+              'mixed_files': summary['mixed_partial_files'],
+              'unadmitted_story_candidates': summary['unadmitted_story_ranges'],
+              'reason_counts': summary['unadmitted_reason_totals'],
+              'empty_graph_files': summary['graph_empty_files'],
+              'confirmed_story_ranges': summary['confirmed_story_ranges'],
+          }, sort_keys=True))
+          if (summary['exact_input_count'] != 1050
+                  or summary['confirmed_story_ranges'] != 11664
+                  or summary['unproven_text_files'] != 39
+                  or summary['mixed_partial_files'] != 79
+                  or summary['unadmitted_story_ranges'] != 228
+                  or sum(summary['unadmitted_reason_totals'].values()) != 228
+                  or len(entries) != 1050
+                  or len({row['sha256'] for row in entries}) != 1050
+                  or summary['source_immutable'] is not True
+                  or summary['no_native_pub_repair'] is not True):
+              raise SystemExit('real_story_gap_denominator_or_admission_changed')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-story-gap-1050
+          path: ${{ runner.temp }}/rescue-story-gap-census/
+          if-no-files-found: warn
+          retention-days: 7

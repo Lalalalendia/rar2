@@ -22,6 +22,10 @@ MEMBER = re.compile(r"materialized/native/([0-9a-f]{64})\.pub\Z")
 FAMILIES = {"mature_0x2c", "legacy_0x22_quill", "legacy_0x22_noquill", "unclassified"}
 STATUSES = {"verified", "verified_partial", "ambiguous", "no_proven_story", "ineligible"}
 SCHEMA = "chaptera.rescue-legacy-story-probe.v1"
+GAP_REASONS = frozenset({
+    "projection_only_exact", "missing_exact_semantic",
+    "unsafe_story_key", "resource_or_utf16_limit",
+})
 
 
 def digest(content: bytes) -> str:
@@ -34,7 +38,8 @@ def check_probe(record: object, sha: str, length: int) -> dict:
     exact_keys = {"schema_version", "source_sha256", "source_byte_len",
                   "family", "status", "confirmed_story_ranges",
                   "ambiguous_story_ranges", "graph_diagnostic_count",
-                  "source_immutable", "native_pub_repair_attempted",
+                  "source_graph_story_count", "empty_graph_story_count",
+                  "unadmitted_reasons", "source_immutable", "native_pub_repair_attempted",
                   "semantic_text_exposed"}
     if set(record) != exact_keys:
         raise ValueError("probe_unexpected_output_fields")
@@ -43,6 +48,19 @@ def check_probe(record: object, sha: str, length: int) -> dict:
     count = record.get("confirmed_story_ranges")
     ambiguous = record.get("ambiguous_story_ranges")
     diagnostics = record.get("graph_diagnostic_count")
+    graph_stories = record.get("source_graph_story_count")
+    empty_stories = record.get("empty_graph_story_count")
+    reasons = record.get("unadmitted_reasons")
+    if (not isinstance(reasons, dict) or set(reasons) != GAP_REASONS
+            or any(type(value) is not int or not 0 <= value <= 16384
+                   for value in reasons.values())):
+        raise ValueError("unadmitted_reason_protocol")
+    if (type(graph_stories) is not int or not 0 <= graph_stories <= 1000000
+            or type(empty_stories) is not int or not 0 <= empty_stories <= 1000000
+            or type(count) is not int or type(ambiguous) is not int
+            or graph_stories != count + ambiguous + empty_stories
+            or sum(reasons.values()) != ambiguous):
+        raise ValueError("unadmitted_reason_partition")
     if (record.get("schema_version") != SCHEMA
             or record.get("source_sha256") != sha
             or record.get("source_byte_len") != length
@@ -55,7 +73,9 @@ def check_probe(record: object, sha: str, length: int) -> dict:
         raise ValueError("probe_evidence_invalid")
     if (status in ("verified", "verified_partial")) != (count > 0):
         raise ValueError("probe_status_count_mismatch")
-    if family == "unclassified" and (status != "ineligible" or count or ambiguous):
+    if family == "unclassified" and (
+            status != "ineligible" or count or ambiguous or graph_stories
+            or empty_stories or any(reasons.values())):
         raise ValueError("unclassified_story_promoted")
     if family != "unclassified" and status == "ineligible":
         raise ValueError("classified_story_mislabeled")
@@ -82,7 +102,7 @@ def census(binary: Path, archive: Path, receipt_dir: Path,
            validate_export: bool = False) -> dict:
     if not binary.is_file() or sha_file(archive) != CORPUS_SHA:
         raise ValueError("missing_binary_or_archive_identity")
-    statuses, families, matrix = Counter(), Counter(), Counter()
+    statuses, families, matrix, reason_totals = Counter(), Counter(), Counter(), Counter()
     rows = []
     ranges = 0
     export_files = 0
@@ -148,6 +168,7 @@ def census(binary: Path, archive: Path, receipt_dir: Path,
                 families[row["family"]] += 1
                 statuses[row["status"]] += 1
                 matrix[(row["family"], row["status"])] += 1
+                reason_totals.update(row["unadmitted_reasons"])
                 ranges += row["confirmed_story_ranges"]
                 rows.append({
                     "sha256": sha,
@@ -156,6 +177,9 @@ def census(binary: Path, archive: Path, receipt_dir: Path,
                     "confirmed_story_ranges": row["confirmed_story_ranges"],
                     "ambiguous_story_ranges": row["ambiguous_story_ranges"],
                     "graph_diagnostic_count": row["graph_diagnostic_count"],
+                    "source_graph_story_count": row["source_graph_story_count"],
+                    "empty_graph_story_count": row["empty_graph_story_count"],
+                    "unadmitted_reasons": row["unadmitted_reasons"],
                 })
                 source.unlink()
     if sum(families.values()) != EXPECTED or len(rows) != EXPECTED:
@@ -170,6 +194,11 @@ def census(binary: Path, archive: Path, receipt_dir: Path,
         "statuses": dict(sorted(statuses.items())),
         "family_status_matrix": {f"{k[0]}:{k[1]}": v for k, v in sorted(matrix.items())},
         "confirmed_story_ranges": ranges,
+        "unadmitted_story_ranges": sum(row["ambiguous_story_ranges"] for row in rows),
+        "unadmitted_reason_totals": {k: reason_totals[k] for k in sorted(GAP_REASONS)},
+        "unproven_text_files": sum(row["confirmed_story_ranges"] == 0 for row in rows),
+        "mixed_partial_files": sum(row["status"] == "verified_partial" for row in rows),
+        "graph_empty_files": sum(row["source_graph_story_count"] == 0 for row in rows),
         "legacy_verified_files": sum(
             x["family"].startswith("legacy_") and x["status"].startswith("verified") for x in rows),
         "legacy_verified_story_ranges": sum(
@@ -183,6 +212,10 @@ def census(binary: Path, archive: Path, receipt_dir: Path,
         "source_immutable": True,
         "independent_semantic_oracle": False,
     }
+    if (sum(reason_totals.values()) != summary["unadmitted_story_ranges"]
+            or summary["unproven_text_files"] + sum(
+                row["confirmed_story_ranges"] > 0 for row in rows) != EXPECTED):
+        raise ValueError("aggregate_unadmitted_partition")
     if validate_export and (export_files != sum(1 for row in rows if row["status"].startswith("verified"))
                             or export_ranges != ranges
                             or export_legacy_files != summary["legacy_verified_files"]):
