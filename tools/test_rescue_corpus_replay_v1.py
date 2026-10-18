@@ -189,6 +189,53 @@ class ReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(replay.Rejected, "authority_must_be_sorted_unique"):
             replay.load_authority(self.authority)
 
+    def test_authority_overlap_is_identity_only_not_1556_replay(self):
+        included = sha(b"included-source")
+        other = sha(b"not-in-this-accepted-cohort")
+        unregistered = sha(b"source-outside-authority")
+        self.auth(included, other)
+        ledger = {
+            "schema_version": "chaptera.rescue-table-cell-ledger.v1",
+            "source_free": True,
+            "entries": [{"sha256": value} for value in sorted((included, unregistered))],
+        }
+        summary, uncovered = replay.source_free_sha_overlap(self.authority, ledger)
+        self.assertEqual(summary["authority_count"], 2)
+        self.assertEqual(summary["evidence_count"], 2)
+        self.assertEqual(summary["covered_in_evidence"], 1)
+        self.assertEqual(summary["outside_authority"], 1)
+        self.assertEqual(summary["not_covered_by_evidence"], 1)
+        self.assertEqual(uncovered, [other])
+        self.assertFalse(summary["physical_replay_complete"])
+        self.assertEqual(
+            summary["uncovered_digest_sha256"],
+            sha((other + "\n").encode("ascii")),
+        )
+        self.assertNotIn(str(self.source), json.dumps(summary))
+
+    def test_authority_overlap_rejects_untrusted_or_ambiguous_ledger(self):
+        value = sha(b"one")
+        other = sha(b"two")
+        self.auth(value, other)
+        correct = {
+            "schema_version": "chaptera.rescue-table-cell-ledger.v1",
+            "source_free": True,
+            "entries": [{"sha256": value}],
+        }
+        rejected = [
+            {**correct, "source_free": False},
+            {**correct, "schema_version": "other"},
+            {**correct, "entries": []},
+            {**correct, "entries": [{"sha256": value}, {"sha256": value}]},
+            {**correct, "entries": [{"sha256": value.upper()}]},
+            {**correct, "entries": [{"sha256": "not-a-sha"}]},
+            {**correct, "entries": [{"sha256": v} for v in sorted((value, other), reverse=True)]},
+        ]
+        for item in rejected:
+            with self.subTest(item=item):
+                with self.assertRaises(replay.Rejected):
+                    replay.source_free_sha_overlap(self.authority, item)
+
     def test_default_pinned_replay_authority_when_present(self):
         if not replay.DEFAULT_AUTHORITY.exists():
             self.skipTest("Standalone local test checkout lacks repo authority receipt")
