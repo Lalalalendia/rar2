@@ -40,6 +40,11 @@ class OperatorReportV1Test(unittest.TestCase):
         self.assertEqual(data["entries"][0]["state"],"integrity_confirmed_review_required")
         self.assertIn("not_visual_fidelity",data["claim_boundary"])
         self.assertEqual((self.report/"exceptions.csv").read_text().count("\n"),1)
+        rendered=(self.report/"review-index.html").read_text(encoding="utf-8")
+        self.assertIn("Not approved for delivery", rendered)
+        self.assertIn("Open PDF", rendered)
+        self.assertIn("Loss report", rendered)
+        self.assertIn("visual", rendered)
 
     def test_failed_file_is_separate_exception(self):
         self.manifest["total_sources"]=2
@@ -110,13 +115,15 @@ class OperatorReportV1Test(unittest.TestCase):
 
     def test_no_source_data_or_pub_copied_into_report(self):
         self.assertEqual(tool.main([str(self.batch),"--report-dir",str(self.report)]),0)
-        self.assertEqual(sorted(x.name for x in self.report.iterdir()),["exceptions.csv","operator-report.csv","operator-report.json"])
+        self.assertEqual(sorted(x.name for x in self.report.iterdir()),["exceptions.csv","operator-report.csv","operator-report.json","review-index.html"])
 
     def test_atomic_repeat_deterministic(self):
         self.assertEqual(tool.main([str(self.batch),"--report-dir",str(self.report)]),0)
         first=(self.report/"operator-report.json").read_bytes()
+        first_html=(self.report/"review-index.html").read_bytes()
         self.assertEqual(tool.main([str(self.batch),"--report-dir",str(self.report)]),0)
         self.assertEqual(first,(self.report/"operator-report.json").read_bytes())
+        self.assertEqual(first_html,(self.report/"review-index.html").read_bytes())
 
 
 if __name__ == "__main__":

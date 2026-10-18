@@ -34,6 +34,7 @@ Successful PDF conversion produces `<name>--<pathhash>--<sourcehash>.pdf` and it
 - `operator-report.json`: original exact manifest hash, total source count, checkpointed rows and typed outcomes;
 - `operator-report.csv`: per-file integrity/review status;
 - `exceptions.csv`: only per-file failures and integrity rejects. These are local operator outputs, not a certified delivery bundle.
+- `review-index.html`: private offline inspection table linking only intact, SHA-verified local PDFs and loss-text reports. No approval state or web service.
 
 `integrity_confirmed_review_required` means the PDF and both loss sidecars have the recorded SHA-256 bytes and basic structure, **not** that layout, colours, fonts, images, semantics or external PDF consumers have been validated. The operator must independently review the visual and loss report before delivery. Unsupported, unreadable, malformed and failed files must be triaged separately through the owning Migration and Rescue paths.
 

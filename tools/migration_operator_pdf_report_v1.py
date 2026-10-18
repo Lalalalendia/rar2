@@ -18,6 +18,8 @@ import stat
 import sys
 import tempfile
 
+import migration_pdf_review_index_v1 as review_index
+
 SCHEMA = "chaptera.rescue-batch-pdf.v1"
 REPORT_SCHEMA = "chaptera.migration-operator-pdf-report.v1"
 MAX_FILES = 2_000
@@ -214,14 +216,19 @@ def write_reports(receipt: dict, report_dir: Path, batch_dir: Path) -> None:
             or prospective in src.parents):
         raise ReportRejected("report_and_batch_trees_overlap")
     dst = safe_root(report_dir, create=True)
-    for name in ("operator-report.json", "operator-report.csv", "exceptions.csv"):
+    for name in ("operator-report.json", "operator-report.csv", "exceptions.csv", "review-index.html"):
         if (dst / name).is_symlink() or ((dst / name).exists() and not (dst / name).is_file()):
             raise ReportRejected("unsafe_report_target")
+    try:
+        review_html = review_index.render_index(receipt, src, dst)
+    except review_index.ReviewIndexRejected as error:
+        raise ReportRejected("review_projection_invalid") from error
     values = receipt["entries"]
     problems = [row for row in values if row["state"] != "integrity_confirmed_review_required"]
     atomic_text(dst, "operator-report.json", json.dumps(receipt, sort_keys=True, indent=2, ensure_ascii=True)+"\n")
     atomic_text(dst, "operator-report.csv", csv_content(values))
     atomic_text(dst, "exceptions.csv", csv_content(problems))
+    atomic_text(dst, "review-index.html", review_html)
 
 
 def main(argv: list[str] | None = None) -> int:

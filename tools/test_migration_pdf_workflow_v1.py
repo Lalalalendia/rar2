@@ -177,7 +177,9 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(sorted(row["status"] for row in again["entries"]), ["failed", "reused"])
         self.assertEqual({f.name: f.read_bytes() for f in self.sources.iterdir()}, originals)
         self.assertEqual(sorted(p.name for p in self.reports.iterdir()),
-                         ["exceptions.csv", "operator-report.csv", "operator-report.json"])
+                         ["exceptions.csv", "operator-report.csv", "operator-report.json", "review-index.html"])
+        self.assertIn("Not approved for delivery",
+                      (self.reports / "review-index.html").read_text(encoding="utf-8"))
 
     def test_actual_batch_and_report_zip(self):
         if getattr(workflow.batch, "LOCAL_STUB", False):

@@ -3,6 +3,8 @@ name: Migration PDF operator integrity report V1
 on:
   pull_request:
     paths:
+      - 'tools/migration_pdf_review_index_v1.py'
+      - 'tools/test_migration_pdf_review_index_v1.py'
       - 'tools/migration_operator_pdf_report_v1.py'
       - 'tools/test_migration_operator_pdf_report_v1.py'
       - 'tools/migration_operator_pdf_report_v1.md'
@@ -26,6 +28,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile source-free report and fixture tests
-        run: python3 -m compileall -q tools/migration_operator_pdf_report_v1.py tools/test_migration_operator_pdf_report_v1.py
+        run: python3 -m compileall -q tools/migration_operator_pdf_report_v1.py tools/test_migration_operator_pdf_report_v1.py tools/migration_pdf_review_index_v1.py tools/test_migration_pdf_review_index_v1.py
       - name: Verify integrity, exception, tamper, lifecycle and CSV safeguards
-        run: python3 -m unittest discover -s tools -p 'test_migration_operator_pdf_report_v1.py' -v
+        run: |
+          python3 -m unittest discover -s tools -p 'test_migration_operator_pdf_report_v1.py' -v
+          python3 -m unittest discover -s tools -p 'test_migration_pdf_review_index_v1.py' -v
