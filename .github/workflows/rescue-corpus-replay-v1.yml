@@ -361,3 +361,157 @@ jobs:
           path: ${{ runner.temp }}/rescue-public-training-six-receipt.json
           if-no-files-found: warn
           retention-days: 7
+
+  public-iso-corpus:
+    name: Original ISO cohort ${{ matrix.cohort }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cohort: publisher20_36
+            url: https://archive.org/download/microsoft-publisher-2.0_202011/microsoft-publisher-2.0.iso
+            root_sha: 8f1e46dd43be728d7b39f53cf4f642149b19eebe0c74103270fc14ecae1291c4
+            size: 23851008
+            raw: 56
+            needed: 36
+            digest: d8bca9307f3f4f234a0213b16cc88365107d0a7edd144ed9990d12f87d4db660
+          - cohort: publisher97_177
+            url: https://archive.org/download/pub97no/PUB_40_CD.ISO
+            root_sha: c44fc471b42e3381efeec1d069161c05331d1ebd883d764e9c04a5c6392177c7
+            size: 142080000
+            raw: 238
+            needed: 177
+            digest: c8941eb215e42b07580ec0c08b8067b85388310e9de240b1c7b54c08312632f1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Admit existing system 7z archive reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v 7z >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq p7zip-full
+          fi
+      - name: Materialize historical ISO through existing extractor
+        shell: bash
+        env:
+          SRC_URL: ${{ matrix.url }}
+          SRC_SHA: ${{ matrix.root_sha }}
+          SRC_SIZE: ${{ matrix.size }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+          with (Path(os.environ["RUNNER_TEMP"]) / "iso-seed.csv").open("w", newline="") as fh:
+              keys = ("direct_url", "candidate_filename", "source_class",
+                      "expected_root_sha256", "expected_root_size_bytes")
+              w = csv.DictWriter(fh, fieldnames=keys)
+              w.writeheader()
+              w.writerow(dict(zip(keys, (os.environ["SRC_URL"], "root.iso",
+                     "public_historical_iso", os.environ["SRC_SHA"], os.environ["SRC_SIZE"]))))
+          PY
+          python tools/corpus/pub_container_extract.py \
+            --seed "$RUNNER_TEMP/iso-seed.csv" --out "$RUNNER_TEMP/iso-manifest.json" \
+            --materialize-dir "$RUNNER_TEMP/all-iso-pub" \
+            --max-containers 1 --max-container-bytes 170000000 \
+            --max-member-bytes 33554432 --max-total-expanded 524288000 \
+            --max-members 1024 --max-depth 0 --timeout 90 --command-timeout 120
+      - name: Obtain pinned 1050 source-free ledger
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/12134191514/zip" \
+            -o "$RUNNER_TEMP/accepted-shas.zip"
+      - name: Independently verify new original bytes through real CFB Replay
+        shell: bash
+        env:
+          COHORT: ${{ matrix.cohort }}
+          SRC_SHA: ${{ matrix.root_sha }}
+          SRC_SIZE: ${{ matrix.size }}
+          RAW_COUNT: ${{ matrix.raw }}
+          NEEDED: ${{ matrix.needed }}
+          EXPECTED_DIGEST: ${{ matrix.digest }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,shutil,subprocess,sys
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY,sha_file,source_free_sha_overlap
+          temp=Path(os.environ["RUNNER_TEMP"])
+          rows=json.loads((temp/"iso-manifest.json").read_text(encoding="utf-8"))
+          raw_count=int(os.environ["RAW_COUNT"]); needed=int(os.environ["NEEDED"])
+          if len(rows)!=raw_count or any(
+                  r.get("row_kind")!="container_member" or
+                  r.get("classification")!="cfb_publisher_hint" or
+                  r.get("root_sha256")!=os.environ["SRC_SHA"] or
+                  r.get("root_size_bytes")!=int(os.environ["SRC_SIZE"]) for r in rows):
+              raise SystemExit("pinned_ISO_invalid_or_incomplete")
+          all_shas={r["sha256"] for r in rows}
+          all_source=temp/"all-iso-pub"
+          if len(all_shas)!=raw_count or {p.stem for p in all_source.glob("*.pub")}!=all_shas:
+              raise SystemExit("pinned_ISO_member_identity_mismatch")
+          with ZipFile(temp/"accepted-shas.zip") as z:
+              evidence=z.read("rescue-cell-proof/sha-only-ledger.json")
+          if hashlib.sha256(evidence).hexdigest()!="851321556a2d65ec53c4887decf3f50e5d75e1a8855ee29af3d21569806275ab":
+              raise SystemExit("1050_ledger_source_identity_mismatch")
+          overlap,not_covered=source_free_sha_overlap(DEFAULT_AUTHORITY,json.loads(evidence))
+          if (overlap["authority_count"],overlap["evidence_count"],
+                  overlap["not_covered_by_evidence"],overlap["outside_authority"])!=(1556,1050,506,0):
+              raise SystemExit("authority_or_1050_cohort_changed")
+          selected=sorted(all_shas & set(not_covered))
+          digest=hashlib.sha256(("".join(s+"\n" for s in selected)).encode("ascii")).hexdigest()
+          if len(selected)!=needed or digest!=os.environ["EXPECTED_DIGEST"]:
+              raise SystemExit("historical_uncovered_sha_cohort_drift")
+          sources=temp/"iso-new-originals";sources.mkdir()
+          for sha in selected:
+              p=all_source/(sha+".pub")
+              if sha_file(p)!=sha: raise SystemExit("extracted_original_sha_mismatch")
+              shutil.copyfile(p,sources/(sha+".pub"))
+          shutil.rmtree(all_source)
+          args=[sys.executable,"-m","tools.rescue_corpus_replay_v1",
+                "--root",str(sources),"--output",str(temp/"replay")]
+          def run():
+              p=subprocess.run(args,capture_output=True,check=False,timeout=1800)
+              if p.returncode!=1: raise SystemExit("unexpected_replay_exit")
+              return json.loads((temp/"replay"/"summary.json").read_text(encoding="utf-8"))
+          first=run()
+          if first["authority_count"]!=1556 or first["counts"]!={"extracted":needed,"missing":1556-needed}:
+              raise SystemExit("physical_originals_replay_failed")
+          again=run()
+          if again["counts"]!={"reused":needed,"missing":1556-needed}:
+              raise SystemExit("physical_original_reuse_failed")
+          if any(sha_file(sources/(sha+".pub"))!=sha for sha in selected):
+              raise SystemExit("physical_original_modified")
+          streams=sum(x["verified_streams"] for x in again["entries"] if x["source_sha256"] in set(selected))
+          if streams<needed: raise SystemExit("no_independently_verified_CFB_streams")
+          result={"schema":"chaptera.rescue-real-iso-v1","source_free":True,
+                  "cohort":os.environ["COHORT"],"iso_sha256":os.environ["SRC_SHA"],
+                  "authority_count":1556,"physical_originals":needed,
+                  "sha_list_digest":digest,"verified_streams":streams,
+                  "originals_unchanged":True,"reused":needed,
+                  "publisher_layout_certified":False,"native_pub_repaired":False,
+                  "complete_1556":False}
+          (temp/("iso-proof-"+os.environ["COHORT"]+".json")).write_text(
+              json.dumps(result,sort_keys=True,indent=2)+"\n",encoding="ascii")
+          print(json.dumps(result,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-iso-${{ matrix.cohort }}
+          path: ${{ runner.temp }}/iso-proof-*.json
+          if-no-files-found: warn
+          retention-days: 7
