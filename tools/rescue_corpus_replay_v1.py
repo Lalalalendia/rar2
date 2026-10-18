@@ -48,6 +48,51 @@ def load_authority(path: Path) -> list[str]:
     return values
 
 
+
+def source_free_sha_overlap(authority: Path, evidence: dict) -> tuple[dict, list[str]]:
+    """Reconcile SHA identities without treating a source-free ledger as PUB bytes."""
+    authority_shas = load_authority(authority)
+    if (not isinstance(evidence, dict)
+            or evidence.get("schema_version") != "chaptera.rescue-table-cell-ledger.v1"
+            or evidence.get("source_free") is not True):
+        raise Rejected("untrusted_source_free_ledger")
+    rows = evidence.get("entries")
+    if not isinstance(rows, list) or not 0 < len(rows) <= MAX_FILES:
+        raise Rejected("invalid_ledger_entry_count")
+    values = []
+    for row in rows:
+        value = row.get("sha256") if isinstance(row, dict) else None
+        if not isinstance(value, str) or not SHA.fullmatch(value):
+            raise Rejected("invalid_ledger_sha")
+        values.append(value)
+    if values != sorted(set(values)):
+        raise Rejected("ledger_sha_must_be_sorted_unique")
+    registered = set(authority_shas)
+    observed = set(values)
+    uncovered = sorted(registered - observed)
+    outside = sorted(observed - registered)
+
+    def sha_list_digest(items: list[str]) -> str:
+        return hashlib.sha256(("".join(sha + "\n" for sha in items)).encode("ascii")).hexdigest()
+
+    result = {
+        "schema": "chaptera.rescue-corpus-sha-overlap.v1",
+        "source_free": True,
+        "evidence_class": "source_free_sha_ledger_not_physical_replay",
+        "authority_count": len(authority_shas),
+        "evidence_count": len(values),
+        "covered_in_evidence": len(observed & registered),
+        "outside_authority": len(outside),
+        "not_covered_by_evidence": len(uncovered),
+        "authority_digest_sha256": sha_list_digest(authority_shas),
+        "evidence_digest_sha256": sha_list_digest(values),
+        "uncovered_digest_sha256": sha_list_digest(uncovered),
+        "outside_digest_sha256": sha_list_digest(outside),
+        "physical_replay_complete": False,
+    }
+    return result, uncovered
+
+
 def reject_unsafe_path(path: Path) -> None:
     """Refuse any pre-existing symlink component, including output parents."""
     for part in (path, *path.parents):
