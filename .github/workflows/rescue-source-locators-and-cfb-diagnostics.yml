@@ -1,0 +1,349 @@
+name: Rescue pinned WARC and GovDocs sources and CFB diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rescue-source-locators-and-cfb-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rescue-source-locators-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  public-warc-govdocs7:
+    name: Exact-original Common Crawl 6 + GovDocs1 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch immutable source-free historical manifests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10801347100/zip" \
+            -o "$RUNNER_TEMP/rescue-historic-commoncrawl.zip"
+          printf '%s  %s\n' \
+            "de7d1fbcf15547abf1e581b64c1d503aa85b184930811324ba7f17f4305e7add" \
+            "$RUNNER_TEMP/rescue-historic-commoncrawl.zip" | sha256sum --check --status
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10788840886/zip" \
+            -o "$RUNNER_TEMP/rescue-historic-govdocs.zip"
+          printf '%s  %s\n' \
+            "0624ad8b9d6f50d3b868ef3b4a8602585f0c8fc13fc4e82b5819c2bbfb6cf54f" \
+            "$RUNNER_TEMP/rescue-historic-govdocs.zip" | sha256sum --check --status
+      - name: Reacquire source-pinned originals and verify existing Replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess, sys
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.corpus import harvest_pub, govdocs1_remote_zip_pub as gov
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY, load_authority, sha_file
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          sources = root / "source-by-sha"
+          output = root / "replayed"
+          sources.mkdir()
+          CC = {
+            "125f2cecd91a32d8cde563ba3e246eb744b977920d85755425b1e149b9e6c9bf",
+            "26d4045b5b5f526606926172d208cf423c8c2eadcde92f997ce081d932625b4f",
+            "5755086ed9ec16224e1a1ff011c552d0bdc2ad486d8f34fa4f4433231159c5eb",
+            "9bf55f95f341000f9113528be24e13f5a389b49e920489954d12f9e598e42158",
+            "b446c67187bf074b98789f66d00af4d8ebb81061ee8bda44704c898df9c388cb",
+            "d077894684a63c8d04d3523f69ab638c17111b0334640ca918e8df839384e47f",
+          }
+          GOV = "7ba83938c1c18705fbf24257fc157b89a96d51cd1d715d379f84c45b46d21db5"
+          targets = sorted(CC | {GOV})
+          digest = hashlib.sha256(("".join(s+"\n" for s in targets)).encode("ascii")).hexdigest()
+          if digest != "4a09d549dabdacc77d34ecfd36523e02133d75bad98fa85ad8ce382c34591cea":
+              raise SystemExit("source_target_identity_drift")
+          if len(targets) != 7 or not set(targets) <= set(load_authority(DEFAULT_AUTHORITY)):
+              raise SystemExit("target_sha_not_in_current_authority")
+          with ZipFile(root/"rescue-historic-commoncrawl.zip") as zipfile:
+              cc_rows = [r for r in json.loads(zipfile.read("manifest.json"))
+                         if r.get("sha256") in CC and r.get("classification")=="cfb_publisher_hint"]
+          if len(cc_rows) != 6 or {r["sha256"] for r in cc_rows} != CC:
+              raise SystemExit("common_crawl_source_manifest_changed")
+          with ZipFile(root/"rescue-historic-govdocs.zip") as zipfile:
+              gov_rows = [r for r in json.loads(zipfile.read("govdocs_manifest.json"))
+                          if r.get("sha256")==GOV and r.get("classification")=="cfb_publisher_hint"]
+          if len(gov_rows)!=1 or (gov_rows[0].get("archive_member")!="923/923566.pub"
+                  or gov_rows[0].get("size_bytes")!=600576
+                  or gov_rows[0].get("container_url")!=gov.zip_url(923)):
+              raise SystemExit("govdocs_original_source_manifest_changed")
+
+          rows={sha:{"source_sha256":sha,"status":"not_obtained","reason":""} for sha in targets}
+          proof={
+              "schema":"chaptera.rescue-corpus-commoncrawl-govdocs.v1",
+              "source_free":True,"authority_count":1556,"target_count":7,
+              "cohort_sha_list_digest":digest,"entries":[],
+              "source_sha_proven":0,"verified_originals":0,"verified_streams":0,
+              "reused_originals":0,"originals_unchanged":False,
+              "native_pub_repaired":False,"full_1556_replay":False,
+          }
+          receipt=root/"commoncrawl-govdocs-source-free.json"
+          def persist():
+              proof["entries"]=[rows[sha] for sha in targets]
+              receipt.write_text(json.dumps(proof,indent=2,sort_keys=True)+"\n",encoding="ascii")
+          def admit(sha,data,declared):
+              if (not isinstance(data,bytes) or len(data)!=declared
+                      or hashlib.sha256(data).hexdigest()!=sha
+                      or data[:8]!=bytes.fromhex("d0cf11e0a1b11ae1")):
+                  rows[sha].update(status="unavailable",reason="source_sha_or_length_mismatch")
+                  return
+              dest=sources/(sha+".pub")
+              dest.write_bytes(data)
+              if sha_file(dest)!=sha:
+                  raise SystemExit("source_original_changed_on_disk")
+              rows[sha].update(status="downloaded",reason="")
+
+          for row in cc_rows:
+              sha=row["sha256"]
+              name=row.get("cc_warc_filename") or ""
+              if (not isinstance(name,str) or not name.startswith("crawl-data/")
+                      or not (name.endswith(".warc.gz") or name.endswith(".arc.gz"))
+                      or ".." in name.split("/")
+                      or not str(row.get("cc_warc_offset","")).isdigit()
+                      or not str(row.get("cc_warc_length","")).isdigit()):
+                  raise SystemExit("untrusted_cc_warc_coordinates")
+              try:
+                  data,meta=harvest_pub.common_crawl_fetch(
+                      row,timeout=45,max_bytes=16*1024*1024,retries=2)
+                  if (meta.get("cc_warc_truncated") or str(meta.get("http_status"))!="200"):
+                      rows[sha].update(status="unavailable",reason="truncated_or_non200_warc")
+                      continue
+                  admit(sha,data,int(row["size_bytes"]))
+              except Exception:
+                  rows[sha].update(status="unavailable",reason="warc_range_or_decode_failed")
+
+          row=gov_rows[0]
+          try:
+              zip_url=gov.zip_url(923)
+              entries,_meta=gov.list_remote_zip(zip_url,timeout=45)
+              members=[e for e in entries if e.name=="923/923566.pub"]
+              if len(members)!=1 or members[0].uncompressed_size!=600576:
+                  raise ValueError("zip_central_member_not_exact")
+              data=gov.fetch_member(zip_url,members[0],timeout=45,max_member_bytes=8*1024*1024)
+              admit(GOV,data,row["size_bytes"])
+          except Exception:
+              rows[GOV].update(status="unavailable",reason="govdocs_range_or_member_unavailable")
+          checked=sorted(sha for sha in targets if rows[sha]["status"]=="downloaded")
+          proof["source_sha_proven"]=len(checked)
+          persist()
+          if not checked:
+              raise SystemExit("no_original_source_bytes_recovered")
+
+          command=[sys.executable,"-m","tools.rescue_corpus_replay_v1",
+                   "--root",str(sources),"--output",str(output)]
+          def run():
+              proc=subprocess.run(command,capture_output=True,check=False,timeout=1500)
+              if proc.returncode!=1 or not (output/"summary.json").exists():
+                  raise SystemExit("partial_replay_unexpected_execution_status")
+              return json.loads((output/"summary.json").read_text(encoding="utf-8"))
+          first=run()
+          if first["authority_count"]!=1556 or len(first["entries"])!=1556:
+              raise SystemExit("source_authority_count_drift")
+          before={e["source_sha256"]:e for e in first["entries"]}
+          accepted=[]; unsupported=[]
+          for sha in checked:
+              item=before[sha]
+              if item["status"]=="extracted" and item["reason"]=="" and item["verified_streams"]>0:
+                  accepted.append(sha)
+              elif item["status"]=="failed" and (
+                  str(item["reason"]).startswith("export_")
+                  or item["reason"]=="independent_verification_failed"
+              ):
+                  unsupported.append(sha)
+                  rows[sha].update(status="unsupported_by_current_exporter",reason=item["reason"])
+              else:
+                  raise SystemExit("unexpected_source_replay_classification")
+          if (first["counts"].get("extracted",0)!=len(accepted)
+                  or first["counts"].get("failed",0)!=len(unsupported)
+                  or first["counts"].get("missing",0)!=1556-len(checked)
+                  or sum(first["counts"].values())!=1556):
+              raise SystemExit("first_replay_denominator_mismatch")
+          if not accepted:
+              persist()
+              raise SystemExit("no_exact_original_passed_independent_CFB")
+          second=run()
+          after={e["source_sha256"]:e for e in second["entries"]}
+          if (second["counts"].get("reused",0)!=len(accepted)
+                  or second["counts"].get("failed",0)!=len(unsupported)
+                  or second["counts"].get("missing",0)!=1556-len(checked)
+                  or sum(second["counts"].values())!=1556):
+              raise SystemExit("second_replay_denominator_mismatch")
+          streams=0
+          for sha in accepted:
+              prior=before[sha];now=after[sha]
+              if (now["status"]!="reused" or now["reason"]!=""
+                      or now["verified_streams"]<=0
+                      or now["verified_streams"]!=prior["verified_streams"]):
+                  raise SystemExit("independent_verifier_or_reuse_failure")
+              streams+=now["verified_streams"]
+              rows[sha].update(status="verified_reused",reason="")
+          for sha in unsupported:
+              if after[sha]["status"]!="failed" or after[sha]["reason"]!=before[sha]["reason"]:
+                  raise SystemExit("unsupported_source_non_deterministic")
+          if any(sha_file(sources/(sha+".pub"))!=sha for sha in checked):
+              raise SystemExit("recovered_original_pub_modified")
+          proof.update(verified_originals=len(accepted),verified_streams=streams,
+                       reused_originals=len(accepted),originals_unchanged=True,
+                       source_sha_proven=len(checked))
+          persist()
+          print(json.dumps({"source_free":True,"sha_verified":len(checked),
+                            "originals_verified":len(accepted),"streams":streams,
+                            "unsupported":len(unsupported),"unavailable":7-len(checked)},
+                           sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-warc-govdocs7
+          path: ${{ runner.temp }}/commoncrawl-govdocs-source-free.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  wayback-structural-diagnostics:
+    name: Diagnose eight already SHA-observed CFB failures without outputting source bytes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Acquire immutable source-free historic Wayback metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10801683740/zip" \
+            -o "$RUNNER_TEMP/rescue-historic-wayback.zip"
+          printf '%s  %s\n' \
+            "b331e81c30a182d1e769e307281f6155f987198f25de8a4df772ff499b1253dd" \
+            "$RUNNER_TEMP/rescue-historic-wayback.zip" | sha256sum --check --status
+      - name: Characterize SHA-pinned physical CFB without weakening any admission gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,struct
+          from pathlib import Path
+          from urllib.request import Request,urlopen
+          from zipfile import ZipFile
+          from tools.corpus.cfb_physical import CFB
+
+          root=Path(os.environ["RUNNER_TEMP"])
+          eight={
+            "2e4e2001b3383ec40a9cfc71dfc1ddf8b01fa11ee246bdba05da1a332ebbf778",
+            "46bb4120c140fb61539d60fb2dd5d75dfa7302fa5e8d8baabffe0ad670fe6f2f",
+            "a2d05984c50078e51fd0df236aae6e2790d76c38d786553103da0d75715ee546",
+            "b4381b1e3662dd468c641c6fbd28e88c16c74833cb8c48a465172c6eeb80b338",
+            "b6e53e45665c7519b7e753aaac4cbd40b639e8438fd191782e601ff1bd839cb6",
+            "badeab9a48881721981bb6786cb917beeaa1bdb81db448c3a1c41da44d7e871a",
+            "c7dac3e037515f121d06294249778f644594d698f637cf9430740309d1d40486",
+            "dd44367ac576407fa6313ff8654a0cef053f4bec5489ab5d62c5c02d1305532c",
+          }
+          digest=hashlib.sha256("".join(x+"\n" for x in sorted(eight)).encode("ascii")).hexdigest()
+          if digest!="ee22aafed8db27f87db54d172958026f356ac25ea1ae9e8f653a0b7c5e6433fa":
+              raise SystemExit("unsupported_originals_cohort_drift")
+          with ZipFile(root/"rescue-historic-wayback.zip") as z:
+              historical=json.loads(z.read("union/manifest.json"))
+          # Historical manifests intentionally retain multiple Wayback captures
+          # of the same original. Deduplicate identities, not source evidence.
+          matching={}
+          for r in historical:
+              sha=r.get("sha256")
+              if sha in eight:
+                  matching.setdefault(sha,r)
+          if set(matching)!=eight:
+              raise SystemExit("diagnostic_source_sha_set_mismatch")
+          allowed={
+              "sector range":"sector_range",
+              "DIFAT chain":"difat_chain",
+              "FAT ids":"fat_ids",
+              "MiniFAT count":"minifat_count",
+              "mini root range":"mini_root_range",
+              "stream SID":"stream_sid_chain_or_length",
+              "unsupported/alignment":"unsupported_alignment",
+              "dir type":"invalid_directory_type",
+              "directory SID":"directory_sid",
+              "dir chain":"directory_chain",
+              "FAT chain":"fat_chain",
+              "mini stream":"mini_stream",
+              "no root":"no_root",
+          }
+          report={"schema":"chaptera.rescue-cfb-unsupported-diagnostics.v1",
+                  "source_free":True,"acceptance_credit":0,"target_count":8,
+                  "sha_list_digest":digest,"entries":[]}
+          for item in (matching[k] for k in sorted(matching)):
+              sha=item["sha256"]
+              record={"source_sha256":sha,"status":"transport_unavailable",
+                      "physical_error_category":"","source_length":0,
+                      "sector_bytes":0,"length_sector_aligned":None}
+              url=item.get("direct_url")
+              if not isinstance(url,str) or not url.startswith("https://web.archive.org/web/"):
+                  raise SystemExit("diagnostic_locator_untrusted")
+              try:
+                  req=Request(url,headers={"User-Agent":"Chaptera-Rescue-ArchiveProof/1.0"})
+                  with urlopen(req,timeout=75) as response:
+                      data=response.read(32*1024*1024+1)
+                  if len(data)>32*1024*1024 or hashlib.sha256(data).hexdigest()!=sha:
+                      record["status"]="sha_mismatch_untrusted"
+                  else:
+                      record["status"]="exact_source_observed"
+                      record["source_length"]=len(data)
+                      shift=int.from_bytes(data[30:32],"little")
+                      sector=(1<<shift) if shift in (9,12) else 0
+                      record["sector_bytes"]=sector
+                      record["length_sector_aligned"]=(len(data)%sector==0) if sector else False
+                      try:
+                          cfb=CFB(data)
+                          for stream in cfb.dirs:
+                              if stream["type"]==2 and stream["size"]>0:
+                                  sid=int(stream["i"])
+                                  cfb.stream_descriptor_by_sid(sid)
+                                  cfb.read_stream_by_sid(sid)
+                          record["physical_error_category"]="physical_stream_walk_succeeded"
+                      except (ValueError,IndexError,KeyError,OverflowError,struct.error) as exc:
+                          reason=str(exc)
+                          categories=[v for k,v in allowed.items() if k in reason]
+                          record["physical_error_category"]=categories[0] if categories else "unclassified_physical_failure"
+                  report["entries"].append(record)
+              except Exception:
+                  report["entries"].append(record)
+          result=root/"source-free-8-cfb-diagnostics.json"
+          result.write_text(json.dumps(report,sort_keys=True,indent=2)+"\n",encoding="ascii")
+          print(json.dumps({"target_count":8,
+                            "exact_sha_downloads":sum(x["status"]=="exact_source_observed" for x in report["entries"]),
+                            "categories":sorted({x["physical_error_category"] for x in report["entries"]}),
+                            "acceptance_credit":0},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-eight-cfb-diagnostics
+          path: ${{ runner.temp }}/source-free-8-cfb-diagnostics.json
+          if-no-files-found: warn
+          retention-days: 7

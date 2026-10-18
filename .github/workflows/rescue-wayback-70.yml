@@ -1,0 +1,241 @@
+name: Rescue real Wayback PUB source recovery (70 SHA)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rescue-wayback-70.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rescue-wayback-70-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-recovery:
+    name: Reacquire historical Wayback PUB shard ${{ matrix.shard }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Retrieve pinned historical source-free Wayback manifest only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10801683740/zip" \
+            -o "$RUNNER_TEMP/historical-source-free-wayback.zip"
+          printf '%s  %s\n' \
+            "b331e81c30a182d1e769e307281f6155f987198f25de8a4df772ff499b1253dd" \
+            "$RUNNER_TEMP/historical-source-free-wayback.zip" | sha256sum --check --status
+      - name: Retrieve pinned accepted 1050 SHA-only ledger
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/12134191514/zip" \
+            -o "$RUNNER_TEMP/accepted-shas.zip"
+      - name: Download and SHA-admit real historical PUB, then independently CFB-verify
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,subprocess,sys,urllib.request
+          from collections import defaultdict
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY,sha_file,source_free_sha_overlap
+
+          root=Path(os.environ["RUNNER_TEMP"])
+          shard=int(os.environ["SHARD"])
+          if shard not in (0,1): raise SystemExit("invalid_shard")
+          with ZipFile(root/"historical-source-free-wayback.zip") as z:
+              manifests=json.loads(z.read("union/manifest.json"))
+          candidates=defaultdict(list)
+          for entry in manifests:
+              if entry.get("classification")!="cfb_publisher_hint": continue
+              sha=entry.get("sha256")
+              url=entry.get("direct_url") or entry.get("resolved_url")
+              size=entry.get("size_bytes")
+              if (not isinstance(sha,str) or len(sha)!=64
+                      or not isinstance(url,str)
+                      or not url.startswith("https://web.archive.org/web/")
+                      or not isinstance(size,int) or size<8 or size>64*1024*1024):
+                  raise SystemExit("untrusted_historical_source_metadata")
+              candidates[sha].append((url,size))
+          if len(candidates)!=70:
+              raise SystemExit("historical_wayback70_denominator_mismatch")
+          with ZipFile(root/"accepted-shas.zip") as z:
+              data=z.read("rescue-cell-proof/sha-only-ledger.json")
+          if hashlib.sha256(data).hexdigest()!="851321556a2d65ec53c4887decf3f50e5d75e1a8855ee29af3d21569806275ab":
+              raise SystemExit("previous_1050_sha_ledger_drift")
+          overlap,not_covered=source_free_sha_overlap(DEFAULT_AUTHORITY,json.loads(data))
+          if (overlap["authority_count"],overlap["evidence_count"],
+                  overlap["not_covered_by_evidence"],overlap["outside_authority"])!=(1556,1050,506,0):
+              raise SystemExit("pinned_corpus_authority_changed")
+          if not set(candidates)<=set(not_covered):
+              raise SystemExit("historical_wayback70_not_wholly_uncovered")
+          selected=sorted(candidates)[shard::2]
+          if len(selected)!=35: raise SystemExit("invalid_sha_shard_partition")
+          sources=root/"accepted-source-pub"
+          sources.mkdir()
+          def acquire(sha):
+              seen=set()
+              reason="transport_unavailable"
+              for url,size in candidates[sha]:
+                  if url in seen: continue
+                  seen.add(url)
+                  for _attempt in range(2):
+                      try:
+                          req=urllib.request.Request(url,headers={
+                              "User-Agent":"Chaptera-Rescue-ArchiveProof/1.0",
+                              "Accept":"application/x-mspublisher,application/octet-stream,*/*"
+                          })
+                          with urllib.request.urlopen(req,timeout=45) as response:
+                              data=response.read(64*1024*1024+1)
+                          if (len(data)!=size
+                                  or hashlib.sha256(data).hexdigest()!=sha
+                                  or data[:8]!=bytes.fromhex("d0cf11e0a1b11ae1")):
+                              reason="source_exact_bytes_mismatch"
+                              continue
+                          path=sources/(sha+".pub")
+                          path.write_bytes(data)
+                          if sha_file(path)!=sha:
+                              path.unlink(missing_ok=True)
+                              return sha,"rejected","on_disk_original_drift"
+                          return sha,"downloaded",""
+                      except Exception:
+                          reason="transport_unavailable"
+              return sha,"unavailable",reason
+          rows={}
+          with ThreadPoolExecutor(max_workers=2) as pool:
+              futures=[pool.submit(acquire,sha) for sha in selected]
+              for future in as_completed(futures):
+                  sha,status,reason=future.result()
+                  rows[sha]={"source_sha256":sha,"status":status,"reason":reason}
+          downloaded=sorted(sha for sha in rows if rows[sha]["status"]=="downloaded")
+          proof={"schema":"chaptera.rescue-real-wayback70.v1",
+                 "source_free":True,"shard":shard,"shards":2,"authority_count":1556,
+                 "registered_target_shas":35,"sha_only_items":[],
+                 "physically_verified_originals":0,"verified_streams":0,
+                 "originals_unchanged":False,"replay_reuse_count":0,
+                 "native_pub_repaired":False,"full_1556_replay":False}
+          def persist():
+              proof["sha_only_items"]=[rows[s] for s in sorted(rows)]
+              (root/("wayback-shard-"+str(shard)+".json")).write_text(
+                  json.dumps(proof,indent=2,sort_keys=True)+"\n",encoding="ascii")
+          persist()
+          if not downloaded:
+              print(json.dumps({"shard":shard,"physically_verified_originals":0,
+                                "source_free":True,"status":"no_exact_source_available"}))
+              raise SystemExit("no_exact_originals_reacquired")
+          argv=[sys.executable,"-m","tools.rescue_corpus_replay_v1",
+                "--root",str(sources),"--output",str(root/"verified-replay")]
+          def replay():
+              p=subprocess.run(argv,capture_output=True,check=False,timeout=1500)
+              if p.returncode!=1:
+                  raise SystemExit("unexpected_partial_authority_replay_exit")
+              return json.loads((root/"verified-replay"/"summary.json").read_text(encoding="utf-8"))
+          # Partial source-byte recovery is expected: unsupported CFB cases are
+          # explicit, never counted as successfully verified originals.
+          # Unexpected drift, unverified reuse, or non-deterministic failures
+          # still reject the entire shard.
+          if any(r["status"]=="rejected" for r in rows.values()):
+              raise SystemExit("original_on_disk_source_rejected")
+          first=replay()
+          n=len(downloaded)
+          def indexed(receipt):
+              if receipt.get("authority_count")!=1556:
+                  raise SystemExit("authority_count_drift")
+              entries=receipt.get("entries")
+              if not isinstance(entries,list) or len(entries)!=1556:
+                  raise SystemExit("authority_entries_incomplete")
+              return {entry["source_sha256"]:entry for entry in entries}
+          first_by_sha=indexed(first)
+          extracted=[];unsupported=[]
+          for sha in downloaded:
+              row=first_by_sha[sha]
+              if row["status"]=="extracted" and row["reason"]=="" and row["verified_streams"]>0:
+                  extracted.append(sha)
+              elif row["status"]=="failed" and (
+                      str(row["reason"]).startswith("export_")
+                      or row["reason"]=="independent_verification_failed"):
+                  unsupported.append(sha)
+                  rows[sha].update(status="unsupported_by_exporter",reason=row["reason"])
+              else:
+                  raise SystemExit("unexpected_replay_result_for_downloaded_original")
+          if first["counts"].get("extracted",0)!=len(extracted) or (
+                  first["counts"].get("failed",0)!=len(unsupported)
+                  or first["counts"].get("missing",0)!=1556-n
+                  or sum(first["counts"].values())!=1556):
+              raise SystemExit("replay_counts_or_membership_inconsistent")
+          if not extracted:
+              persist()
+              raise SystemExit("no_source_verified_originals_in_shard")
+          again=replay()
+          second_by_sha=indexed(again)
+          if (again["counts"].get("reused",0)!=len(extracted)
+                  or again["counts"].get("failed",0)!=len(unsupported)
+                  or again["counts"].get("missing",0)!=1556-n
+                  or sum(again["counts"].values())!=1556):
+              raise SystemExit("rerun_status_counts_inconsistent")
+          stream_count=0
+          for sha in extracted:
+              before=first_by_sha[sha]
+              after=second_by_sha[sha]
+              if (after["status"]!="reused" or after["reason"]!=""
+                      or after["verified_streams"]!=before["verified_streams"]
+                      or after["verified_streams"]<=0):
+                  raise SystemExit("verified_bundle_reuse_drift")
+              rows[sha].update(status="verified_reused",reason="")
+              stream_count+=after["verified_streams"]
+          for sha in unsupported:
+              after=second_by_sha[sha]
+              if (after["status"]!="failed"
+                      or after["reason"]!=first_by_sha[sha]["reason"]):
+                  raise SystemExit("unsupported_original_non_deterministic_outcome")
+          if any(sha_file(sources/(sha+".pub"))!=sha for sha in downloaded):
+              raise SystemExit("original_pub_modified")
+          proof.update(physically_verified_originals=len(extracted),
+                       verified_streams=stream_count,originals_unchanged=True,
+                       replay_reuse_count=len(extracted),
+                       original_sha_downloaded=len(downloaded),
+                       unsupported_by_current_exporter=len(unsupported),
+                       transport_unavailable=35-len(downloaded),
+                       cohort_state="PARTIAL" if len(extracted)!=35 else "COMPLETE")
+          persist()
+          print(json.dumps({"shard":shard,"source_free":True,"registered_targets":35,
+                            "verified_originals":len(extracted),
+                            "verified_streams":stream_count,
+                            "unsupported":len(unsupported),
+                            "unavailable":35-n},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-wayback70-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/wayback-shard-*.json
+          if-no-files-found: warn
+          retention-days: 7

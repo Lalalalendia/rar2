@@ -1,0 +1,184 @@
+name: Rescue exact public direct original PUB 4
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rescue-direct-public-four.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rescue-public-four-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  original-byte-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Acquire SHA-pinned public original PUB, verify through existing CFB and replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, subprocess, sys, time
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from urllib.request import Request, urlopen
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY, load_authority, sha_file
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          originals = root / "source-pub"
+          output = root / "verified-cfb"
+          originals.mkdir()
+          targets = [
+            ("6fefdef46b87c767150878dc384549cb2d2ec2ac54de25f8ddb3a5628301107e",
+             72192, "https://raw.githubusercontent.com/apache/poi/74700b5692fd0449031ac6a3c78aec1155d144d5/test-data/publisher/Sample.pub"),
+            ("e050ea777d910137fff7c160992ec026ab4f76832b6c96701b114e379abf4ca3",
+             59904, "https://archive.org/download/new-microsoft-publisher-document_202502/New%20Microsoft%20Publisher%20Document.pub"),
+            ("82b5a54d26cc9a83589f671b4f46010848dec5024bc709f302530292f8ef5202",
+             107008, "https://archive.org/download/senales-microsoft-publisher-42429/SENALES_JOHAN_GZZ_42429.pub"),
+            ("8c0c1556410881b50ad5778698bae4c4a03bc53c3f951eebe2a6fb7628ec85df",
+             9001984, "https://archive.org/download/senales-microsoft-publisher-42429/SORIANA_JOHAN_GZZ_42429.pub"),
+          ]
+          names = sorted(s for s, _, _ in targets)
+          digest = hashlib.sha256("".join(s+"\n" for s in names).encode("ascii")).hexdigest()
+          if digest != "9ed1a670dcbd050336471da6ce0a6400a081b0c4623cbe105b2dfae6ac6341b8":
+              raise SystemExit("public_four_identity_set_drift")
+          if len(set(names)) != 4 or not set(names) <= set(load_authority(DEFAULT_AUTHORITY)):
+              raise SystemExit("not_registered_source_identity")
+
+          rows = {}
+          for sha, length, url in targets:
+              data = None
+              status = "transport_unavailable"
+              for attempt in range(2):
+                  try:
+                      request = Request(url, headers={
+                          "User-Agent": "Chaptera-Rescue-Original-Verification/1.0",
+                          "Accept": "application/octet-stream,*/*",
+                      })
+                      with urlopen(request, timeout=75) as stream:
+                          final = urlparse(stream.geturl())
+                          if (final.scheme != "https" or not (
+                              final.hostname == "raw.githubusercontent.com"
+                              or final.hostname == "archive.org"
+                              or (final.hostname or "").endswith(".archive.org")
+                          )):
+                              raise ValueError("unexpected_original_redirect")
+                          candidate = stream.read(length + 1)
+                      if len(candidate) != length or hashlib.sha256(candidate).hexdigest() != sha:
+                          status = "source_exact_bytes_mismatch"
+                          continue
+                      if candidate[:8] != bytes.fromhex("d0cf11e0a1b11ae1"):
+                          status = "not_valid_cfb_signature"
+                          continue
+                      data = candidate
+                      break
+                  except Exception:
+                      status = "transport_unavailable"
+                      time.sleep(attempt + 1)
+              if data is not None:
+                  file = originals / (sha + ".pub")
+                  file.write_bytes(data)
+                  if sha_file(file) != sha:
+                      raise SystemExit("source_file_mutated_while_writing")
+                  status = "downloaded"
+              rows[sha] = {"source_sha256": sha, "status": status, "reason": ""}
+
+          checked = sorted(k for k, v in rows.items() if v["status"] == "downloaded")
+          proof = {
+              "schema": "chaptera.rescue-exact-public-original-four.v1",
+              "source_free": True, "authority_count": 1556, "target_count": 4,
+              "cohort_sha_list_digest": digest, "entries": [], "verified_originals": 0,
+              "verified_streams": 0, "reused_originals": 0,
+              "originals_unchanged": False, "full_1556_replay": False,
+              "native_pub_repaired": False,
+          }
+          target_receipt = root / "rescue-public-four-source-free.json"
+          def persist():
+              proof["entries"] = [rows[k] for k in sorted(rows)]
+              target_receipt.write_text(json.dumps(proof, sort_keys=True, indent=2)+"\n",encoding="ascii")
+          persist()
+
+          if not checked:
+              print(json.dumps({"status": "no_source_byte_verified", "target_count": 4}))
+              raise SystemExit("all_public_four_originals_unavailable")
+          args = [sys.executable, "-m", "tools.rescue_corpus_replay_v1",
+                  "--root", str(originals), "--output", str(output)]
+          def replay():
+              result = subprocess.run(args, capture_output=True, check=False, timeout=900)
+              if result.returncode != 1 or not (output / "summary.json").is_file():
+                  raise SystemExit("public_four_real_replay_failed")
+              return json.loads((output / "summary.json").read_text(encoding="utf-8"))
+          first = replay()
+          if first.get("authority_count") != 1556 or len(first.get("entries",[])) != 1556:
+              raise SystemExit("physical_authority_denominator_changed")
+          by_sha = {entry["source_sha256"]:entry for entry in first["entries"]}
+          accepted = []
+          unsupported = []
+          for sha in checked:
+              row = by_sha[sha]
+              if row["status"] == "extracted" and row["reason"] == "" and row["verified_streams"] > 0:
+                  accepted.append(sha)
+              elif row["status"] == "failed" and (
+                  str(row["reason"]).startswith("export_")
+                  or row["reason"] == "independent_verification_failed"
+              ):
+                  unsupported.append(sha)
+                  rows[sha].update(status="unsupported_by_current_exporter",reason=row["reason"])
+              else:
+                  raise SystemExit("unexpected_verified_original_state")
+          if first["counts"].get("extracted",0) != len(accepted) or (
+                  first["counts"].get("failed",0) != len(unsupported)
+                  or first["counts"].get("missing",0) != 1556-len(checked)
+                  or sum(first["counts"].values()) != 1556):
+              raise SystemExit("physical_replay_status_count_drift")
+          if not accepted:
+              persist()
+              raise SystemExit("no_public_four_originals_exported")
+
+          second = replay()
+          again = {entry["source_sha256"]:entry for entry in second["entries"]}
+          if second["counts"].get("reused",0) != len(accepted) or (
+                  second["counts"].get("failed",0) != len(unsupported)
+                  or second["counts"].get("missing",0) != 1556-len(checked)
+                  or sum(second["counts"].values()) != 1556):
+              raise SystemExit("physical_replay_reuse_count_drift")
+          streams = 0
+          for sha in accepted:
+              before, after = by_sha[sha], again[sha]
+              if (after["status"] != "reused" or after["reason"] != ""
+                  or after["verified_streams"] <= 0
+                  or after["verified_streams"] != before["verified_streams"]):
+                  raise SystemExit("independent_stream_verification_changed")
+              streams += after["verified_streams"]
+              rows[sha]["status"] = "verified_reused"
+          for sha in unsupported:
+              if again[sha]["status"] != "failed" or again[sha]["reason"] != by_sha[sha]["reason"]:
+                  raise SystemExit("unsupported_case_not_reproducible")
+          if any(sha_file(originals/(sha+".pub")) != sha for sha in checked):
+              raise SystemExit("original_source_bytes_changed")
+          proof.update(verified_originals=len(accepted),verified_streams=streams,
+                       reused_originals=len(accepted),originals_unchanged=True,
+                       downloaded_source_originals=len(checked),
+                       unsupported_exporter=len(unsupported),
+                       transport_missing=4-len(checked))
+          persist()
+          print(json.dumps({"verified_originals":len(accepted),"verified_streams":streams,
+                            "source_free":True,"unavailable":4-len(checked),
+                            "unsupported":len(unsupported)},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-public-four-source-free
+          path: ${{ runner.temp }}/rescue-public-four-source-free.json
+          if-no-files-found: warn
+          retention-days: 7

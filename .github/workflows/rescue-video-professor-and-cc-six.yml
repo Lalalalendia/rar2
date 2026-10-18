@@ -1,0 +1,307 @@
+name: Rescue Video Professor ISO originals and six CFB source diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rescue-video-professor-and-cc-six.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rescue-video-professor-and-cc-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  video-professor-four:
+    name: Exact SHA video professor ISO 4 original PUB replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Ensure existing 7z ISO extractor is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v 7z >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq p7zip-full
+          fi
+          7z i >/dev/null
+      - name: Reacquire root ISO with pinned SHA and byte length in ephemeral runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rescue-video-professor"
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 5 \
+            --connect-timeout 30 --max-time 1000 --max-filesize 280000000 \
+            "https://archive.org/download/video-professor-learn-publisher/Learn_Publisher_Disc_3.iso" \
+            -o "$RUNNER_TEMP/rescue-video-professor/root.iso"
+          test "$(stat -c%s "$RUNNER_TEMP/rescue-video-professor/root.iso")" = "271398912"
+          printf '%s  %s\n' \
+            "e6e86f2fd5d0430437c5fdb06db5958776475c84ec80b5085d45fe96d3a5d5cd" \
+            "$RUNNER_TEMP/rescue-video-professor/root.iso" | sha256sum --check --status
+      - name: Verify only four registered physical ISO members and existing CFB Replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,shutil,subprocess,sys
+          from pathlib import Path
+          from tools.rescue_corpus_replay_v1 import DEFAULT_AUTHORITY,load_authority,sha_file
+
+          root=Path(os.environ["RUNNER_TEMP"])/"rescue-video-professor"
+          iso=root/"root.iso"
+          extracted=root/"extracted"
+          sources=root/"pub-originals"
+          output=root/"verified"
+          expected={
+              "03c19fdc4edc0f583025fdd0dbcc690a1573d71e1bd0078fd33e7af2b0c0eb2a":
+                  ("video professor student files/Comet Web Page.pub",838656),
+              "5665ef18c7cc7e6a72f8476f593bb2b173055edf645afbbdf6553f5a3b4517eb":
+                  ("Student Files/Comet Web Page.pub",945664),
+              "aa63097bbf08462f5208c176f34498e53fde44fff5588aa19f1727cccefaa0ca":
+                  ("video professor student files/Writer's Festival Brochure.pub",741888),
+              "dd4d3624877350617ddc55e394c9adf58dfa1dfed490c7300a8b9ce9ef38f6e9":
+                  ("Student Files/Writer's Festival Brochure.pub",766464),
+          }
+          shas=sorted(expected)
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode("ascii")).hexdigest()
+          if digest!="cbcc7506207d14f1cea777075a0074b3f673990b543c11d64114abb080eff6b5":
+              raise SystemExit("cohort_original_sha_list_drift")
+          if not set(shas)<=set(load_authority(DEFAULT_AUTHORITY)):
+              raise SystemExit("video_professor_not_in_1556_authority")
+          if (iso.stat().st_size!=271398912
+                  or sha_file(iso)!="e6e86f2fd5d0430437c5fdb06db5958776475c84ec80b5085d45fe96d3a5d5cd"):
+              raise SystemExit("video_professor_root_ISO_source_mutated")
+          extracted.mkdir()
+          sources.mkdir()
+          argv=["7z","x","-y","-bd","-o"+str(extracted),str(iso)]
+          argv.extend(member for member,_ in expected.values())
+          process=subprocess.run(argv,capture_output=True,check=False,timeout=300)
+          if process.returncode!=0:
+              raise SystemExit("pinned_ISO_member_extraction_failed")
+          if len(list(extracted.rglob("*.pub")))!=4:
+              raise SystemExit("unexpected_ISO_pub_member_count")
+          for sha,(relative,size) in expected.items():
+              path=extracted.joinpath(*relative.split("/"))
+              if (not path.is_file() or path.stat().st_size!=size
+                      or sha_file(path)!=sha or path.open("rb").read(8)!=bytes.fromhex("d0cf11e0a1b11ae1")):
+                  raise SystemExit("exact_pinned_ISO_member_sha_size_or_CFB_magic_mismatch")
+              shutil.copyfile(path,sources/(sha+".pub"))
+          if {p.stem for p in sources.glob("*.pub")}!=set(shas):
+              raise SystemExit("original_PUB_selection_changed")
+          shutil.rmtree(extracted)
+          receipt={"schema":"chaptera.rescue-video-professor-original-four.v1",
+                   "source_free":True,"authority_count":1556,"target_count":4,
+                   "original_ISO_sha256":sha_file(iso),
+                   "original_ISO_size":iso.stat().st_size,
+                   "cohort_sha_list_digest":digest,
+                   "entries":[],"verified_originals":0,"reused_originals":0,
+                   "verified_streams":0,"originals_unchanged":False,
+                   "native_pub_repaired":False,"full_1556_replay":False}
+          result=root/"source-free-video-professor-four.json"
+          def save():
+              result.write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n",encoding="ascii")
+          save()
+          argv=[sys.executable,"-m","tools.rescue_corpus_replay_v1",
+                "--root",str(sources),"--output",str(output)]
+          def replay():
+              process=subprocess.run(argv,capture_output=True,check=False,timeout=1600)
+              if process.returncode!=1 or not (output/"summary.json").is_file():
+                  raise SystemExit("video_professor_partial_replay_execution_failed")
+              return json.loads((output/"summary.json").read_text(encoding="utf-8"))
+          first=replay()
+          if first.get("authority_count")!=1556 or len(first.get("entries",[]))!=1556:
+              raise SystemExit("replay_source_authority_count_drift")
+          previous={row["source_sha256"]:row for row in first["entries"]}
+          accepted=[];unsupported=[]
+          for sha in shas:
+              item=previous[sha]
+              if (item["status"]=="extracted" and item["reason"]==""
+                      and item["verified_streams"]>0):
+                  accepted.append(sha)
+              elif item["status"]=="failed" and (
+                      str(item["reason"]).startswith("export_")
+                      or item["reason"]=="independent_verification_failed"):
+                  unsupported.append(sha)
+              else:
+                  raise SystemExit("unexpected_ISO_member_status")
+          if (first["counts"].get("extracted",0)!=len(accepted)
+                  or first["counts"].get("failed",0)!=len(unsupported)
+                  or first["counts"].get("missing",0)!=1552
+                  or sum(first["counts"].values())!=1556):
+              raise SystemExit("video_professor_first_replay_denominator_drift")
+          if not accepted:
+              receipt["entries"]=[{"source_sha256":sha,"status":"unsupported",
+                                   "reason":previous[sha]["reason"]} for sha in shas]
+              save()
+              raise SystemExit("no_independently_verified_originals")
+          second=replay()
+          current={row["source_sha256"]:row for row in second["entries"]}
+          if (second["counts"].get("reused",0)!=len(accepted)
+                  or second["counts"].get("failed",0)!=len(unsupported)
+                  or second["counts"].get("missing",0)!=1552
+                  or sum(second["counts"].values())!=1556):
+              raise SystemExit("video_professor_replay_reuse_drift")
+          streams=0
+          for sha in accepted:
+              old,new=previous[sha],current[sha]
+              if (new["status"]!="reused" or new["reason"]!=""
+                      or new["verified_streams"]!=old["verified_streams"]
+                      or new["verified_streams"]<=0):
+                  raise SystemExit("video_professor_independent_CFB_verification_failed")
+              streams+=new["verified_streams"]
+          for sha in unsupported:
+              if (current[sha]["status"]!="failed"
+                      or current[sha]["reason"]!=previous[sha]["reason"]):
+                  raise SystemExit("original_unsupported_not_reproducible")
+          if any(sha_file(sources/(sha+".pub"))!=sha for sha in shas):
+              raise SystemExit("source_original_modified")
+          receipt.update(verified_originals=len(accepted),reused_originals=len(accepted),
+                         verified_streams=streams,originals_unchanged=True,
+                         unsupported_count=len(unsupported),
+                         entries=[{"source_sha256":sha,
+                                   "status":"verified_reused" if sha in accepted else "unsupported",
+                                   "reason":"" if sha in accepted else previous[sha]["reason"]}
+                                  for sha in shas])
+          save()
+          print(json.dumps({"source_free":True,"targets":4,"accepted":len(accepted),
+                            "unsupported":len(unsupported),"verified_streams":streams},
+                           sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-video-professor-four
+          path: ${{ runner.temp }}/rescue-video-professor/source-free-video-professor-four.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  six-commoncrawl-cfb-diagnostics:
+    name: Diagnose 6 exact WARC originals without source output or acceptance credit
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch pinned historical Common Crawl evidence ZIP
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10801347100/zip" \
+            -o "$RUNNER_TEMP/historical-commoncrawl.zip"
+          printf '%s  %s\n' \
+            "de7d1fbcf15547abf1e581b64c1d503aa85b184930811324ba7f17f4305e7add" \
+            "$RUNNER_TEMP/historical-commoncrawl.zip" | sha256sum --check --status
+      - name: Classify pinned physical CFB source defects with existing CFB parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,struct
+          from pathlib import Path
+          from zipfile import ZipFile
+          from tools.corpus import harvest_pub
+          from tools.corpus.cfb_physical import CFB
+
+          root=Path(os.environ["RUNNER_TEMP"])
+          shas={
+              "125f2cecd91a32d8cde563ba3e246eb744b977920d85755425b1e149b9e6c9bf",
+              "26d4045b5b5f526606926172d208cf423c8c2eadcde92f997ce081d932625b4f",
+              "5755086ed9ec16224e1a1ff011c552d0bdc2ad486d8f34fa4f4433231159c5eb",
+              "9bf55f95f341000f9113528be24e13f5a389b49e920489954d12f9e598e42158",
+              "b446c67187bf074b98789f66d00af4d8ebb81061ee8bda44704c898df9c388cb",
+              "d077894684a63c8d04d3523f69ab638c17111b0334640ca918e8df839384e47f",
+          }
+          digest=hashlib.sha256("".join(s+"\n" for s in sorted(shas)).encode("ascii")).hexdigest()
+          if digest!="cf83668b365f2dea77e7e7b91651f18d7354d691a8d09308a80686428707773f":
+              raise SystemExit("CC_six_identity_set_drift")
+          with ZipFile(root/"historical-commoncrawl.zip") as z:
+              rows=[r for r in json.loads(z.read("manifest.json"))
+                    if r.get("sha256") in shas and r.get("classification")=="cfb_publisher_hint"]
+          if len(rows)!=6 or {r["sha256"] for r in rows}!=shas:
+              raise SystemExit("CC_six_manifest_drift")
+          mapping={
+              "sector range":"sector_range",
+              "DIFAT chain":"difat_chain",
+              "FAT ids":"fat_ids",
+              "MiniFAT count":"minifat_count",
+              "mini root range":"mini_root_range",
+              "stream SID":"stream_sid",
+              "unsupported/alignment":"unsupported_alignment",
+              "directory SID":"directory_sid",
+              "FAT chain":"fat_chain",
+              "mini stream":"mini_stream",
+          }
+          receipt={"schema":"chaptera.rescue-CC-six-physical-diagnostics.v1",
+                   "source_free":True,"acceptance_credit":0,"target_count":6,
+                   "sha_list_digest":digest,"entries":[]}
+          for row in sorted(rows,key=lambda r:r["sha256"]):
+              sha=row["sha256"]
+              entry={"source_sha256":sha,"status":"unavailable","source_length":0,
+                     "observed_sector_size":0,"exact_1mib_source":False,
+                     "physical_error_category":"","http_length_header_matches":None}
+              try:
+                  if (not str(row.get("cc_warc_filename","")).startswith("crawl-data/")
+                          or not str(row.get("cc_warc_offset","")).isdigit()
+                          or not str(row.get("cc_warc_length","")).isdigit()):
+                      raise ValueError("untrusted_WARC_coordinates")
+                  data,meta=harvest_pub.common_crawl_fetch(
+                      row,timeout=45,max_bytes=16*1024*1024,retries=2)
+                  if (hashlib.sha256(data).hexdigest()!=sha
+                          or data[:8]!=bytes.fromhex("d0cf11e0a1b11ae1")):
+                      entry["status"]="unexpected_SHA_or_CFB_header"
+                  else:
+                      entry["status"]="exact_original_sha_observed"
+                      entry["source_length"]=len(data)
+                      entry["exact_1mib_source"]=(len(data)==1048576)
+                      declared=str(meta.get("content_length_header",""))
+                      entry["http_length_header_matches"]=(declared.isdecimal()
+                                                           and int(declared)==len(data))
+                      shift=int.from_bytes(data[30:32],"little")
+                      entry["observed_sector_size"]=1<<shift if shift in (9,12) else 0
+                      try:
+                          cfb=CFB(data)
+                          for stream in cfb.dirs:
+                              if stream["type"]==2 and stream["size"]>0:
+                                  sid=int(stream["i"])
+                                  cfb.stream_descriptor_by_sid(sid)
+                                  cfb.read_stream_by_sid(sid)
+                          entry["physical_error_category"]="physical_walk_ok"
+                      except (ValueError,IndexError,KeyError,OverflowError,struct.error) as exc:
+                          msg=str(exc)
+                          entry["physical_error_category"]=next(
+                              (category for snippet,category in mapping.items() if snippet in msg),
+                              "unclassified_physical_error")
+              except Exception:
+                  entry["status"]="transport_or_range_unavailable"
+              receipt["entries"].append(entry)
+          dest=root/"source-free-CC-six-diagnostics.json"
+          dest.write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n",encoding="ascii")
+          print(json.dumps({"source_free":True,"target_count":6,
+                            "sha_observed":sum(x["status"]=="exact_original_sha_observed"
+                                               for x in receipt["entries"]),
+                            "categories":sorted({x["physical_error_category"]
+                                                 for x in receipt["entries"]}),
+                            "acceptance_credit":0},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rescue-source-free-CC-six-diagnostics
+          path: ${{ runner.temp }}/source-free-CC-six-diagnostics.json
+          if-no-files-found: warn
+          retention-days: 7
