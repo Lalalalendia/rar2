@@ -1,0 +1,31 @@
+name: Migration PDF operator integrity report V1
+
+on:
+  pull_request:
+    paths:
+      - 'tools/migration_operator_pdf_report_v1.py'
+      - 'tools/test_migration_operator_pdf_report_v1.py'
+      - 'tools/migration_operator_pdf_report_v1.md'
+      - '.github/workflows/migration-operator-pdf-report-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  offline-operator-projection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile source-free report and fixture tests
+        run: python3 -m compileall -q tools/migration_operator_pdf_report_v1.py tools/test_migration_operator_pdf_report_v1.py
+      - name: Verify integrity, exception, tamper, lifecycle and CSV safeguards
+        run: python3 -m unittest discover -s tools -p 'test_migration_operator_pdf_report_v1.py' -v
