@@ -1,3 +1,4 @@
+mod legacy_probe;
 mod text_export;
 
 use anyhow::{Context, Result};
@@ -35,6 +36,14 @@ enum Command {
         /// Dedicated directory for private stories.json and stories.txt.
         #[arg(long)]
         output: PathBuf,
+        /// Opt in to strict, source-proven old 0x22 (Quill/no-Quill) Story readers.
+        #[arg(long)]
+        include_legacy: bool,
+    },
+    /// Count strict old-family source-backed Stories, without displaying text.
+    ProbeLegacyText {
+        /// Exact source PUB (the output contains only its SHA and typed counts).
+        file: PathBuf,
     },
 }
 
@@ -85,9 +94,21 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::ExtractAssets { file, output, json } => extract_assets(file, output, json),
-        Command::ExtractText { file, output } => {
-            let count = text_export::extract_text(&file, &output)?;
+        Command::ExtractText {
+            file,
+            output,
+            include_legacy,
+        } => {
+            let count = text_export::extract_text(&file, &output, include_legacy)?;
             println!("confirmed_story_ranges={count}; native_pub_repair=false");
+            Ok(())
+        }
+        Command::ProbeLegacyText { file } => {
+            let value = legacy_probe::probe(&file).context("source_safe_legacy_probe_failed")?;
+            println!(
+                "{}",
+                serde_json::to_string(&value).context("serialize_legacy_probe")?
+            );
             Ok(())
         }
     }
@@ -122,7 +143,9 @@ mod tests {
                 assert_eq!(output, PathBuf::from("assets"));
                 assert!(json);
             }
-            Command::ExtractText { .. } => panic!("must not enter story command"),
+            Command::ExtractText { .. } | Command::ProbeLegacyText { .. } => {
+                panic!("must not enter story command")
+            }
         }
     }
 
@@ -137,11 +160,47 @@ mod tests {
         ])
         .expect("CLI shape");
         match cli.command {
-            Command::ExtractText { file, output } => {
+            Command::ExtractText {
+                file,
+                output,
+                include_legacy,
+            } => {
                 assert_eq!(file, PathBuf::from("example.pub"));
                 assert_eq!(output, PathBuf::from("recovered"));
+                assert!(!include_legacy);
             }
-            Command::ExtractAssets { .. } => panic!("must not enter asset command"),
+            Command::ExtractAssets { .. } | Command::ProbeLegacyText { .. } => {
+                panic!("must not enter asset command")
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_story_export_requires_explicit_opt_in() {
+        let cli = Cli::try_parse_from([
+            "pub",
+            "extract-text",
+            "legacy.pub",
+            "--output",
+            "private",
+            "--include-legacy",
+        ])
+        .expect("bounded legacy opt-in");
+        match cli.command {
+            Command::ExtractText { include_legacy, .. } => assert!(include_legacy),
+            _ => panic!("must enter Story extraction"),
+        }
+    }
+
+    #[test]
+    fn legacy_probe_cli_accepts_source_only_without_export_path() {
+        let cli = Cli::try_parse_from(["pub", "probe-legacy-text", "source.pub"])
+            .expect("legacy probe CLI shape");
+        match cli.command {
+            Command::ProbeLegacyText { file } => {
+                assert_eq!(file, PathBuf::from("source.pub"));
+            }
+            _ => panic!("must be the source-safe probe"),
         }
     }
 

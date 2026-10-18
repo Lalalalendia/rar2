@@ -1,0 +1,167 @@
+name: Rescue legacy real 1050-PUB batch replay
+
+on:
+  pull_request:
+    paths:
+      - 'tools/rescue_legacy_story_batch_acceptance_v1.py'
+      - '.github/workflows/rescue-legacy-story-batch-1050.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  producer:
+    name: Exact canonical Rust pub.exe producer (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: chaptera-rescue-legacy-batch-producer
+      - name: Compile canonical PUB CLI
+        run: cargo build -p chaptera-pub-cli --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-canonical-pub-legacy-linux
+          path: target/release/pub
+          if-no-files-found: error
+          retention-days: 2
+
+  real-batch:
+    name: Source-free legacy batch 525-PUB shard ${{ matrix.shard }}/2
+    needs: producer
+    runs-on: ubuntu-latest
+    timeout-minutes: 140
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: chaptera-canonical-pub-legacy-linux
+          path: ${{ runner.temp }}/pub-runtime
+      - name: Admit canonical executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/pub-runtime/pub"
+          python -m py_compile tools/rescue_legacy_story_batch_acceptance_v1.py
+      - name: Download pinned 1050 physical sources to ephemeral runner only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Lalalalendia/rar2/actions/artifacts/11038217075/zip" \
+            -o "$RUNNER_TEMP/pinned-publisher-1050.zip"
+          printf '%s  %s\n' \
+            "687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e" \
+            "$RUNNER_TEMP/pinned-publisher-1050.zip" | sha256sum --check --status
+      - name: Verify immutable old and new batch text under same queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.rescue_legacy_story_batch_acceptance_v1 \
+            --archive "$RUNNER_TEMP/pinned-publisher-1050.zip" \
+            --pub-cli "$RUNNER_TEMP/pub-runtime/pub" \
+            --shard "${{ matrix.shard }}" \
+            --receipt "$RUNNER_TEMP/legacy-batch-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-legacy-batch-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/legacy-batch-shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  aggregate:
+    name: Confirm 382 to 1011 on 1050 real PUB in Batch
+    needs: [producer, real-batch]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: source-free-legacy-batch-shard-*
+          path: receipts
+          merge-multiple: true
+      - name: Validate exact denominator and source-free total
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+          from collections import Counter
+          paths = sorted(glob.glob('receipts/legacy-batch-shard-*.json'))
+          if len(paths) != 2:
+              raise SystemExit('incomplete_real_batch_shards')
+          rows = [json.load(open(path, encoding='utf-8')) for path in paths]
+          if (sorted(row['shard'] for row in rows) != [0, 1]
+                  or any(row['schema_version'] != 'chaptera.rescue-legacy-batch-1050.v1'
+                         or not row['source_free'] or not row['originals_unchanged']
+                         or not row['same_profile_reuse'] or not row['tamper_fail_closed']
+                         or row['shards'] != 2 or row['source_count'] != 525
+                         or row['artifact_id'] != 11038217075
+                         or row['native_pub_repaired']
+                         for row in rows)):
+              raise SystemExit('untrusted_or_incomplete_real_batch_receipts')
+          counts = Counter()
+          for row in rows:
+              counts.update(row['status_counts'])
+          result = {
+              'schema_version': 'chaptera.rescue-legacy-batch-1050-aggregate.v1',
+              'source_free': True,
+              'exact_sources': sum(r['source_count'] for r in rows),
+              'source_bytes': sum(r['source_bytes'] for r in rows),
+              'baseline_verified_files': sum(r['baseline_verified_files'] for r in rows),
+              'baseline_ranges': sum(r['baseline_ranges'] for r in rows),
+              'final_verified_files': sum(r['final_verified_files'] for r in rows),
+              'final_ranges': sum(r['final_ranges'] for r in rows),
+              'new_legacy_verified_files': sum(r['new_legacy_verified_files'] for r in rows),
+              'status_counts': dict(sorted(counts.items())),
+              'source_immutable': True,
+              'same_profile_reuse': True,
+              'tamper_fail_closed': True,
+              'native_pub_repaired': False,
+          }
+          print(json.dumps(result, sort_keys=True))
+          with open('source-free-legacy-batch-1050-summary.json', 'w', encoding='utf-8') as out:
+              json.dump(result, out, indent=2, sort_keys=True)
+          if (result['exact_sources'] != 1050
+                  or sum(counts.values()) != 1050
+                  or any(k not in ('done_partial', 'done_unsupported') for k in counts)
+                  or result['baseline_verified_files'] != 382
+                  or result['baseline_ranges'] != 5506
+                  or result['new_legacy_verified_files'] != 629
+                  or result['final_verified_files'] != 1011
+                  or result['final_ranges'] != 11664):
+              raise SystemExit('measured_legacy_batch_replay_regression')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-free-legacy-batch-1050-aggregate
+          path: source-free-legacy-batch-1050-summary.json
+          if-no-files-found: warn
+          retention-days: 7

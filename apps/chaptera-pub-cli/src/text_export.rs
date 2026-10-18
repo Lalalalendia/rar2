@@ -43,6 +43,8 @@ struct TextEvidence {
     page_geometry_reconstructed: bool,
     story_count: usize,
     stories_txt_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unadmitted_story_count: Option<usize>,
     stories: Vec<StoryEvidence>,
 }
 
@@ -144,6 +146,72 @@ fn mature_story_records(
     Ok(records)
 }
 
+fn legacy_story_records(
+    graph: &PubSourceGraph,
+    expected_sha: Sha256Digest,
+    evidence_class: &'static str,
+) -> Result<(Vec<StoryEvidence>, usize)> {
+    ensure!(
+        graph.source.source_hash == expected_sha,
+        "legacy_source_sha_mismatch"
+    );
+    let mut records = Vec::new();
+    let mut accepted_bytes = 0usize;
+    let mut observed_bytes = 0usize;
+    let mut observed_stories = 0usize;
+    let mut omitted = 0usize;
+    for story in graph.stories.values() {
+        if story.text.is_empty() {
+            continue;
+        }
+        observed_bytes = observed_bytes.saturating_add(story.text.len());
+        let within_limits =
+            observed_stories < MAX_RECORDS && observed_bytes <= MAX_TOTAL_TEXT_BYTES;
+        observed_stories += 1;
+        let exact_text = story.source_refs.iter().find(|source_ref| {
+            source_ref.role == SourceRole::Semantic
+                && source_ref.authority == AuthorityClass::Authoritative
+                && source_ref.confidence == Some(ReadConfidence::Exact)
+                && source_ref.validate_primary_source(&graph.source).is_ok()
+                && source_ref
+                    .byte_range
+                    .is_some_and(|span| span.length > 0 && span.end().is_some())
+        });
+        let (Some(exact_text), Ok(end)) =
+            (exact_text, u32::try_from(story.text.encode_utf16().count()))
+        else {
+            omitted += 1;
+            continue;
+        };
+        if !within_limits {
+            omitted += 1;
+            continue;
+        }
+        let Some(span) = exact_text.byte_range else {
+            omitted += 1;
+            continue;
+        };
+        let record = StoryEvidence {
+            story_key: story.id.as_canonical().to_string(),
+            utf16_start: 0,
+            utf16_end: end,
+            utf8_byte_len: story.text.len(),
+            text_sha256: sha256(story.text.as_bytes()),
+            text: story.text.clone(),
+            evidence_class,
+            carrier: Some(exact_text.carrier.clone()),
+            carrier_byte_offset: Some(span.offset),
+            carrier_byte_len: Some(span.length),
+        };
+        // An ambiguous/overlarge record is omitted, never converted to a
+        // fabricated Story. The private manifest records this partial gap.
+        if add_record(&mut records, &mut accepted_bytes, record).is_err() {
+            omitted += 1;
+        }
+    }
+    Ok((records, omitted))
+}
+
 fn salvage_story_records(bytes: &[u8]) -> Result<Vec<StoryEvidence>> {
     let probe = pub_reader::probe_reader_salvage_candidate(bytes);
     ensure!(
@@ -193,16 +261,54 @@ fn salvage_story_records(bytes: &[u8]) -> Result<Vec<StoryEvidence>> {
 fn select_story_records(
     bytes: &[u8],
     source_sha: Sha256Digest,
-) -> Result<(&'static str, Vec<StoryEvidence>)> {
+    include_legacy: bool,
+) -> Result<(&'static str, Vec<StoryEvidence>, Option<usize>)> {
     let mature = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes), source_sha);
-    let (mode, mut records) = match mature {
+    let (mode, mut records, omitted) = match mature {
         Ok(build) => (
             "mature_0x2c_authoritative_story",
             mature_story_records(&build.graph, source_sha)?,
+            None,
         ),
+        Err(_) if include_legacy => {
+            if let Ok(build) =
+                pub_reader::build_legacy_0x22_quill_source_graph(Cursor::new(bytes), source_sha)
+            {
+                let (records, omitted) = legacy_story_records(
+                    &build.graph,
+                    source_sha,
+                    "legacy_0x22_quill_authoritative_exact",
+                )?;
+                (
+                    "legacy_0x22_quill_authoritative_story",
+                    records,
+                    Some(omitted),
+                )
+            } else if let Ok(build) =
+                pub_reader::build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_sha)
+            {
+                let (records, omitted) = legacy_story_records(
+                    &build.graph,
+                    source_sha,
+                    "legacy_0x22_noquill_authoritative_exact",
+                )?;
+                (
+                    "legacy_0x22_noquill_authoritative_story",
+                    records,
+                    Some(omitted),
+                )
+            } else {
+                (
+                    "eligible_corrupt_source_confirmed_quill",
+                    salvage_story_records(bytes)?,
+                    None,
+                )
+            }
+        }
         Err(_) => (
             "eligible_corrupt_source_confirmed_quill",
             salvage_story_records(bytes)?,
+            None,
         ),
     };
     ensure!(!records.is_empty(), "no_confirmed_story_text");
@@ -230,7 +336,7 @@ fn select_story_records(
         }
         previous = Some(record);
     }
-    Ok((mode, records))
+    Ok((mode, records, omitted))
 }
 
 fn render_text(records: &[StoryEvidence]) -> Vec<u8> {
@@ -329,7 +435,7 @@ fn commit_story_outputs(
     write_result
 }
 
-pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
+pub(crate) fn extract_text(file: &Path, output: &Path, include_legacy: bool) -> Result<usize> {
     let admitted = AdmittedSource::open(file).map_err(anyhow::Error::msg)?;
     let bytes = admitted.bytes();
     let source_hash = super::source_sha256(bytes);
@@ -337,7 +443,8 @@ pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
         source_hash.to_string() == admitted.sha256(),
         "source_snapshot_sha_mismatch"
     );
-    let (mode, records) = select_story_records(bytes, source_hash)?;
+    let (mode, records, unadmitted_story_count) =
+        select_story_records(bytes, source_hash, include_legacy)?;
 
     // No private filename/path is recorded; these artifacts live only under
     // the operator-selected local output directory.
@@ -356,6 +463,7 @@ pub(crate) fn extract_text(file: &Path, output: &Path) -> Result<usize> {
         page_geometry_reconstructed: false,
         story_count: records.len(),
         stories_txt_sha256: sha256(&text_bytes),
+        unadmitted_story_count,
         stories: records,
     };
     let mut json_bytes =

@@ -16,13 +16,21 @@ MAX_SOURCE_BYTES = 128 * 1024 * 1024
 MAX_MANIFEST_BYTES = 24 * 1024 * 1024
 MAX_TEXT_BYTES = 20 * 1024 * 1024
 MAX_STORIES = 16_384
+LEGACY_EXACT = {
+    "legacy_0x22_quill_authoritative_story":
+        "legacy_0x22_quill_authoritative_exact",
+    "legacy_0x22_noquill_authoritative_story":
+        "legacy_0x22_noquill_authoritative_exact",
+}
 EVIDENCE_CLASSES = frozenset({
     "mature_authoritative_exact",
     "salvage_confirmed_quill_text_range",
+    *LEGACY_EXACT.values(),
 })
 EXTRACTION_CLASSES = frozenset({
     "mature_0x2c_authoritative_story",
     "eligible_corrupt_source_confirmed_quill",
+    *LEGACY_EXACT.keys(),
 })
 
 
@@ -79,6 +87,14 @@ def verify(source: Path, output: Path) -> dict:
             or record.get("stories_txt_sha256") != sha256(raw_txt)):
         raise StoryEvidenceError("source_or_manifest_authority_mismatch")
 
+    legacy_class = record["extraction_class"] in LEGACY_EXACT
+    if legacy_class:
+        omitted = record.get("unadmitted_story_count")
+        if type(omitted) is not int or not 0 <= omitted <= MAX_STORIES:
+            raise StoryEvidenceError("invalid_legacy_omitted_count")
+    elif "unadmitted_story_count" in record:
+        raise StoryEvidenceError("nonlegacy_unadmitted_count")
+
     stories = record.get("stories")
     if (not isinstance(stories, list) or not stories
             or len(stories) > MAX_STORIES
@@ -110,8 +126,11 @@ def verify(source: Path, output: Path) -> dict:
         evidence = entry.get("evidence_class")
         if evidence not in EVIDENCE_CLASSES:
             raise StoryEvidenceError("unknown_evidence_class")
-        if evidence == "mature_authoritative_exact":
-            if (record["extraction_class"] != "mature_0x2c_authoritative_story"
+        if evidence == "mature_authoritative_exact" or evidence in LEGACY_EXACT.values():
+            expected_class = ("mature_authoritative_exact" if
+                              record["extraction_class"] == "mature_0x2c_authoritative_story"
+                              else LEGACY_EXACT.get(record["extraction_class"]))
+            if (evidence != expected_class
                     or not isinstance(entry.get("carrier"), str)
                     or not entry["carrier"]
                     or type(entry.get("carrier_byte_offset")) is not int
@@ -119,7 +138,10 @@ def verify(source: Path, output: Path) -> dict:
                     or entry["carrier_byte_offset"] < 0
                     or entry["carrier_byte_len"] <= 0
                     or entry["carrier_byte_offset"] + entry["carrier_byte_len"] > 2**64 - 1):
-                raise StoryEvidenceError("unverified_mature_story_provenance")
+                raise StoryEvidenceError(
+                    "unverified_mature_story_provenance" if
+                    evidence == "mature_authoritative_exact" else
+                    "unverified_legacy_story_provenance")
         elif record["extraction_class"] != "eligible_corrupt_source_confirmed_quill":
             raise StoryEvidenceError("salvage_story_class_mismatch")
         marker = (key, start, end)
