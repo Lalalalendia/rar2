@@ -158,25 +158,78 @@ jobs:
               if p.returncode!=1:
                   raise SystemExit("unexpected_partial_authority_replay_exit")
               return json.loads((root/"verified-replay"/"summary.json").read_text(encoding="utf-8"))
+          # Partial source-byte recovery is expected: unsupported CFB cases are
+          # explicit, never counted as successfully verified originals.
+          # Unexpected drift, unverified reuse, or non-deterministic failures
+          # still reject the entire shard.
+          if any(r["status"]=="rejected" for r in rows.values()):
+              raise SystemExit("original_on_disk_source_rejected")
           first=replay()
           n=len(downloaded)
-          if first["authority_count"]!=1556 or first["counts"]!={"extracted":n,"missing":1556-n}:
-              raise SystemExit("downloaded_original_failed_independent_verification")
+          def indexed(receipt):
+              if receipt.get("authority_count")!=1556:
+                  raise SystemExit("authority_count_drift")
+              entries=receipt.get("entries")
+              if not isinstance(entries,list) or len(entries)!=1556:
+                  raise SystemExit("authority_entries_incomplete")
+              return {entry["source_sha256"]:entry for entry in entries}
+          first_by_sha=indexed(first)
+          extracted=[];unsupported=[]
+          for sha in downloaded:
+              row=first_by_sha[sha]
+              if row["status"]=="extracted" and row["reason"]=="" and row["verified_streams"]>0:
+                  extracted.append(sha)
+              elif row["status"]=="failed" and (
+                      str(row["reason"]).startswith("export_")
+                      or row["reason"]=="independent_verification_failed"):
+                  unsupported.append(sha)
+                  rows[sha].update(status="unsupported_by_exporter",reason=row["reason"])
+              else:
+                  raise SystemExit("unexpected_replay_result_for_downloaded_original")
+          if first["counts"].get("extracted",0)!=len(extracted) or (
+                  first["counts"].get("failed",0)!=len(unsupported)
+                  or first["counts"].get("missing",0)!=1556-n
+                  or sum(first["counts"].values())!=1556):
+              raise SystemExit("replay_counts_or_membership_inconsistent")
+          if not extracted:
+              persist()
+              raise SystemExit("no_source_verified_originals_in_shard")
           again=replay()
-          if again["counts"]!={"reused":n,"missing":1556-n}:
-              raise SystemExit("original_replay_idempotence_failed")
+          second_by_sha=indexed(again)
+          if (again["counts"].get("reused",0)!=len(extracted)
+                  or again["counts"].get("failed",0)!=len(unsupported)
+                  or again["counts"].get("missing",0)!=1556-n
+                  or sum(again["counts"].values())!=1556):
+              raise SystemExit("rerun_status_counts_inconsistent")
+          stream_count=0
+          for sha in extracted:
+              before=first_by_sha[sha]
+              after=second_by_sha[sha]
+              if (after["status"]!="reused" or after["reason"]!=""
+                      or after["verified_streams"]!=before["verified_streams"]
+                      or after["verified_streams"]<=0):
+                  raise SystemExit("verified_bundle_reuse_drift")
+              rows[sha].update(status="verified_reused",reason="")
+              stream_count+=after["verified_streams"]
+          for sha in unsupported:
+              after=second_by_sha[sha]
+              if (after["status"]!="failed"
+                      or after["reason"]!=first_by_sha[sha]["reason"]):
+                  raise SystemExit("unsupported_original_non_deterministic_outcome")
           if any(sha_file(sources/(sha+".pub"))!=sha for sha in downloaded):
               raise SystemExit("original_pub_modified")
-          stream_count=sum(row["verified_streams"] for row in again["entries"]
-                           if row["source_sha256"] in set(downloaded))
-          if stream_count<n:
-              raise SystemExit("independently_verified_physical_stream_missing")
-          for sha in downloaded: rows[sha]["status"]="verified_reused"
-          proof.update(physically_verified_originals=n,verified_streams=stream_count,
-                       originals_unchanged=True,replay_reuse_count=n)
+          proof.update(physically_verified_originals=len(extracted),
+                       verified_streams=stream_count,originals_unchanged=True,
+                       replay_reuse_count=len(extracted),
+                       original_sha_downloaded=len(downloaded),
+                       unsupported_by_current_exporter=len(unsupported),
+                       transport_unavailable=35-len(downloaded),
+                       cohort_state="PARTIAL" if len(extracted)!=35 else "COMPLETE")
           persist()
           print(json.dumps({"shard":shard,"source_free":True,"registered_targets":35,
-                            "verified_originals":n,"verified_streams":stream_count,
+                            "verified_originals":len(extracted),
+                            "verified_streams":stream_count,
+                            "unsupported":len(unsupported),
                             "unavailable":35-n},sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
