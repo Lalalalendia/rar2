@@ -41,7 +41,7 @@ jobs:
             "https://api.github.com/repos/HeisLuka/rar/actions/artifacts/10812415542/zip" \
             -o "$RUNNER_TEMP/historical-source-free-postm1.zip"
           printf '%s  %s\n' \
-            "e773f22e0ee2efa1851485b16fd954d76cbe970eccb20cc41733403d1f03301b" \
+            "e773f22e0ee2efa1851485b16fd954d76bce970eccb20cc41733403d1f03301b" \
             "$RUNNER_TEMP/historical-source-free-postm1.zip" | sha256sum --check --status
       - name: Retrieve pinned accepted 1050 SHA-only ledger
         shell: bash
