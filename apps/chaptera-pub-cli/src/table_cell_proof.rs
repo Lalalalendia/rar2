@@ -283,7 +283,7 @@ fn prove_story(graph: &PubSourceGraph, story: &Story, contents: &[u8]) -> Result
 
 // Exactly the same one source-authority stream as canonical pub-reader,
 // including its constrained no-Quill direct-root fallback.
-fn source_contents(bytes: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn source_contents(bytes: &[u8]) -> Option<Vec<u8>> {
     if let Ok(contents) = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS) {
         return Some(contents);
     }
@@ -365,6 +365,109 @@ pub(crate) fn probe(file: &Path) -> Result<TableCellProofReceipt> {
         "table_cell_proof_candidate_partition"
     );
     Ok(receipt)
+}
+
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VerifiedTableCell {
+    pub row: u32,
+    pub column: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
+    pub carrier_byte_offset: u64,
+    pub carrier_byte_len: u64,
+    pub cell_text_sha256: String,
+    pub boundary_byte_offset: u64,
+    pub boundary_byte_len: u64,
+    pub boundary_sha256: String,
+    pub virtual_cr_before: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct VerifiedTableStory {
+    pub story_key: String,
+    pub text: String,
+    pub projection_byte_offset: u64,
+    pub projection_byte_len: u64,
+    pub rows: u32,
+    pub columns: u32,
+    pub cells: Vec<VerifiedTableCell>,
+}
+
+/// Returns only source-exact byte-verified table projections. This deliberately
+/// does not mark any aggregate Projection as Semantic, and it does not mutate
+/// existing graph entries or the original PUB.
+pub(crate) fn collect_verified_tables(
+    graph: &PubSourceGraph,
+    pub_bytes: &[u8],
+) -> Result<(Vec<VerifiedTableStory>, usize)> {
+    use sha2::{Digest, Sha256};
+
+    let contents = source_contents(pub_bytes)
+        .ok_or_else(|| anyhow::anyhow!("legacy_table_contents_unavailable"))?;
+    let mut admitted = Vec::new();
+    let mut refused = 0usize;
+    for story in graph.stories.values() {
+        if story.text.is_empty()
+            || !legacy_probe::safe_story_key(&story.id.as_canonical().to_string())
+            || !legacy_probe::is_projection_only_exact(graph, story)
+        {
+            continue;
+        }
+        if prove_story(graph, story, &contents).is_err() {
+            refused += 1;
+            continue;
+        }
+        let owner = graph.nodes.values().find(|node| {
+            node.payload
+                .table
+                .as_ref()
+                .is_some_and(|table| table.story_id == Some(story.id))
+        }).ok_or_else(|| anyhow::anyhow!("verified_table_owner_missing"))?;
+        let table = owner.payload.table.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("verified_table_payload_missing"))?;
+        let (_, projected_start, projected_end) = unique_source_range(
+            &story.source_refs, graph, &contents,
+            SourceRole::Projection, "legacy_table_text_projection",
+        ).ok_or_else(|| anyhow::anyhow!("verified_table_projection_missing"))?;
+        let mut cells = Vec::with_capacity(table.cells.len());
+        for (index, cell) in table.cells.iter().enumerate() {
+            let coords = cell.coordinates
+                .ok_or_else(|| anyhow::anyhow!("verified_table_coordinates_missing"))?;
+            let (cell_bytes, start, end) = unique_source_range(
+                &cell.source_refs, graph, &contents,
+                SourceRole::Semantic, "legacy_table_cell_text",
+            ).ok_or_else(|| anyhow::anyhow!("verified_table_cell_carrier_missing"))?;
+            let (boundary_bytes, boundary_start, boundary_end) = unique_source_range(
+                &cell.source_refs, graph, &contents,
+                SourceRole::Relation, "legacy_table_cell_boundary",
+            ).ok_or_else(|| anyhow::anyhow!("verified_table_boundary_missing"))?;
+            cells.push(VerifiedTableCell {
+                row: coords.start_row,
+                column: coords.start_column,
+                utf16_start: cell.utf16_start,
+                utf16_end: cell.utf16_end,
+                carrier_byte_offset: u64::try_from(start)?,
+                carrier_byte_len: u64::try_from(end - start)?,
+                cell_text_sha256: format!("{:x}", Sha256::digest(cell_bytes)),
+                boundary_byte_offset: u64::try_from(boundary_start)?,
+                boundary_byte_len: u64::try_from(boundary_end - boundary_start)?,
+                boundary_sha256: format!("{:x}", Sha256::digest(boundary_bytes)),
+                virtual_cr_before: index != 0,
+            });
+        }
+        admitted.push(VerifiedTableStory {
+            story_key: story.id.as_canonical().to_string(),
+            text: story.text.clone(),
+            projection_byte_offset: u64::try_from(projected_start)?,
+            projection_byte_len: u64::try_from(projected_end - projected_start)?,
+            rows: table.rows,
+            columns: table.columns,
+            cells,
+        });
+    }
+    Ok((admitted, refused))
 }
 
 #[cfg(test)]

@@ -396,7 +396,7 @@ fn assert_matching_existing(
     Ok(())
 }
 
-fn commit_story_outputs(
+pub(crate) fn commit_story_outputs(
     admitted: &AdmittedSource,
     output: &Path,
     json: &[u8],
