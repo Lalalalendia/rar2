@@ -357,7 +357,45 @@ try {
     await page.locator("#pub-file").setInputFiles(source);
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
-    assert.equal(await page.locator("#pages svg.page").count(), fixturePages);
+    // The product Reader now holds only the visible window. Every effective
+    // page is tested by jumping to its PageId, then comparing the actual
+    // product SVG markup against the independent full-renderer oracle.
+    const fullOracleMarkup = await page.evaluate(async (scene) => {
+      const { renderReaderScene } = await import("/render-v1.mjs");
+      const host = document.createElement("div");
+      host.id = "oracle-pages";
+      host.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:26px;min-width:100%;width:max-content";
+      await renderReaderScene(host, scene, { emuPerCssPx: 9525, maxPageWidth: 920 });
+      window.__fullReaderOracle = host;
+      return Object.fromEntries([...host.children].map(svg => [svg.dataset.pageId, svg.innerHTML]));
+    }, scene);
+    assert.equal(Object.keys(fullOracleMarkup).length, fixturePages);
+    const orderedEffective = [...scene.pages].sort((left, right) => left.order - right.order);
+    for (let index = 0; index < orderedEffective.length; index++) {
+      const id = orderedEffective[index].page_id;
+      await page.locator("#page-select").selectOption(String(index));
+      await page.waitForFunction((expectedId) =>
+        [...document.querySelectorAll("#pages > svg.page")].some(svg => svg.dataset.pageId === expectedId), id);
+      const actualMarkup = await page.evaluate((expectedId) =>
+        [...document.querySelectorAll("#pages > svg.page")]
+          .find(svg => svg.dataset.pageId === expectedId)?.innerHTML ?? null, id);
+      assert.equal(actualMarkup, fullOracleMarkup[id],
+        "viewport product SVG markup must match independent full Scene for " + id);
+      assert.ok(await page.locator("#pages > svg.page").count() <= fixturePages,
+        "product window cannot mount pages absent from the effective manifest");
+    }
+    // The physical source-backed raster census below deliberately uses the
+    // original full renderer, as it did before viewport virtualization.
+    // It is separate from the product PageId-by-PageId equivalence above.
+    await page.evaluate(() => {
+      const oracle = window.__fullReaderOracle;
+      if (!oracle) throw new Error("full Reader oracle not prepared");
+      const old = document.querySelector("#pages");
+      if (!old) throw new Error("product Reader window not found");
+      old.replaceWith(oracle);
+      document.querySelector("#viewer").scrollTop = 0;
+      delete window.__fullReaderOracle;
+    });
     let hostImagePaintProof = null;
     if (requiredHostImageCount !== null) {
       const admitted = (scene.resources ?? [])
@@ -368,7 +406,7 @@ try {
         "host image paint evidence must start with the exact admitted resource set");
       assert.equal(new Set(admitted).size, requiredHostImageCount,
         "host image paint evidence requires unique admitted resource identities");
-      const paintedIds = await page.locator("#pages svg image[data-resource-id]").evaluateAll(async (elements) => {
+      const paintedIds = await page.locator("#oracle-pages svg image[data-resource-id]").evaluateAll(async (elements) => {
         const ids = [];
         for (const element of elements) {
           const id = element.getAttribute("data-resource-id");
@@ -408,7 +446,7 @@ try {
           .filter((node) => node.page_id === pageModel.page_id)
           .map((node) => node.node_id)
       }));
-    const paintedNodeOrderByPage = await page.locator("#pages svg.page").evaluateAll((pages) => pages.map((svg) => ({
+    const paintedNodeOrderByPage = await page.locator("#oracle-pages svg.page").evaluateAll((pages) => pages.map((svg) => ({
       page_id: svg.dataset.pageId,
       node_ids: [...svg.querySelectorAll(":scope > g[data-node-id]")].map((node) => node.dataset.nodeId)
     })));
@@ -427,7 +465,7 @@ try {
       const sizeSources = new Set(["shared_resolved_plan", "source_uniform_preview", "generic_9pt"]);
       const byKind = {}, byReason = {}, bySizeSource = {}, byPage = {}, byPageCause = {};
       const paintBoundsEmu = [];
-      const pages = [...document.querySelectorAll("#pages svg.page")];
+      const pages = [...document.querySelectorAll("#oracle-pages svg.page")];
       const pagePaintBoundsEmu = (element) => {
         const svg = element.closest("svg.page");
         const pageBounds = svg?.getBoundingClientRect() ?? null;
@@ -572,7 +610,7 @@ try {
         else assert.fail("shared text must not collapse to tiny specks");
       }
     }
-    await page.locator("#pages").scrollIntoViewIfNeeded();
+    await page.locator("#oracle-pages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
     // Pure page rasters remove only ancestor viewport clipping for capture.
     await page.locator(".viewer").evaluate((element) => { element.style.height = "auto"; element.style.overflow = "visible"; });
@@ -594,7 +632,7 @@ try {
         "reference raster DPI must map to an exact supported browser zoom"
       );
       await page.locator("#zoom-select").selectOption(referenceZoom);
-      await page.locator("#pages svg.page").evaluateAll((svgs, argument) => {
+      await page.locator("#oracle-pages svg.page").evaluateAll((svgs, argument) => {
         const byId = new Map(argument.pages.map((entry) => [entry.page_id, entry]));
         for (const svg of svgs) {
           const geometry = byId.get(svg.dataset.pageId);
@@ -603,7 +641,7 @@ try {
           svg.setAttribute("height", String(Math.round(geometry.height_emu / argument.emuPerPixel)));
         }
       }, { pages: orderedPageGeometry, emuPerPixel });
-      const capturedPageSizes = await page.locator("#pages svg.page").evaluateAll((svgs) =>
+      const capturedPageSizes = await page.locator("#oracle-pages svg.page").evaluateAll((svgs) =>
         svgs.map((svg) => {
           const bounds = svg.getBoundingClientRect();
           return { width: bounds.width, height: bounds.height };
@@ -623,7 +661,7 @@ try {
     const screenshots = [];
     for (let i = 0; i < fixturePages; i++) {
       const filename = `${fixture.name}-page-${i + 1}.png`;
-      const pageSvg = page.locator("#pages svg.page").nth(i);
+      const pageSvg = page.locator("#oracle-pages svg.page").nth(i);
       if (referenceRasterDpi > 0) {
         await pageSvg.evaluate((svg) => {
           svg.style.position = "fixed";
@@ -656,7 +694,7 @@ try {
     if (ephemeralTextGeometryPath) {
       assert.equal(fixturePages, 1,
         "source-private per-line comparison requires a single page");
-      const measured = await page.locator("#pages svg.page").first().evaluate((svg) => {
+      const measured = await page.locator("#oracle-pages svg.page").first().evaluate((svg) => {
         const pageBounds = svg.getBoundingClientRect();
         return [...svg.querySelectorAll('text[data-text-authority="server-shared-resolved"]')]
           .map((line) => {

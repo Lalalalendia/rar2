@@ -303,6 +303,12 @@ body.reader-open .open-card{display:none}
   min-width:100%;
   width:max-content;
 }
+.page-window-spacer{
+  flex:none;
+  width:1px;
+  min-height:0;
+  pointer-events:none;
+}
 .page{
   display:block;
   flex:none;
@@ -438,6 +444,6 @@ summary{padding:4px 0;color:#dfe6ef;font-size:12px;font-weight:700;cursor:pointe
 }
 @media(forced-colors:active){
   .topbar,.open-card,.reader,.drop,.compatibility,.contribution{border-color:CanvasText}
-  .page{border:1px solid CanvasText}
+  .page{outline:1px solid CanvasText;outline-offset:0}
   button,.topbar-open,.brand-mark{forced-color-adjust:auto}
 }

@@ -1,4 +1,4 @@
-import { renderReaderScene } from "./render-v1.mjs";
+import { prepareReaderScene, renderPreparedReaderPages } from "./render-v1.mjs";
 import { BrowserObservabilityV1, traceHeadersV1 } from "./observability-v1.mjs";
 import {
   EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
@@ -21,9 +21,15 @@ const storyText = $("#story-text");
 const AUTO_MAX_PAGE_WIDTH = 960;
 let scene = null;
 let pages = [];
+let preparedScene = null;
+let pageOffsets = [];
+let mountedPageIds = "";
+const PAGE_GAP = 26;
+const WINDOW_OVERSCAN_PAGES = 1;
 let generation = 0;
 let pending = null;
 let pageIndex = 0;
+let navigationTarget = null;
 let contributionContext = null;
 let contributionExpiry = null;
 let openingFocusTarget = null;
@@ -146,6 +152,12 @@ function clearReader() {
   clearCompatibilityReport();
   scene = null;
   pages = [];
+  pageIndex = 0;
+  navigationTarget = null;
+  preparedScene = null;
+  pageOffsets = [];
+  mountedPageIds = "";
+  pagesHost.style.width = "";
   pagesHost.replaceChildren();
   $("#reader").hidden = true;
   document.body.classList.remove("reader-open");
@@ -191,26 +203,111 @@ function updatePageControls(index) {
   $("#next-page").disabled = pageIndex >= pages.length - 1;
 }
 
+function pageScale(page) {
+  const naturalWidth = page.width_emu / EMU_PER_CSS_PX;
+  const availableWidth = Math.max(120, viewer.clientWidth - (innerWidth < 600 ? 24 : 48));
+  const comfortableWidth = Math.min(availableWidth, AUTO_MAX_PAGE_WIDTH);
+  return zoomSelect.value === "fit"
+    ? Math.min(2, comfortableWidth / naturalWidth)
+    : Number(zoomSelect.value);
+}
+
+function pageHeight(index) {
+  return pages[index].height_emu / EMU_PER_CSS_PX * pageScale(pages[index]);
+}
+
+function recomputeOffsets() {
+  pageOffsets = new Array(pages.length + 1);
+  pageOffsets[0] = 0;
+  let maxPageWidth = 0;
+  for (let i = 0; i < pages.length; i++) {
+    pageOffsets[i + 1] = pageOffsets[i] + pageHeight(i) + (i + 1 < pages.length ? PAGE_GAP : 0);
+    maxPageWidth = Math.max(maxPageWidth, pages[i].width_emu / EMU_PER_CSS_PX * pageScale(pages[i]));
+  }
+  // A virtual window can omit the widest page. Keep horizontal centering
+  // and scroll extent stable regardless of which SVGs are mounted.
+  pagesHost.style.width = maxPageWidth + "px";
+}
+
+// The upper/lower spacers have the exact omitted heights (including gaps).
+// The existing flex gap is retained between the mounted page SVGs.
+function updateWindow() {
+  if (!preparedScene || !pages.length || !pageOffsets.length) return;
+  const t = Math.max(0, viewer.scrollTop);
+  const bottom = t + viewer.clientHeight;
+  // Binary-search the complete page geometry rather than scanning all
+  // pages on each scroll; only the selected window is materialized as SVG.
+  const first = Math.max(0, pageAtScroll(t) - WINDOW_OVERSCAN_PAGES);
+  const last = Math.min(pages.length - 1,
+    Math.max(first, pageAtScroll(Math.max(t, bottom - 1)) + WINDOW_OVERSCAN_PAGES));
+  const ids = pages.slice(first, last + 1).map(p => p.page_id);
+  const key = JSON.stringify(ids);
+  if (key === mountedPageIds) return;
+  const staging = document.createElement("div");
+  renderPreparedReaderPages(staging, preparedScene, ids);
+  const top = document.createElement("div");
+  top.className = "page-window-spacer";
+  top.style.height = Math.max(0, pageOffsets[first] - (first > 0 ? PAGE_GAP : 0)) + "px";
+  const tail = document.createElement("div");
+  tail.className = "page-window-spacer";
+  tail.style.height = Math.max(0, pageOffsets[pages.length] - pageOffsets[last + 1]) + "px";
+  for (let index = first; index <= last; index++) {
+    const svg = staging.children[index - first];
+    svg.setAttribute("aria-label", "Page " + (index + 1) + " of " + pages.length);
+    const scale = pageScale(pages[index]);
+    svg.setAttribute("width", pages[index].width_emu / EMU_PER_CSS_PX * scale);
+    svg.setAttribute("height", pageHeight(index));
+  }
+  // Empty spacers are removed when no pages are omitted; avoid introducing
+  // an additional CSS flex gap at a document boundary.
+  const children = [];
+  if (first > 0) children.push(top);
+  children.push(...staging.childNodes);
+  if (last + 1 < pages.length) children.push(tail);
+  pagesHost.replaceChildren(...children);
+  mountedPageIds = key;
+}
+
+function pageAtScroll(t) {
+  let lo = 0, hi = pages.length - 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    if (pageOffsets[mid] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 function goToPage(index) {
   if (!pages.length) return;
   updatePageControls(index);
-  const element = pagesHost.children[pageIndex];
-  viewer.scrollTop += element.getBoundingClientRect().top - viewer.getBoundingClientRect().top - 12;
+  viewer.scrollTop = pageOffsets[pageIndex];
+  updateWindow();
+  // For pages shorter than the viewport the browser may clamp scrollTop.
+  // Keep an explicitly requested PageId selected until a real scroll occurs.
+  navigationTarget = { index: pageIndex, scrollTop: viewer.scrollTop };
 }
 
 function applyZoom() {
-  if (!scene) return;
-  const availableWidth = Math.max(120, viewer.clientWidth - (innerWidth < 600 ? 24 : 48));
-  const comfortableWidth = Math.min(availableWidth, AUTO_MAX_PAGE_WIDTH);
-  for (let index = 0; index < pages.length; index += 1) {
-    const page = pages[index];
-    const naturalWidth = page.width_emu / EMU_PER_CSS_PX;
-    const scale = zoomSelect.value === "fit"
-      ? Math.min(2, comfortableWidth / naturalWidth)
-      : Number(zoomSelect.value);
-    const svg = pagesHost.children[index];
-    svg.setAttribute("width", naturalWidth * scale);
-    svg.setAttribute("height", page.height_emu / EMU_PER_CSS_PX * scale);
+  if (!scene || !pages.length) return;
+  const current = navigationTarget?.index ??
+    (pageOffsets.length ? pageAtScroll(Math.max(0, viewer.scrollTop)) : pageIndex);
+  const offsetInPage = pageOffsets.length ? Math.max(0, viewer.scrollTop - pageOffsets[current]) : 0;
+  // The zoom selector already contains the NEW scale, so pageHeight(current)
+  // would incorrectly measure the new page. Use the OLD prefix offsets to
+  // preserve the user's relative position inside the current PageId.
+  const oldPageHeight = pageOffsets.length
+    ? pageOffsets[current + 1] - pageOffsets[current]
+      - (current + 1 < pages.length ? PAGE_GAP : 0)
+    : pageHeight(current);
+  const normalized = Math.min(1, offsetInPage / Math.max(1, oldPageHeight));
+  recomputeOffsets();
+  mountedPageIds = "";
+  viewer.scrollTop = pageOffsets[current] + normalized * pageHeight(current);
+  updateWindow();
+  if (navigationTarget) {
+    navigationTarget = { index: current, scrollTop: viewer.scrollTop };
+    updatePageControls(current);
   }
 }
 
@@ -361,21 +458,18 @@ function showDetails() {
 async function render(payload, operation) {
   const ordered = orderedPages(payload);
   if (!ordered.length) throw new Error("scene_protocol_mismatch");
-  // Render off-screen. A slow font/resource activation from an older open
-  // must never publish its result into the current reading session.
-  const staging = document.createElement("div");
-  await renderReaderScene(staging, payload, { emuPerCssPx: EMU_PER_CSS_PX, maxPageWidth: 920 });
+  // One font/Scene preparation per open; SVGs are now created on demand.
+  const prepared = await prepareReaderScene(payload, { emuPerCssPx: EMU_PER_CSS_PX, maxPageWidth: 920 });
   if (!isCurrent(operation)) return false;
   scene = payload;
   pages = ordered;
-  pagesHost.replaceChildren(...staging.childNodes);
+  preparedScene = prepared;
   pageSelect.replaceChildren();
   pages.forEach((page, index) => {
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = (index + 1) + " of " + pages.length;
     pageSelect.appendChild(option);
-    pagesHost.children[index].setAttribute("aria-label", "Page " + (index + 1) + " of " + pages.length);
   });
   const partial = payload.fidelity?.state !== "supported";
   $("#fidelity").textContent = partial ? "Some elements may display inaccurately." : "";
@@ -642,7 +736,7 @@ for (const name of ["dragenter", "dragover", "dragleave", "drop"]) {
 pageSelect.addEventListener("change", () => goToPage(Number(pageSelect.value)));
 $("#previous-page").addEventListener("click", () => goToPage(pageIndex - 1));
 $("#next-page").addEventListener("click", () => goToPage(pageIndex + 1));
-zoomSelect.addEventListener("change", () => { applyZoom(); goToPage(pageIndex); });
+zoomSelect.addEventListener("change", () => { applyZoom(); });
 viewer.addEventListener("keydown", (event) => {
   if (["PageDown", "PageUp", "ArrowRight", "ArrowLeft"].includes(event.key)) {
     event.preventDefault();
@@ -650,15 +744,15 @@ viewer.addEventListener("keydown", (event) => {
   }
 });
 viewer.addEventListener("scroll", () => {
-  if (!pages.length) return;
-  const top = viewer.getBoundingClientRect().top;
-  let closest = 0;
-  let distance = Infinity;
-  [...pagesHost.children].forEach((element, index) => {
-    const delta = Math.abs(element.getBoundingClientRect().top - top - 12);
-    if (delta < distance) { closest = index; distance = delta; }
-  });
-  updatePageControls(closest);
+  if (!pages.length || !pageOffsets.length) return;
+  updateWindow();
+  if (navigationTarget && Math.abs(viewer.scrollTop - navigationTarget.scrollTop) <= 1) {
+    updatePageControls(navigationTarget.index);
+    return;
+  }
+  navigationTarget = null;
+  const current = pageAtScroll(Math.max(0, viewer.scrollTop + 12));
+  updatePageControls(current);
 });
 new ResizeObserver(() => { if (zoomSelect.value === "fit") applyZoom(); }).observe(viewer);
 const detailsDialog = $("#details-dialog");
