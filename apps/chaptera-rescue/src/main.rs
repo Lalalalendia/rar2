@@ -1,6 +1,7 @@
 mod batch_ui;
 #[cfg(windows)]
 mod engine_job;
+mod ui_theme;
 
 use eframe::egui;
 use pub_reader::{FailureIntakeClass, classify_failure_candidate};
@@ -66,6 +67,13 @@ struct SelfCheck {
     recovery_execution_embedded: bool,
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum RescueView {
+    #[default]
+    Batch,
+    Evidence,
+}
+
 #[derive(Default)]
 struct RescueApp {
     source_path: String,
@@ -77,6 +85,7 @@ struct RescueApp {
     report_path: String,
     report_status: Option<String>,
     batch_ui: batch_ui::BatchUi,
+    view: RescueView,
 }
 
 fn is_lower_sha256(value: &str) -> bool {
@@ -206,11 +215,21 @@ fn write_report(
 }
 
 impl RescueApp {
-    fn inspect_source(&mut self) {
-        let path = PathBuf::from(self.source_path.trim());
+    fn invalidate_receipt_proof(&mut self) {
         self.receipt = None;
         self.receipt_status = None;
         self.report_status = None;
+    }
+
+    fn invalidate_source_proof(&mut self) {
+        self.source_sha256 = None;
+        self.source_status = None;
+        self.invalidate_receipt_proof();
+    }
+
+    fn inspect_source(&mut self) {
+        let path = PathBuf::from(self.source_path.trim());
+        self.invalidate_receipt_proof();
 
         if path
             .extension()
@@ -281,10 +300,154 @@ impl RescueApp {
     }
 }
 
+impl RescueApp {
+    fn draw_evidence(&mut self, ui: &mut egui::Ui) {
+        use egui::RichText;
+        ui_theme::kicker(ui, "PROVENANCE & VERIFICATION");
+        ui_theme::headline(
+            ui,
+            "Validate evidence",
+            "Inspect a local PUB and a matching receipt before exporting an independent report.",
+        );
+        ui.add_space(18.0);
+        ui_theme::card(ui, |ui| {
+            ui.label(
+                RichText::new("01  /  ORIGINAL PUB")
+                    .size(12.0)
+                    .strong()
+                    .color(ui_theme::accent()),
+            );
+            ui.label(
+                RichText::new("Source identity")
+                    .size(19.0)
+                    .strong()
+                    .color(ui_theme::ink()),
+            );
+            ui.label(RichText::new("Choose a local .pub file. This operation reads the source and computes its SHA-256; it never edits the file.").color(ui_theme::muted()));
+            let width = ui.available_width();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.source_path)
+                        .hint_text("C:\\Documents\\original.pub")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.invalidate_source_proof();
+            }
+            if ui.button("Inspect source").clicked() {
+                self.inspect_source();
+            }
+            if let Some(status) = &self.source_status {
+                ui.label(RichText::new(status).color(ui_theme::muted()));
+            }
+        });
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            ui.label(
+                RichText::new("02  /  VALIDATION")
+                    .size(12.0)
+                    .strong()
+                    .color(ui_theme::accent()),
+            );
+            ui.label(
+                RichText::new("Verified Rescue receipt")
+                    .size(19.0)
+                    .strong()
+                    .color(ui_theme::ink()),
+            );
+            ui.label(RichText::new("Only a source-matched canonical Rescue receipt is accepted. An uploaded or unverified result is not evidence.").color(ui_theme::muted()));
+            let width = ui.available_width();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.receipt_path)
+                        .hint_text("C:\\Reports\\product-validation.json")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.invalidate_receipt_proof();
+            }
+            if ui.button("Load validated receipt").clicked() {
+                self.load_receipt();
+            }
+            if let Some(status) = &self.receipt_status {
+                ui.label(RichText::new(status).color(ui_theme::muted()));
+            }
+            if let Some(receipt) = &self.receipt {
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui_theme::pill(ui, "SHA MATCHED AT LOAD", ui_theme::accent());
+                    ui.label(
+                        RichText::new(format!("Outcome: {}", receipt.outcome))
+                            .color(ui_theme::ink()),
+                    );
+                });
+                ui.label(format!("Verified artifacts: {}", receipt.artifact_count));
+                ui.label(format!("Known loss: {}", receipt.known_loss));
+                ui.label(format!(
+                    "Native PUB delivery allowed: {}",
+                    receipt.native_pub_delivery_allowed
+                ));
+            }
+        });
+        ui.add_space(14.0);
+        ui_theme::card(ui, |ui| {
+            ui.label(
+                RichText::new("03  /  EXPORT")
+                    .size(12.0)
+                    .strong()
+                    .color(ui_theme::accent()),
+            );
+            ui.label(
+                RichText::new("Source-preserving report")
+                    .size(19.0)
+                    .strong()
+                    .color(ui_theme::ink()),
+            );
+            ui.label(RichText::new("Export creates a separate JSON report and verifies the original SHA before and after writing.").color(ui_theme::muted()));
+            let width = ui.available_width();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.report_path)
+                        .hint_text("C:\\Reports\\rescue-report.json")
+                        .desired_width(width),
+                )
+                .changed()
+            {
+                self.report_status = None;
+            }
+            if ui
+                .add_enabled(
+                    self.receipt.is_some() && self.source_sha256.is_some(),
+                    egui::Button::new("Export Rescue report"),
+                )
+                .clicked()
+            {
+                self.export_report();
+            }
+            if let Some(status) = &self.report_status {
+                ui.label(RichText::new(status).color(ui_theme::muted()));
+            }
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new(
+            "Technical preview: this screen validates existing evidence. It does not create a repaired native PUB.",
+        ).size(12.0).color(ui_theme::muted()));
+    }
+}
+
 impl eframe::App for RescueApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input(|input| input.raw.dropped_files.clone());
         for file in dropped {
+            // A native OS drop bypasses disabled text inputs. Do not inspect,
+            // hash or change *either* workspace's selected PUB or receipt while
+            // the GUI owns an active recovery or control process.
+            if self.batch_ui.is_busy() {
+                self.batch_ui.reject_drop_while_active();
+                continue;
+            }
             let Some(path) = file.path else {
                 continue;
             };
@@ -311,74 +474,171 @@ impl eframe::App for RescueApp {
                 }
                 Some(ext) if ext == "json" => {
                     self.receipt_path = path.display().to_string();
+                    // OS drag/drop also changes the selected receipt: revoke
+                    // proof from the old path, just as a text edit does.
+                    self.invalidate_receipt_proof();
                 }
                 _ => {}
             }
         }
 
-        egui::TopBottomPanel::bottom("rescue-batch-panel")
-            .resizable(true)
-            .default_height(300.0)
-            .min_height(160.0)
+        self.batch_ui.tick(ctx);
+
+        egui::TopBottomPanel::top("chaptera-rescue-header")
+            .exact_height(72.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::WHITE)
+                    .stroke(egui::Stroke::new(1.0, ui_theme::border()))
+                    .inner_margin(egui::Margin::symmetric(24, 14)),
+            )
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.batch_ui.draw(ui, ctx);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("chaptera")
+                            .size(23.0)
+                            .strong()
+                            .color(ui_theme::accent()),
+                    );
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("RESCUE")
+                            .size(14.0)
+                            .strong()
+                            .color(ui_theme::ink()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui_theme::pill(ui, "OFFLINE  ·  TECHNICAL PREVIEW", ui_theme::accent());
+                    });
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(APP_TITLE);
-            ui.label("Damaged-file intake and evidence surface. Recovery execution is not embedded in this technical-preview shell.");
-            ui.add_space(12.0);
-
-            ui.group(|ui| {
-                ui.strong("1. Source PUB");
-                ui.label("Drop a .pub file or enter a local path. The source is read and hashed, never written.");
-                ui.text_edit_singleline(&mut self.source_path);
-                if ui.button("Inspect source").clicked() {
-                    self.inspect_source();
-                }
-                if let Some(status) = &self.source_status {
-                    ui.label(status);
-                }
+        egui::TopBottomPanel::bottom("chaptera-rescue-footer")
+            .exact_height(34.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::WHITE)
+                    .inner_margin(egui::Margin::symmetric(24, 7)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Local processing  /  Sources remain unchanged")
+                            .size(11.0)
+                            .color(ui_theme::muted()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("No cloud upload")
+                                .size(11.0)
+                                .color(ui_theme::success()),
+                        );
+                    });
+                });
             });
 
-            ui.add_space(10.0);
-            ui.group(|ui| {
-                ui.strong("2. Validated Rescue result");
-                ui.label("Load a source-free chaptera.rescue-product-validation.v1 receipt produced by the canonical Rar consumer.");
-                ui.text_edit_singleline(&mut self.receipt_path);
-                if ui.button("Load validated receipt").clicked() {
-                    self.load_receipt();
+        egui::SidePanel::left("chaptera-rescue-navigation")
+            .resizable(false)
+            .exact_width(208.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::WHITE)
+                    .stroke(egui::Stroke::new(1.0, ui_theme::border()))
+                    .inner_margin(egui::Margin::symmetric(14, 20)),
+            )
+            .show(ctx, |ui| {
+                ui_theme::kicker(ui, "WORKSPACES");
+                ui.add_space(12.0);
+                let batch_active = self.view == RescueView::Batch;
+                let batch_label =
+                    egui::RichText::new("Batch recovery")
+                        .strong()
+                        .color(if batch_active {
+                            ui_theme::accent()
+                        } else {
+                            ui_theme::ink()
+                        });
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 42.0],
+                        egui::Button::new(batch_label)
+                            .fill(if batch_active {
+                                ui_theme::accent_soft()
+                            } else {
+                                egui::Color32::WHITE
+                            })
+                            .stroke(egui::Stroke::NONE),
+                    )
+                    .clicked()
+                {
+                    self.view = RescueView::Batch;
                 }
-                if let Some(status) = &self.receipt_status {
-                    ui.label(status);
+                let evidence_active = self.view == RescueView::Evidence;
+                let evidence_label =
+                    egui::RichText::new("Validate evidence")
+                        .strong()
+                        .color(if evidence_active {
+                            ui_theme::accent()
+                        } else {
+                            ui_theme::ink()
+                        });
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 42.0],
+                        egui::Button::new(evidence_label)
+                            .fill(if evidence_active {
+                                ui_theme::accent_soft()
+                            } else {
+                                egui::Color32::WHITE
+                            })
+                            .stroke(egui::Stroke::NONE),
+                    )
+                    .clicked()
+                {
+                    self.view = RescueView::Evidence;
                 }
-                if let Some(receipt) = &self.receipt {
-                    ui.separator();
-                    ui.label(format!("Outcome: {}", receipt.outcome));
-                    ui.label(format!("Recovered artifacts: {}", receipt.artifact_count));
-                    ui.label(format!("Known loss: {}", receipt.known_loss));
-                    ui.label(format!(
-                        "Native PUB delivery allowed: {}",
-                        receipt.native_pub_delivery_allowed
-                    ));
+                if self.batch_ui.activity_label().is_some() {
+                    ui.add_space(16.0);
+                    self.batch_ui.draw_sidebar_activity(ui);
+                    if self.view == RescueView::Evidence
+                        && ui.button("Open recovery controls").clicked()
+                    {
+                        self.view = RescueView::Batch;
+                    }
                 }
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(10.0);
+                ui_theme::kicker(ui, "SAFETY BOUNDARY");
+                ui.label(
+                    egui::RichText::new("Read-only source intake")
+                        .size(12.0)
+                        .color(ui_theme::ink()),
+                );
+                ui.label(
+                    egui::RichText::new("No native PUB repair is promised in this preview.")
+                        .size(11.0)
+                        .color(ui_theme::muted()),
+                );
             });
 
-            ui.add_space(10.0);
-            ui.group(|ui| {
-                ui.strong("3. Evidence report");
-                ui.label("Export writes a separate report and re-hashes the source before and after.");
-                ui.text_edit_singleline(&mut self.report_path);
-                if ui.button("Export Rescue report").clicked() {
-                    self.export_report();
-                }
-                if let Some(status) = &self.report_status {
-                    ui.label(status);
-                }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(ui_theme::canvas())
+                    .inner_margin(egui::Margin::symmetric(22, 20)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match self.view {
+                            RescueView::Batch => self.batch_ui.draw(ui),
+                            RescueView::Evidence => self.draw_evidence(ui),
+                        }
+                    });
             });
-        });
     }
 }
 
@@ -466,7 +726,9 @@ fn run_cli(args: &[String]) -> Result<Option<i32>, String> {
 
 fn rescue_gui_options() -> eframe::NativeOptions {
     let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 760.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1180.0, 820.0])
+            .with_min_inner_size([860.0, 640.0]),
         ..Default::default()
     };
     #[cfg(windows)]
@@ -507,7 +769,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         APP_TITLE,
         options,
-        Box::new(|_creation_context| Ok(Box::<RescueApp>::default())),
+        Box::new(|creation_context| {
+            ui_theme::configure(&creation_context.egui_ctx);
+            Ok(Box::<RescueApp>::default())
+        }),
     )
 }
 
@@ -562,6 +827,29 @@ mod tests {
         let error = validate_product_receipt(&receipt(&good), &"c".repeat(64))
             .expect_err("mismatch must fail closed");
         assert!(error.contains("does not match"));
+    }
+
+    #[test]
+    fn changing_source_or_receipt_path_revokes_previous_ui_proof() {
+        let sha = "b".repeat(64);
+        let mut app = RescueApp::default();
+        app.source_sha256 = Some(sha.clone());
+        app.source_status = Some("Previous file inspected".to_owned());
+        app.receipt = Some(receipt(&sha));
+        app.receipt_status = Some("Previous receipt matched".to_owned());
+        app.report_status = Some("Previous export succeeded".to_owned());
+
+        app.invalidate_receipt_proof();
+        assert!(app.receipt.is_none());
+        assert!(app.receipt_status.is_none());
+        assert!(app.report_status.is_none());
+        assert_eq!(app.source_sha256.as_deref(), Some(sha.as_str()));
+
+        app.receipt = Some(receipt(&sha));
+        app.invalidate_source_proof();
+        assert!(app.source_sha256.is_none());
+        assert!(app.source_status.is_none());
+        assert!(app.receipt.is_none());
     }
 
     #[test]
