@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { chromium } from "playwright";
+import { classifyNavigationFailure } from "./product-physical-ingress-phase.mjs";
 
 const origin = process.env.CHAPTERA_SECURE_ORIGIN;
 const fixturePath = process.env.CHAPTERA_PREVIEW_022_FIXTURE;
@@ -17,12 +18,32 @@ const known = {
   "026": { sha: "5c1054b0bd7bd3ae64ab6884e51943e2c5161cdf2dd13803c8d338f652c06cf0", bytes: 4218368, pages: 1 },
   "043": { sha: "e635d3b0320073b6d08402945a90e14e13d0294c02262d854b106b9f0088904b", bytes: 980480, pages: 2 },
 };
-const fixture = known[fixtureId];
+const planPath = process.env.CHAPTERA_PRODUCT_CASE_PLAN;
+const pinnedPlan = planPath ? JSON.parse(await readFile(planPath, "utf8")) : null;
+if (pinnedPlan && (pinnedPlan.id !== fixtureId ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.source_sha256 ?? "") ||
+    !/^[0-9a-f]{64}$/.test(pinnedPlan.publisher_pdf_sha256 ?? "") ||
+    !Number.isSafeInteger(pinnedPlan.source_bytes) ||
+    !(pinnedPlan.source_bytes > 0 && pinnedPlan.source_bytes < 100000000) ||
+    !Number.isSafeInteger(pinnedPlan.pages) ||
+    !(pinnedPlan.pages > 0 && pinnedPlan.pages <= 100))) {
+  throw new Error("physical Product case plan violates pinned source identity");
+}
+const fixture = pinnedPlan
+  ? { sha: pinnedPlan.source_sha256, bytes: pinnedPlan.source_bytes, pages: pinnedPlan.pages }
+  : known[fixtureId];
+if (pinnedPlan && known[fixtureId] &&
+    (fixture.sha !== known[fixtureId].sha ||
+     fixture.bytes !== known[fixtureId].bytes ||
+     fixture.pages !== known[fixtureId].pages)) {
+  throw new Error("physical Product case plan conflicts with established Publisher pilot");
+}
 const storageState = process.env.CHAPTERA_BROWSER_STORAGE_STATE;
 const privatePath = process.env.CHAPTERA_PREVIEW_022_PRIVATE;
 const scenePath = process.env.CHAPTERA_PREVIEW_022_SCENE_OUT;
 const summaryPath = process.env.CHAPTERA_PREVIEW_022_SUMMARY;
-if ([origin, fixturePath, expectedSha, storageState, privatePath, scenePath, summaryPath].some(v => !v)) {
+const responsePhasePath = process.env.CHAPTERA_PRODUCT_HTTP_RESPONSE_PHASE_FILE;
+if ([origin, fixturePath, expectedSha, storageState, privatePath, scenePath, summaryPath, responsePhasePath].some(v => !v)) {
   throw new Error("Product 022 requires pinned source, saved real OIDC session and private receipt paths");
 }
 if (!fixture || expectedSha !== fixture.sha) {
@@ -99,24 +120,74 @@ try {
       ? /^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)
       : /^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route);
   };
-  const currentFromUi = page.waitForResponse(
-    response => isUiResponse(response, "current"), { timeout: 150000 });
-  const sceneFromUi = page.waitForResponse(
-    response => isUiResponse(response, "scene"), { timeout: 150000 });
+  // Keep both listener promises observed even if only one response arrives.
+  // The existing 150s deadline remains unchanged; this does not bypass
+  // SourceIngress/worker authentication or weaken the physical acceptance.
+  let currentRequested = false;
+  let sceneRequested = false;
+  page.on("request", request => {
+    if (request.method() !== "GET") return;
+    try {
+      const url = new URL(request.url());
+      if (url.origin !== origin) return;
+      const route = decodeURIComponent(url.pathname);
+      if (/^\/v1\/documents\/document:[0-9a-f]{24}\/current$/.test(route)) currentRequested = true;
+      if (/^\/v1\/reader\/documents\/document:[0-9a-f]{24}\/scene$/.test(route)) sceneRequested = true;
+    } catch {
+      // Malformed external requests are still rejected by the existing fence.
+    }
+  });
+  const observed = (kind) => page.waitForResponse(
+    response => isUiResponse(response, kind), { timeout: 150000 }
+  ).then(response => ({ response }), () => ({ response: null }));
+  const currentFromUi = observed("current");
+  const sceneFromUi = observed("scene");
   await page.locator("#pub-file").setInputFiles({
     name: "Pinned" + fixtureId + ".pub",
     mimeType: "application/x-mspublisher",
     buffer: pub,
   });
-  await page.waitForURL(url =>
-    /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
-    { timeout: 150000, waitUntil: "domcontentloaded" },
-  );
+  try {
+    await page.waitForURL(url =>
+      /^\/editor\/doc\/document:[0-9a-f]{24}$/.test(decodeURIComponent(url.pathname)),
+      { timeout: 150000, waitUntil: "domcontentloaded" },
+    );
+  } catch (error) {
+    if (!String(error).includes("page.waitForURL: Timeout")) throw error;
+    // Only fixed file-entry phase codes leave the private browser.
+    // Source bytes, filenames, DOM errors, URLs and identities stay private.
+    const ui = await page.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent ?? null,
+      errorCode: document.querySelector("#error")?.textContent?.trim() ?? null,
+    })).catch(() => ({ status: null, errorCode: null }));
+    const code = classifyNavigationFailure(ui.status, Boolean(ui.errorCode), ui.errorCode);
+    await writeFile(responsePhasePath, code + "\n", "utf8");
+    throw new Error("Product document navigation did not reach canonical editor");
+  }
   const documentId = decodeURIComponent(new URL(page.url()).pathname)
     .replace("/editor/doc/", "");
-  const [currentResponse, sceneResponse] = await Promise.all([
+  const [currentObservation, sceneObservation] = await Promise.all([
     currentFromUi, sceneFromUi,
   ]);
+  if (!currentObservation.response || !sceneObservation.response) {
+    let code;
+    if (!currentObservation.response && !sceneObservation.response) {
+      code = currentRequested === sceneRequested
+        ? (currentRequested ? "http_both_unanswered" : "http_both_unrequested")
+        : "http_both_mixed";
+    } else if (!currentObservation.response) {
+      code = currentRequested ? "http_current_unanswered" : "http_current_unrequested";
+    } else {
+      code = sceneRequested ? "http_scene_unanswered" : "http_scene_unrequested";
+    }
+    // This PRIVATE fixed-value sidecar contains no URL, ID, cookies,
+    // document data, exception body, or unstable Playwright text.
+    await writeFile(responsePhasePath, code + "\n", "utf8");
+    throw new Error("Product owner HTTP response not observed");
+  }
+  const [currentResponse, sceneResponse] = [
+    currentObservation.response, sceneObservation.response,
+  ];
   const [current, scene] = await Promise.all([
     currentResponse.json().catch(() => null),
     sceneResponse.json().catch(() => null),
@@ -248,6 +319,7 @@ try {
     schema: "chaptera.product-oidc-worst-census-browser.v1",
     fixture: fixtureId,
     repository_commit_sha: process.env.CHAPTERA_HEAD_SHA ?? "unverified",
+    revision_identity_sha256: createHash("sha256").update(current.revision_id, "utf8").digest("hex"),
     real_oidc_pkce_session_reused: true,
     tls_product_source_ingress: true,
     exact_source_and_revision: true,

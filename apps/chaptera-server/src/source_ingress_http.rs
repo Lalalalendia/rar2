@@ -915,7 +915,12 @@ fn map_blob_error(error: BlobStoreError) -> SourceIngressHttpError {
 
 fn map_baseline_error(error: SourceBaselineError) -> SourceIngressHttpError {
     match error.code {
-        "source_baseline_worker_failed"
+        "source_baseline_editor_legacy_low_text"
+        | "source_baseline_editor_legacy_quill"
+        | "source_baseline_editor_mature_2c"
+        | "source_baseline_editor_unknown"
+        | "source_baseline_editor_assets"
+        | "source_baseline_worker_failed"
         | "source_baseline_receipt_missing"
         | "source_baseline_receipt_invalid"
         | "source_baseline_receipt_identity_mismatch" => {
@@ -923,6 +928,11 @@ fn map_baseline_error(error: SourceBaselineError) -> SourceIngressHttpError {
         }
         "source_baseline_worker_timeout" => {
             SourceIngressHttpError::api(StatusCode::GATEWAY_TIMEOUT, error.code)
+        }
+        "source_baseline_worker_cpu_limit"
+        | "source_baseline_worker_terminated"
+        | "source_baseline_worker_sandbox_failed" => {
+            SourceIngressHttpError::api(StatusCode::SERVICE_UNAVAILABLE, error.code)
         }
         _ => SourceIngressHttpError::internal(error.code),
     }

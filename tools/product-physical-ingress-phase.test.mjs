@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { classifyNavigationFailure, NAVIGATION_FAILURE_CODES } from "./product-physical-ingress-phase.mjs";
+
+test("known existing file-entry states get only fixed code", () => {
+  for (const [status, code] of Object.entries({
+    "Uploading": "ingress_uploading_timeout",
+    "Validating": "ingress_validation_timeout",
+    "Preparing project": "ingress_project_timeout",
+    "Opening": "ingress_open_timeout",
+    "Ready": "ingress_ready_without_navigation",
+    "Needs attention": "ingress_file_entry_rejected",
+  })) assert.equal(classifyNavigationFailure(status, false), code);
+});
+
+test("known validation errors are fixed enums", () => {
+  for (const code of ["source_validation_timeout", "source_validation_failed", "source_validation_exhausted"]) {
+    assert.equal(classifyNavigationFailure("Needs attention", true, code), "ingress_reject_" + code);
+  }
+});
+
+test("baseline worker failures remain fixed public enums", () => {
+  for (const code of ["source_baseline_editor_legacy_low_text","source_baseline_editor_legacy_quill","source_baseline_editor_mature_2c","source_baseline_editor_unknown","source_baseline_editor_assets","source_baseline_worker_cpu_limit","source_baseline_worker_terminated","source_baseline_worker_sandbox_failed"]) {
+    assert.equal(
+      classifyNavigationFailure("Needs attention", true, code),
+      "ingress_reject_" + code,
+    );
+  }
+});
+
+test("unknown/private DOM strings are redacted", () => {
+  assert.equal(classifyNavigationFailure("secret book title and private path", false), "ingress_navigation_timeout");
+  assert.equal(classifyNavigationFailure(null, false), "ingress_navigation_timeout");
+  assert.equal(classifyNavigationFailure("secret book title", true), "ingress_file_entry_rejected");
+  assert.ok(NAVIGATION_FAILURE_CODES.every(v => /^[a-z0-9_]+$/.test(v)));
+});
