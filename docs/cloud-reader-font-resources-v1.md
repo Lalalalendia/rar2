@@ -50,6 +50,29 @@ The helper scans the selected Windows font directory (default: `%WINDIR%\Fonts`)
 This helper does not grant redistribution or server-use rights. Its output must not be committed or uploaded to public CI.
 
 The current Cloud browser transport does not independently select a nonzero face from a font collection. Therefore the helper fails closed when a requested family resolves to `face_index > 0` in TTC/OTC bytes. A collection face at index 0 is allowed and is recorded as `first_face_only`; keep this fence until browser-side collection-face selection has its own acceptance proof.
+## Run a direct private PUB-to-font audit on Windows
+
+With a trusted checkout, Python, Rust 1.94.1, a local PUB and permission to
+inspect installed fonts, this **operator-only** command creates a
+source-identity-only font requirements plan without saving a Viewer JSON
+containing Story text:
+
+```powershell
+New-Item -ItemType Directory -Force C:\private\chaptera-font-audit
+cargo run --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --bin pub-private-source-font-plan-v1 -- --pub "C:\private\SampleNewsletter.pub" --output "C:\private\chaptera-font-audit\requirements.json"
+python tools\audit_private_source_font_styles_v1.py --requirements "C:\private\chaptera-font-audit\requirements.json" --font-dir "$env:WINDIR\Fonts" --output "C:\private\chaptera-font-audit\style-coverage.json"
+```
+
+The Rust command checks the source bytes through the current Reader, passes
+the in-memory Viewer to the exact source-font planner using a private process
+pipe, and writes **only** source-safe font identities, Quill indices and style
+requirements. It refuses to overwrite an existing plan. The second command
+checks the local font files and OpenType embedding restriction signals; the
+result remains private on that Windows computer. No font bytes are copied or
+committed. Do not publish private paths, the audit report, or licensed font
+bytes as CI artifacts. Name/style/OS/2 matches do not prove physical
+Publisher identity, redistribution rights, visual parity or PDF authority.
+
 ## Create a private font requirements plan from the actual PUB Reader output
 
 The source-backed Viewer JSON can now produce an **operator-only** requirements plan. It preserves exact source family spellings, candidate Quill font indices, script slots, and effective regular/bold/italic runs; it checks every reported scalar interval against the original Story text hash. It does not carry the Story text, font bytes, or grant source-font/PDF authority.

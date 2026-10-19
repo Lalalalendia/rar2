@@ -9,6 +9,7 @@ on:
       - "tools/private_font_os2_embedding_v1.py"
       - "tools/ci/test_private_font_os2_policy_v1.py"
       - "vendor/producer-a/crates/pub-viewer/tests/pub_source_font_direct_real.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/pub-private-source-font-plan-v1.rs"
       - "tools/ci/test_private_source_font_styles_v1.py"
       - "tools/ci/test_pub_source_font_requirements_v1.py"
       - "tools/ci/test_export_cloud_reader_windows_fonts.py"
@@ -50,6 +51,27 @@ jobs:
         run: |
           cargo test --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --test pub_source_font_direct_real -- --ignored --nocapture
 
+      - name: Prove local real PUB to source-safe private plan without Viewer files
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/private-font-requirements.json"
+          cargo run --quiet --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --bin pub-private-source-font-plan-v1 -- --pub "$CHAPTERA_SAMPLE_NEWSLETTER" --output "$plan"
+          python - "$plan" <<'PY'
+          import json, pathlib, sys
+          plan = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert plan["document_source_sha256"] == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          assert plan["direct_source_binding_count"] == 106
+          assert len(plan["direct_source_bindings"]) == 106
+          assert plan["physical_font_bytes_included"] is False
+          assert plan["fixed_pdf_allowed"] is False
+          assert "document" not in plan and "scene" not in plan
+          print("REAL_PUB_PRIVATE_FONT_PLAN_END_TO_END_OK direct_bindings=106 native_output_blocked=true")
+          PY
+          if cargo run --quiet --manifest-path vendor/producer-a/crates/pub-viewer/Cargo.toml --bin pub-private-source-font-plan-v1 -- --pub "$CHAPTERA_SAMPLE_NEWSLETTER" --output "$plan"; then
+            echo "::error::the private font plan was overwritten" >&2
+            exit 1
+          fi
       - name: Compile source-font planning and licensed-file helper
         run: |
           python -m py_compile tools/pub_source_font_requirements_v1.py
